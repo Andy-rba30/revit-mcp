@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Analysis tools — element filtering, rooms, materials, and statistics"""
 
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
 from .utils import format_response
 
 

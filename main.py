@@ -1,21 +1,14 @@
-# -*- coding: utf-8 -*-
 import os
 import sys
 import httpx
 import anyio
-from mcp.server.fastmcp import FastMCP, Image, Context
+from mcp.server.mcpserver import MCPServer, Image, Context
 import base64
 from typing import Optional, Dict, Any, Union
 
 # Create a generic MCP server for interacting with Revit
 # Use stateless_http=True and json_response=True for better compatibility
-mcp = FastMCP(
-    "Revit MCP Server", 
-    host="127.0.0.1", 
-    port=8000,
-    stateless_http=True,
-    json_response=True
-)
+mcp = MCPServer("Revit MCP Server")
 
 # Configuration
 REVIT_HOST = os.environ.get("REVIT_HOST", "localhost")
@@ -102,11 +95,11 @@ async def run_combined_async():
 
     # Get the streamable-http app first - it has the proper lifespan
     # that initializes the session manager's task group
-    http_app = mcp.streamable_http_app()
+    http_app = mcp.streamable_http_app(host="127.0.0.1", port=8000, stateless_http=True, json_response=True)
 
     # Get SSE routes (SSE doesn't need special lifespan - it creates
     # task groups per-request in connect_sse())
-    sse_app = mcp.sse_app()
+    sse_app = mcp.sse_app(host="127.0.0.1", port=8000)
 
     # Add SSE routes to the http app (preserving its lifespan)
     for route in sse_app.routes:
@@ -114,25 +107,23 @@ async def run_combined_async():
 
     config = uvicorn.Config(
         http_app,
-        host=mcp.settings.host,
-        port=mcp.settings.port,
-        log_level=mcp.settings.log_level.lower(),
+        host="127.0.0.1",
+        port=8000,
+        log_level="info",
     )
     server = uvicorn.Server(config)
     await server.serve()
 
 
 if __name__ == "__main__":
-    transport = "stdio"
-
     if "--sse" in sys.argv:
-        transport = "sse"
+        mcp.run(transport="sse", host="127.0.0.1", port=8000)
     elif "--http" in sys.argv or "--streamable-http" in sys.argv:
-        transport = "streamable-http"
+        mcp.run(transport="streamable-http", host="127.0.0.1", port=8000, stateless_http=True, json_response=True)
     elif "--combined" in sys.argv:
         # Run both SSE and streamable-http transports simultaneously
         print("Starting combined server with SSE (/sse, /messages/) and streamable-http (/mcp) endpoints...")
         anyio.run(run_combined_async)
         sys.exit(0)
-
-    mcp.run(transport=transport)
+    else:
+        mcp.run(transport="stdio")

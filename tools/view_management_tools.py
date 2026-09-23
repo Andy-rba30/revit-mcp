@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """View management tools — create views and set active view"""
 
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
 from .utils import format_response
 
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Clash detection tools — hard interference checking for BIM coordination"""
 
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
 from .utils import format_response
 
 

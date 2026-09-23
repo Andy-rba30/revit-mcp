@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Color tools"""
 
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
 from typing import Dict, Any, Optional, List
 from .utils import format_response
 

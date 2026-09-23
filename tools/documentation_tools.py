@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Documentation tools — sheets, schedules, and document export"""
 
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
 from .utils import format_response
 
 

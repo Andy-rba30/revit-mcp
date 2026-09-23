@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Room creation tools — rooms and room separation lines"""
 
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
 from .utils import format_response
 
 
