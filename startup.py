@@ -53,6 +53,18 @@ def _generar_token():
 
 def _restringir_acl(ruta):
     """Deja el archivo solo accesible para el usuario actual (sin herencia)."""
+    # En .NET Core / .NET 8 estos tipos viven en ensamblados aparte; en .NET
+    # Framework ya estan cargados y AddReference simplemente no hace falta.
+    for ensamblado in (
+        "System.Security.AccessControl",
+        "System.Security.Principal.Windows",
+        "System.IO.FileSystem.AccessControl",
+    ):
+        try:
+            clr.AddReference(ensamblado)
+        except Exception:
+            pass
+
     from System.IO import File, FileInfo
     from System.Security.AccessControl import (
         AccessControlType,
@@ -74,7 +86,6 @@ def _restringir_acl(ruta):
         File.SetAccessControl(ruta, seguridad)
     except AttributeError:
         # .NET Core / .NET 8: metodo de extension en System.IO.FileSystem.AccessControl
-        clr.AddReference("System.IO.FileSystem.AccessControl")
         from System.IO import FileSystemAclExtensions
 
         FileSystemAclExtensions.SetAccessControl(FileInfo(ruta), seguridad)
