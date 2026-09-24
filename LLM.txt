@@ -33,7 +33,14 @@ revit-mcp-python/
 │   ├── structure_tools.py                    # Structural (grids, framing)
 │   ├── annotation_tools.py                   # Annotation (dimensions, wall tags)
 │   ├── analysis_tools.py                     # Analysis (filter, rooms, materials, statistics)
-│   └── documentation_tools.py                # Documentation (sheets, schedules, export)
+│   ├── documentation_tools.py                # Documentation (sheets, schedules, export)
+│   ├── query_tools.py                        # 0.2.0: warnings, worksets, phases, links, location, find, geometry, types, log
+│   ├── type_tools.py                         # 0.2.0: change_element_type, set_type_parameter
+│   ├── structural_tools.py                   # 0.2.0: columns, foundations, openings, toposolid
+│   ├── location_tools.py                     # 0.2.0: set_project_location, set_workset, join_geometry
+│   └── maintenance_tools.py                  # 0.2.0: purge_unused, create_backup
+├── INSTRUCCIONES_AGENTE.md                    # Sent to the client as MCPServer(instructions=...)
+├── CONTRATO.md                                # HTTP contract: security, safe-write layer, every route, curl examples
 ├── revit-mcp-python.extension/               # pyRevit Extension
 │   ├── startup.py                            # Extension entry point - registers all routes
 │   └── revit_mcp/                            # Routes API modules (organized by functionality)
@@ -50,7 +57,18 @@ revit-mcp-python/
 │       ├── structure.py                      # Structural routes (grids, framing)
 │       ├── annotation.py                     # Annotation routes (dimensions, wall tags)
 │       ├── analysis.py                       # Analysis routes (filter, rooms, materials, statistics)
-│       └── documentation.py                  # Documentation routes (sheets, schedules, export)
+│       ├── documentation.py                  # Documentation routes (sheets, schedules, export)
+│       ├── seguridad.py                      # Session token + @requiere_token
+│       ├── escritura.py                      # 0.2.0: safe-write layer (preparar/registrar/transaccion/ejecutar)
+│       ├── consulta.py                       # 0.2.0: read routes (warnings, worksets, phases, links, find, geometry, types, log)
+│       ├── coordenadas.py                    # 0.2.0: project location (get/set)
+│       ├── tipos.py                          # 0.2.0: change_type, set_type_parameter
+│       ├── estructural.py                    # 0.2.0: columns, foundations, openings
+│       ├── topografia.py                     # 0.2.0: toposolid from points / Civil 3D CSV
+│       ├── subproyectos.py                   # 0.2.0: set_workset, join_geometry
+│       └── mantenimiento.py                  # 0.2.0: purge_unused, backup
+├── tests/                                    # CPython tests (fake pyrevit in tests/fakes) — `uv run pytest`
+├── pruebas/probar_revit.py                   # Smoke tests against a running Revit
 ├── requirements.txt                          # Python dependencies
 ├── pyproject.toml                           # Project configuration
 └── README.md                                # Project documentation
@@ -425,7 +443,9 @@ It contains:
 
 ## **Available Tools** |
 
-The implementation provides 31 tools organized by category:
+The implementation provides 68 tools organized by category (0.2.0). Every
+write tool accepts `simular` (dry run) and returns `ok`, `verificacion`,
+`copia` and `ms`; see the "Safe-write layer" section below.
 
 ### **Status & Connectivity Tools (2)**
 - **get_revit_status**: Check if the Revit MCP API is active and responding
@@ -480,7 +500,18 @@ The implementation provides 31 tools organized by category:
 - **list_category_parameters**: Get available parameters for elements in a category
 
 ### **Code Execution Tools (1)**
-- **execute_revit_code**: Execute IronPython 2.7 code directly in Revit context (escape hatch)
+- **execute_revit_code**: Execute IronPython 2.7 code directly in Revit context (escape hatch). `description` is required; the full code is logged; the response includes `elementos_modificados` (ids created/deleted, new warnings)
+
+### **Query Tools added in 0.2.0 (9)** — `tools/query_tools.py`
+- **list_warnings**, **list_worksets**, **list_phases_and_options**, **list_links**, **get_project_location**, **find_elements**, **get_element_geometry**, **list_element_types**, **read_log**
+
+### **Write Tools added in 0.2.0 (11)**
+- `tools/type_tools.py`: **change_element_type**, **set_type_parameter**
+- `tools/structural_tools.py`: **create_structural_column**, **create_foundation**, **create_opening**, **create_toposolid**
+- `tools/location_tools.py`: **set_project_location**, **set_workset**, **join_geometry**
+- `tools/maintenance_tools.py`: **purge_unused**, **create_backup**
+
+Other tools not listed above (MEP, rooms, tags, transforms, views, interop, document, clash, parameters, editing) live in the matching `tools/*_tools.py`; the full list with descriptions is in README.md.
 
 ---
 
@@ -537,7 +568,38 @@ The pyRevit extension exposes these HTTP endpoints under `http://localhost:48884
 - `POST /color_splash/` - Color elements by parameter value
 - `POST /clear_colors/` - Remove color overrides
 - `POST /list_category_parameters/` - Get available parameters for a category
-- `POST /execute_code/` - Execute IronPython code in Revit context
+- `POST /execute_code/` - Execute IronPython code in Revit context (`description` required)
+
+### **Endpoints added in 0.2.0**
+- Read: `GET /warnings/`, `GET /worksets/`, `GET /phases_options/`, `GET /links/`, `GET /project_location/`, `GET /log/`, `POST /find_elements/`, `POST /element_geometry/`, `POST /element_types/`
+- Write: `POST /change_type/`, `POST /set_type_parameter/`, `POST /create_column/`, `POST /create_foundation/`, `POST /create_opening/`, `POST /create_toposolid/`, `POST /set_project_location/`, `POST /set_workset/`, `POST /join_geometry/`, `POST /purge_unused/`, `POST /backup/`
+
+The complete route table (parameters, responses, curl examples) is in CONTRATO.md.
+
+---
+
+## **Safe-write layer (0.2.0)** | `revit_mcp/escritura.py`
+
+Every write route is written as:
+
+```python
+@api.route("/mi_ruta/", methods=["POST"])
+@requiere_token
+def mi_ruta(doc, request):
+    def cuerpo(ctx):                      # ctx: {"data", "simular", "copia", "nota", "ruta", "doc"}
+        data = ctx["data"]                # JSON body already parsed
+        ...validate; raise EscrituraRechazada("msg", 400) for controlled errors...
+        if ctx["simular"]:
+            return simulacion([{"accion": "crear", ...}])
+        with transaccion(doc, "Crear cosas"):   # DB.Transaction "IA: Crear cosas", Commit/RollBack
+            ...Revit API...
+        return resultado_creacion(doc, ids)     # or {"antes": ..., "despues": ..., "ok": bool}
+    return ejecutar(doc, "/mi_ruta/", request, cuerpo)
+```
+
+`ejecutar` runs `preparar` (409 if `doc.IsModifiable`/`doc.IsReadOnly`; backup of the saved .rvt to `backups\`), calls the body, adds `ok`/`ms`/`copia` and writes a JSON line to `mcp_log.jsonl` (`registrar`). Helpers: `comprobar_alcance` (200-element limit unless `forzar`), `describir_elemento`, `verificar_creados`, `verificar_eliminados`, `bbox_mm`, `nombre_nivel`. `parameters.py` exposes `valor_parametro`, `convertir_valor`, `asignar_parametro`, `coincide_valor` for parameter routes. Unit helpers (`xyz_desde_mm`, `punto_a_mm`, `mapa_niveles`, `buscar_vista`, `buscar_tipo_por_nombre`) live in `revit_mcp/utils.py`.
+
+Tests: `tests/` runs in CPython with a fake `pyrevit` (`tests/fakes`); `tests/test_compatibilidad_ironpython.py` rejects Python-3-only syntax in `revit_mcp/`.
 
 ---
 
