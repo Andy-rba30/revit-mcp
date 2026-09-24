@@ -8,3 +8,9 @@ dependencies = [
     "mcp[cli]>=2.2,<3",
     "httpx",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# test_init_latency.py y test_model_info_format.py son scripts manuales que
+# arrancan el puente (y el segundo necesita Revit abierto): se ejecutan a mano.
+addopts = "--ignore=tests/test_init_latency.py --ignore=tests/test_model_info_format.py"
