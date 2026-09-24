@@ -218,6 +218,14 @@ def register_routes():
 
         register_document_routes(api)
 
+        from revit_mcp.consulta import register_consulta_routes
+
+        register_consulta_routes(api)
+
+        from revit_mcp.coordenadas import register_coordenadas_routes
+
+        register_coordenadas_routes(api)
+
         logger.info("All MCP routes registered successfully")
 
     except Exception as e:

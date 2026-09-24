@@ -122,5 +122,5 @@ def test_modulo_se_importa_con_pyrevit_simulado(modulo):
     importado = importlib.import_module("revit_mcp." + modulo)
     assert importado is not None
     registro = [nombre for nombre in dir(importado) if nombre.startswith("register_")]
-    if modulo not in ("utils", "seguridad", "escritura", "coordenadas"):
+    if modulo not in ("utils", "seguridad", "escritura"):
         assert registro, "{} no define register_*_routes".format(modulo)

@@ -9,8 +9,10 @@ Unidades: las posiciones se devuelven en milimetros y los angulos en grados.
 """
 
 from utils import get_element_name, get_element_id_value, punto_a_mm, FEET_TO_MM
+from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 import math
+import traceback
 import logging
 
 logger = logging.getLogger(__name__)
@@ -140,3 +142,25 @@ def resumen_para_model_info(doc):
         "survey_point_mm": sp["posicion_mm"] if sp else None,
         "true_north_deg": norte_verdadero_grados(doc),
     }
+
+
+def register_coordenadas_routes(api):
+    """Register project location routes with the API."""
+
+    @api.route("/project_location/", methods=["GET"])
+    @requiere_token
+    def get_project_location(doc):
+        """Punto base, punto de reconocimiento, norte verdadero y sistema activo."""
+        try:
+            if not doc:
+                return routes.make_response(data={"error": "No active Revit document"}, status=503)
+            datos = ubicacion_proyecto(doc)
+            datos["status"] = "success"
+            return routes.make_response(data=datos)
+        except Exception as e:
+            logger.error("get_project_location failed: {}".format(str(e)))
+            return routes.make_response(
+                data={"error": str(e), "traceback": traceback.format_exc()}, status=500
+            )
+
+    logger.info("Coordenadas routes registered successfully")
