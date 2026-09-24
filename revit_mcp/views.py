@@ -5,6 +5,7 @@ Handles view export and image generation functionality
 """
 
 from utils import get_element_id_value
+from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 import tempfile
 import os
@@ -22,6 +23,7 @@ def register_views_routes(api):
     """Register all view-related routes with the API"""
 
     @api.route("/get_view/<view_name>", methods=["GET"])
+    @requiere_token
     def get_view(doc, view_name):
         """
         Export a named Revit view as a PNG image and return the image data
@@ -206,6 +208,7 @@ def register_views_routes(api):
             )
 
     @api.route("/list_views/", methods=["GET"])
+    @requiere_token
     def list_views(doc):
         """
         Get a list of all exportable views in the current Revit model
@@ -294,6 +297,7 @@ def register_views_routes(api):
             )
 
     @api.route("/current_view_info/", methods=["GET"])
+    @requiere_token
     def get_current_view_info(uidoc):
         """
         Get detailed information about the currently active view.
@@ -378,6 +382,7 @@ def register_views_routes(api):
             )
 
     @api.route("/current_view_elements/", methods=["GET"])
+    @requiere_token
     def get_current_view_elements(doc, uidoc):
         """
         Get all elements visible in the current view.

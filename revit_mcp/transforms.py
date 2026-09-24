@@ -5,6 +5,7 @@ Handles move, copy, rotate, and mirror operations on elements
 """
 
 from utils import get_element_id_value, make_element_id, suppress_warnings
+from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 from System.Collections.Generic import List
 import json
@@ -21,6 +22,7 @@ def register_transform_routes(api):
     """Register all transform routes with the API"""
 
     @api.route("/transform_elements/", methods=["POST"])
+    @requiere_token
     def transform_elements_handler(doc, request):
         """Move, copy, rotate, or mirror elements."""
         try:

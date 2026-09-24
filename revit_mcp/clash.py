@@ -21,6 +21,7 @@ import logging
 import traceback
 
 from utils import get_element_name, get_element_id_value
+from seguridad import requiere_token
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,7 @@ def register_clash_routes(api):
     """Register clash/interference detection routes with the API."""
 
     @api.route("/clash_check/", methods=["POST"])
+    @requiere_token
     def clash_check(doc, request):
         """
         Detect hard clashes (geometric interferences) between elements.

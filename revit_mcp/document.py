@@ -8,6 +8,7 @@ deliberately do not open one.
 """
 
 from pyrevit import routes, revit, DB
+from seguridad import requiere_token
 import json
 import os
 import logging
@@ -19,6 +20,7 @@ def register_document_routes(api):
     """Register document persistence routes with the API."""
 
     @api.route("/save_document/", methods=["POST"])
+    @requiere_token
     def save_document(doc, request):
         """
         Save the active document. If a file_path is given (or the document has

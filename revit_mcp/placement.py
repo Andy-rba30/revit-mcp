@@ -5,6 +5,7 @@ Handles family placement and element creation functionality
 """
 
 from utils import get_element_name, find_family_symbol_safely, get_element_id_value, suppress_warnings
+from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 import json
 import os
@@ -18,6 +19,7 @@ def register_placement_routes(api):
     """Register all placement-related routes with the API"""
 
     @api.route("/place_family/", methods=["POST"])
+    @requiere_token
     def place_family(doc, request):
         """
         Place a family instance at a specified location in the model.
@@ -386,6 +388,7 @@ def register_placement_routes(api):
             )
 
     @api.route("/load_family/", methods=["POST"])
+    @requiere_token
     def load_family(doc, request):
         """
         Load a Revit family (.rfa) from disk into the active document, so its
@@ -441,6 +444,7 @@ def register_placement_routes(api):
             return routes.make_response(data={"error": str(e)}, status=500)
 
     @api.route("/list_families/", methods=["GET"])
+    @requiere_token
     def list_families(doc, request):
         """
         Simplified: Get a flat list of up to 50 family names and their types in the current Revit model.
@@ -489,6 +493,7 @@ def register_placement_routes(api):
             )
 
     @api.route("/list_family_categories/", methods=["GET"])
+    @requiere_token
     def list_family_categories(doc):
         """
         Get a list of all family categories in the current Revit model
@@ -549,6 +554,7 @@ def register_placement_routes(api):
             )
 
     @api.route("/list_levels/", methods=["GET"])
+    @requiere_token
     def list_levels(doc):
         """
         Get a list of all levels in the current Revit model

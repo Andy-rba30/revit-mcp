@@ -10,6 +10,7 @@ import pyrevit.revit.db.query as q
 import logging
 
 from utils import normalize_string, get_element_name
+from seguridad import requiere_token
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ def register_model_info_routes(api):
     """Register all model information routes with the API"""
 
     @api.route("/model_info/", methods=["GET"])
+    @requiere_token
     def get_model_info():
         """
         Get comprehensive information about the current Revit model

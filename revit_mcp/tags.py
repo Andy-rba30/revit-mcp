@@ -5,6 +5,7 @@ Handles element tagging with annotation symbols
 """
 
 from utils import get_element_name, get_element_id_value, make_element_id, suppress_warnings
+from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 import json
 import traceback
@@ -19,6 +20,7 @@ def register_tag_routes(api):
     """Register all tag routes with the API"""
 
     @api.route("/tag_elements/", methods=["POST"])
+    @requiere_token
     def tag_elements_handler(doc, request):
         """Tag elements with annotation symbols in a view."""
         try:

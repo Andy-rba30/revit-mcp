@@ -5,6 +5,7 @@ Handles direct execution of IronPython code in Revit context.
 """
 from pyrevit import routes, revit, DB
 from utils import suppress_warnings
+from seguridad import requiere_token
 import json
 import logging
 import sys
@@ -19,6 +20,7 @@ def register_code_execution_routes(api):
     """Register code execution routes with the API."""
 
     @api.route("/execute_code/", methods=["POST"])
+    @requiere_token
     def execute_code(doc, request):
         """
         Execute IronPython code in Revit context.

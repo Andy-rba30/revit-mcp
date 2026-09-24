@@ -5,6 +5,7 @@ Handles grid creation and structural framing placement
 """
 
 from utils import get_element_name, find_family_symbol_safely, get_element_id_value, suppress_warnings
+from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 import json
 import traceback
@@ -19,6 +20,7 @@ def register_structure_routes(api):
     """Register all structure routes with the API"""
 
     @api.route("/create_grid/", methods=["POST"])
+    @requiere_token
     def create_grid_handler(doc, request):
         """Create grid lines in the Revit model."""
         try:
@@ -116,6 +118,7 @@ def register_structure_routes(api):
             )
 
     @api.route("/create_framing/", methods=["POST"])
+    @requiere_token
     def create_framing_handler(doc, request):
         """Create structural framing (beams) in the Revit model."""
         try:

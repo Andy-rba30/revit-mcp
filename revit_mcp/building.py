@@ -6,6 +6,7 @@ elements (floors, roofs, ceilings), and levels.
 """
 
 from utils import get_element_name, get_element_id_value, suppress_warnings
+from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 from System.Collections.Generic import List
 import json
@@ -19,6 +20,7 @@ def register_building_routes(api):
     """Register all building creation routes with the API"""
 
     @api.route("/create_line/", methods=["POST"])
+    @requiere_token
     def create_line_based(doc, request):
         """
         Create line-based elements (walls, beams) in the Revit model.
@@ -274,6 +276,7 @@ def register_building_routes(api):
             )
 
     @api.route("/create_surface/", methods=["POST"])
+    @requiere_token
     def create_surface_based(doc, request):
         """
         Create surface-based elements (floors, roofs, ceilings) in the Revit model.
@@ -578,6 +581,7 @@ def register_building_routes(api):
             )
 
     @api.route("/create_level/", methods=["POST"])
+    @requiere_token
     def create_level_handler(doc, request):
         """
         Create building levels at specified elevations.

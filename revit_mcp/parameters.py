@@ -5,6 +5,7 @@ Handles reading element properties and setting parameter values
 """
 
 from utils import get_element_name, get_element_id_value, make_element_id, suppress_warnings
+from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 import json
 import traceback
@@ -91,6 +92,7 @@ def register_parameter_routes(api):
     """Register all parameter routes with the API"""
 
     @api.route("/element_properties/<element_id>", methods=["GET"])
+    @requiere_token
     def get_element_properties_handler(doc, element_id):
         """Get all properties and parameters of an element."""
         try:
@@ -200,6 +202,7 @@ def register_parameter_routes(api):
             )
 
     @api.route("/set_parameter/", methods=["POST"])
+    @requiere_token
     def set_parameter_handler(doc, request):
         """Set a single parameter value on an element."""
         try:

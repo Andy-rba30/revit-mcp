@@ -5,6 +5,7 @@ Handles view creation and active view switching
 """
 
 from utils import get_element_name, get_element_id_value, suppress_warnings
+from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 import json
 import traceback
@@ -19,6 +20,7 @@ def register_view_management_routes(api):
     """Register all view management routes with the API"""
 
     @api.route("/create_view/", methods=["POST"])
+    @requiere_token
     def create_view_handler(doc, request):
         """Create a new view in the Revit model."""
         try:
@@ -304,6 +306,7 @@ def register_view_management_routes(api):
             )
 
     @api.route("/set_active_view/", methods=["POST"])
+    @requiere_token
     def set_active_view_handler(doc, uidoc, request):
         """Set the active view in Revit UI."""
         try:

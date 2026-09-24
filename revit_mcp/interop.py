@@ -5,6 +5,7 @@ Handles IFC export and external file linking/importing
 """
 
 from utils import get_element_name, get_element_id_value, suppress_warnings
+from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 import clr
 import json
@@ -21,6 +22,7 @@ def register_interop_routes(api):
     """Register all interop routes with the API"""
 
     @api.route("/export_ifc/", methods=["POST"])
+    @requiere_token
     def export_ifc_handler(doc, request):
         """Export the model to IFC format."""
         try:
@@ -126,6 +128,7 @@ def register_interop_routes(api):
             )
 
     @api.route("/link_file/", methods=["POST"])
+    @requiere_token
     def link_file_handler(doc, request):
         """Link or import an external file."""
         try:

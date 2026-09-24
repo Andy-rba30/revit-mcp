@@ -5,6 +5,7 @@ Handles element deletion, modification, and selection retrieval
 """
 
 from utils import get_element_name, make_element_id, get_element_id_value, suppress_warnings
+from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 import json
 import traceback
@@ -17,6 +18,7 @@ def register_editing_routes(api):
     """Register all editing routes with the API"""
 
     @api.route("/delete_elements/", methods=["POST"])
+    @requiere_token
     def delete_elements_handler(doc, request):
         """Delete one or more elements from the Revit model."""
         try:
@@ -111,6 +113,7 @@ def register_editing_routes(api):
             )
 
     @api.route("/modify_element/", methods=["POST"])
+    @requiere_token
     def modify_element_handler(doc, request):
         """Modify parameter values on a Revit element."""
         try:
@@ -256,6 +259,7 @@ def register_editing_routes(api):
             )
 
     @api.route("/selected_elements/", methods=["GET"])
+    @requiere_token
     def get_selected_elements_handler(doc, uidoc):
         """Get details of elements currently selected in Revit UI."""
         try:

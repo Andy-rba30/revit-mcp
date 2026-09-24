@@ -5,6 +5,7 @@ Handles detail line creation for view-specific annotation
 """
 
 from utils import get_element_name, get_element_id_value, suppress_warnings
+from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 import json
 import traceback
@@ -19,6 +20,7 @@ def register_detail_routes(api):
     """Register all detail routes with the API"""
 
     @api.route("/create_detail_line/", methods=["POST"])
+    @requiere_token
     def create_detail_line_handler(doc, request):
         """Create a detail line in a view."""
         try:

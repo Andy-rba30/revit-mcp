@@ -5,6 +5,7 @@ Handles API status and health check endpoints
 """
 
 from pyrevit import routes
+from seguridad import requiere_token
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,6 +14,7 @@ def register_status_routes(api):
     """Register all status-related routes with the API"""
     
     @api.route('/status/', methods=["GET"])
+    @requiere_token
     def revit_status():
         """
         Health check endpoint that verifies Revit context availability

@@ -5,6 +5,7 @@ Handles duct, pipe, and MEP system creation
 """
 
 from utils import get_element_name, get_element_id_value, make_element_id, suppress_warnings
+from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 import json
 import traceback
@@ -19,6 +20,7 @@ def register_mep_routes(api):
     """Register all MEP routes with the API"""
 
     @api.route("/create_duct/", methods=["POST"])
+    @requiere_token
     def create_duct_handler(doc, request):
         """Create a duct between two points."""
         try:
@@ -185,6 +187,7 @@ def register_mep_routes(api):
             )
 
     @api.route("/create_pipe/", methods=["POST"])
+    @requiere_token
     def create_pipe_handler(doc, request):
         """Create a pipe between two points."""
         try:
@@ -336,6 +339,7 @@ def register_mep_routes(api):
             )
 
     @api.route("/create_mep_system/", methods=["POST"])
+    @requiere_token
     def create_mep_system_handler(doc, request):
         """Create a mechanical or piping system."""
         try:

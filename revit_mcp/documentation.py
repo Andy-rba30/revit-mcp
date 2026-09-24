@@ -5,6 +5,7 @@ Handles sheet creation, schedule creation, and document export
 """
 
 from utils import get_element_name, get_element_id_value, suppress_warnings
+from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 import json
 import traceback
@@ -18,6 +19,7 @@ def register_documentation_routes(api):
     """Register all documentation routes with the API"""
 
     @api.route("/create_sheet/", methods=["POST"])
+    @requiere_token
     def create_sheet_handler(doc, request):
         """Create a drawing sheet in Revit."""
         try:
@@ -128,6 +130,7 @@ def register_documentation_routes(api):
             )
 
     @api.route("/create_schedule/", methods=["POST"])
+    @requiere_token
     def create_schedule_handler(doc, request):
         """Create a schedule view in Revit."""
         try:
@@ -273,6 +276,7 @@ def register_documentation_routes(api):
             )
 
     @api.route("/export_document/", methods=["POST"])
+    @requiere_token
     def export_document_handler(doc, request):
         """Export a view or sheet to file."""
         try:

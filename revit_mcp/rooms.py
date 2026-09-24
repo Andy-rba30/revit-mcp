@@ -5,6 +5,7 @@ Handles room creation and room separation lines
 """
 
 from utils import get_element_name, get_element_id_value, make_element_id, suppress_warnings
+from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 from System.Collections.Generic import List
 import json
@@ -20,6 +21,7 @@ def register_room_routes(api):
     """Register all room routes with the API"""
 
     @api.route("/create_room/", methods=["POST"])
+    @requiere_token
     def create_room_handler(doc, request):
         """Create a room at a specified level."""
         try:
@@ -157,6 +159,7 @@ def register_room_routes(api):
             )
 
     @api.route("/create_room_separation/", methods=["POST"])
+    @requiere_token
     def create_room_separation_handler(doc, request):
         """Create room separation lines."""
         try:

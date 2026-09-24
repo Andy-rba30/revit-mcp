@@ -5,6 +5,7 @@ Provides tools for color splashing elements based on parameter values
 """
 
 from utils import get_element_id_value, suppress_warnings
+from seguridad import requiere_token
 from pyrevit import routes, DB
 import json
 import logging
@@ -1091,6 +1092,7 @@ def register_color_routes(api):
     """Register color-related routes with the API"""
 
     @api.route("/color_splash/", methods=["POST"])
+    @requiere_token
     def color_splash(doc, request):
         """
         Color elements in a category based on parameter values
@@ -1132,6 +1134,7 @@ def register_color_routes(api):
             return routes.make_response(data={"error": str(e)}, status=500)
 
     @api.route("/clear_colors/", methods=["POST"])
+    @requiere_token
     def clear_colors(doc, request):
         """
         Clear color overrides for elements in a category
@@ -1164,6 +1167,7 @@ def register_color_routes(api):
             return routes.make_response(data={"error": str(e)}, status=500)
 
     @api.route("/list_category_parameters/", methods=["POST"])
+    @requiere_token
     def list_parameters(doc, request):
         """
         Get available parameters for elements in a category

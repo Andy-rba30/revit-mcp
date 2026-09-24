@@ -5,6 +5,7 @@ Handles element filtering, room data, material quantities, and model statistics
 """
 
 from utils import get_element_name, normalize_string, get_element_id_value
+from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 import json
 import traceback
@@ -21,6 +22,7 @@ def register_analysis_routes(api):
     """Register all analysis routes with the API"""
 
     @api.route("/ai_filter/", methods=["POST"])
+    @requiere_token
     def ai_element_filter_handler(doc, request):
         """Filter and find Revit elements by various criteria."""
         try:
@@ -181,6 +183,7 @@ def register_analysis_routes(api):
             )
 
     @api.route("/room_data/", methods=["GET"])
+    @requiere_token
     def export_room_data_handler(doc):
         """Export data for all rooms in the model."""
         try:
@@ -292,6 +295,7 @@ def register_analysis_routes(api):
             )
 
     @api.route("/material_quantities/", methods=["POST"])
+    @requiere_token
     def get_material_quantities_handler(doc, request):
         """Get material quantities from the model."""
         try:
@@ -415,6 +419,7 @@ def register_analysis_routes(api):
             )
 
     @api.route("/model_statistics/", methods=["GET"])
+    @requiere_token
     def analyze_model_statistics_handler(doc):
         """Analyze model and return element counts by category."""
         try:

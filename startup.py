@@ -2,15 +2,117 @@
 """
 Revit MCP Extension Startup
 Registers all MCP routes and initializes the API
+
+Al cargar la extension se genera un token de sesion aleatorio, se escribe en
+%LOCALAPPDATA%\\RevitMcp\\token y se guarda en memoria (revit_mcp/seguridad.py).
+Todas las rutas exigen ese token (ver CONTRATO.md).
 """
+from __future__ import print_function
 
 from pyrevit import routes
 import logging
+import os
+
+import clr
+import System
 
 logger = logging.getLogger(__name__)
 
 # Initialize the main API
 api = routes.API("revit_mcp")
+
+
+# ---------------------------------------------------------------------------
+# Token de sesion
+# ---------------------------------------------------------------------------
+def _generar_token():
+    """Devuelve 32 bytes aleatorios en hexadecimal (64 caracteres, minusculas)."""
+    try:
+        # En .NET Framework no hace falta; en .NET Core el tipo vive en este
+        # ensamblado. Si ya esta cargado o no existe, se ignora el error.
+        clr.AddReference("System.Security.Cryptography.Algorithms")
+    except Exception:
+        pass
+    try:
+        from System.Security.Cryptography import RandomNumberGenerator
+
+        generador = RandomNumberGenerator.Create()
+        try:
+            buffer = System.Array[System.Byte](32)
+        except Exception:
+            buffer = System.Array.CreateInstance(System.Byte, 32)
+        generador.GetBytes(buffer)
+        return "".join("{0:02x}".format(int(b)) for b in buffer)
+    except Exception as error:
+        logger.warning(
+            u"RandomNumberGenerator no disponible (%s); se usa os.urandom",
+            str(error),
+        )
+        return "".join("{0:02x}".format(ord(c)) for c in os.urandom(32))
+
+
+def _restringir_acl(ruta):
+    """Deja el archivo solo accesible para el usuario actual (sin herencia)."""
+    from System.IO import File, FileInfo
+    from System.Security.AccessControl import (
+        AccessControlType,
+        FileSecurity,
+        FileSystemAccessRule,
+        FileSystemRights,
+    )
+    from System.Security.Principal import WindowsIdentity
+
+    usuario = WindowsIdentity.GetCurrent().User
+    seguridad = FileSecurity()
+    # True, False: corta la herencia y NO copia las reglas heredadas.
+    seguridad.SetAccessRuleProtection(True, False)
+    seguridad.AddAccessRule(
+        FileSystemAccessRule(usuario, FileSystemRights.FullControl, AccessControlType.Allow)
+    )
+    try:
+        # .NET Framework: metodo de instancia en System.IO.File
+        File.SetAccessControl(ruta, seguridad)
+    except AttributeError:
+        # .NET Core / .NET 8: metodo de extension en System.IO.FileSystem.AccessControl
+        clr.AddReference("System.IO.FileSystem.AccessControl")
+        from System.IO import FileSystemAclExtensions
+
+        FileSystemAclExtensions.SetAccessControl(FileInfo(ruta), seguridad)
+
+
+def inicializar_token():
+    """Genera el token de esta sesion, lo escribe en disco y lo deja en memoria."""
+    from revit_mcp import seguridad
+
+    token = _generar_token()
+    seguridad.establecer_token(token)
+
+    try:
+        carpeta = os.path.join(os.environ["LOCALAPPDATA"], "RevitMcp")
+        if not os.path.isdir(carpeta):
+            os.makedirs(carpeta)
+        ruta = os.path.join(carpeta, "token")
+        with open(ruta, "w") as archivo:
+            archivo.write(token)
+        logger.info("Token de sesion escrito en %s", ruta)
+    except Exception as error:
+        logger.error(
+            u"No se pudo escribir el token en %%LOCALAPPDATA%%\\RevitMcp\\token: %s. "
+            u"El puente MCP no podra autenticarse hasta reiniciar Revit.",
+            str(error),
+        )
+        return token
+
+    try:
+        _restringir_acl(ruta)
+    except Exception as error:
+        logger.warning(
+            u"No se pudo restringir la ACL de %s (%s); el archivo queda con los "
+            u"permisos por defecto de %%LOCALAPPDATA%%.",
+            ruta,
+            str(error),
+        )
+    return token
 
 
 def register_routes():
@@ -112,5 +214,7 @@ def register_routes():
         raise
 
 
-# Register all routes when the extension loads
+# Generate the session token first so every route is protected from the
+# very first request, then register all routes when the extension loads
+inicializar_token()
 register_routes()
