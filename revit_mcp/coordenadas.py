@@ -8,8 +8,9 @@ get_project_location / set_project_location.
 Unidades: las posiciones se devuelven en milimetros y los angulos en grados.
 """
 
-from utils import get_element_name, get_element_id_value, punto_a_mm, FEET_TO_MM
+from utils import get_element_name, get_element_id_value, make_element_id, punto_a_mm, xyz_desde_mm, FEET_TO_MM
 from seguridad import requiere_token
+from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada
 from pyrevit import routes, revit, DB
 import math
 import traceback
@@ -162,5 +163,106 @@ def register_coordenadas_routes(api):
             return routes.make_response(
                 data={"error": str(e), "traceback": traceback.format_exc()}, status=500
             )
+
+    @api.route("/set_project_location/", methods=["POST"])
+    @requiere_token
+    def set_project_location(doc, request):
+        """Mueve el punto base / de reconocimiento, gira el norte o adquiere coordenadas. Acepta `simular`."""
+
+        def cuerpo(ctx):
+            data = ctx["data"]
+            base_mm = data.get("base_point_mm")
+            survey_mm = data.get("survey_point_mm")
+            norte = data.get("true_north_deg")
+            link_id = data.get("acquire_from_link_id")
+            if base_mm is None and survey_mm is None and norte is None and link_id is None:
+                raise EscrituraRechazada(
+                    "Give base_point_mm, survey_point_mm, true_north_deg and/or acquire_from_link_id", 400
+                )
+
+            acciones = []
+            punto_base = _punto_base(doc, True) if base_mm is not None else None
+            punto_rec = _punto_base(doc, False) if survey_mm is not None else None
+            if base_mm is not None:
+                if punto_base is None:
+                    raise EscrituraRechazada("Project base point not found", 404)
+                try:
+                    destino = xyz_desde_mm(base_mm)
+                except ValueError as error:
+                    raise EscrituraRechazada("base_point_mm: {}".format(error), 400)
+                acciones.append({"accion": "mover_punto_base", "antes_mm": _posicion_mm(punto_base),
+                                 "despues_mm": punto_a_mm(destino)})
+            if survey_mm is not None:
+                if punto_rec is None:
+                    raise EscrituraRechazada("Survey point not found", 404)
+                try:
+                    destino_rec = xyz_desde_mm(survey_mm)
+                except ValueError as error:
+                    raise EscrituraRechazada("survey_point_mm: {}".format(error), 400)
+                acciones.append({"accion": "mover_punto_reconocimiento", "antes_mm": _posicion_mm(punto_rec),
+                                 "despues_mm": punto_a_mm(destino_rec)})
+            if norte is not None:
+                try:
+                    norte = float(norte)
+                except (TypeError, ValueError):
+                    raise EscrituraRechazada("true_north_deg must be a number (degrees)", 400)
+                acciones.append({"accion": "girar_norte_verdadero", "antes_deg": norte_verdadero_grados(doc),
+                                 "despues_deg": norte})
+            vinculo = None
+            if link_id is not None:
+                vinculo = doc.GetElement(make_element_id(link_id))
+                if vinculo is None or not isinstance(vinculo, DB.RevitLinkInstance):
+                    raise EscrituraRechazada("acquire_from_link_id {} is not a Revit link instance".format(link_id), 404)
+                acciones.append({"accion": "adquirir_coordenadas", "link_id": int(link_id),
+                                 "link": get_element_name(vinculo)})
+
+            antes = ubicacion_proyecto(doc)
+            if ctx["simular"]:
+                return simulacion(acciones, antes=antes)
+
+            with transaccion(doc, "Coordenadas del proyecto"):
+                if base_mm is not None:
+                    delta = destino.Subtract(punto_base.Position)
+                    DB.ElementTransformUtils.MoveElement(doc, punto_base.Id, delta)
+                if survey_mm is not None:
+                    delta = destino_rec.Subtract(punto_rec.Position)
+                    DB.ElementTransformUtils.MoveElement(doc, punto_rec.Id, delta)
+                if norte is not None:
+                    ubicacion = doc.ActiveProjectLocation
+                    posicion = ubicacion.GetProjectPosition(DB.XYZ.Zero)
+                    posicion.Angle = math.radians(norte)
+                    ubicacion.SetProjectPosition(DB.XYZ.Zero, posicion)
+                if vinculo is not None:
+                    doc.AcquireCoordinates(vinculo.Id)
+
+            despues = ubicacion_proyecto(doc)
+            desajustes = []
+            if base_mm is not None:
+                real = (despues.get("project_base_point") or {}).get("posicion_mm") or {}
+                pedido = punto_a_mm(destino)
+                if any(abs(real.get(e, 0) - pedido[e]) > 1.0 for e in ("x", "y", "z")):
+                    desajustes.append("project base point is at {} instead of {}".format(real, pedido))
+            if survey_mm is not None:
+                real = (despues.get("survey_point") or {}).get("posicion_mm") or {}
+                pedido = punto_a_mm(destino_rec)
+                if any(abs(real.get(e, 0) - pedido[e]) > 1.0 for e in ("x", "y", "z")):
+                    desajustes.append("survey point is at {} instead of {}".format(real, pedido))
+            if norte is not None:
+                real = despues.get("true_north_deg")
+                if real is None or abs(((real - norte) + 180.0) % 360.0 - 180.0) > 0.01:
+                    desajustes.append("true north is {} deg instead of {}".format(real, norte))
+            resultado = {
+                "acciones": acciones,
+                "antes": antes,
+                "despues": despues,
+                "ok": not desajustes,
+                "message": "Applied {} project location change(s)".format(len(acciones)),
+            }
+            resultado["verificacion"] = (
+                {"coincide": True} if not desajustes else {"coincide": False, "detalle": "; ".join(desajustes)}
+            )
+            return resultado
+
+        return ejecutar(doc, "/set_project_location/", request, cuerpo)
 
     logger.info("Coordenadas routes registered successfully")

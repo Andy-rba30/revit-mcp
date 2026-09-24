@@ -236,3 +236,43 @@ def buscar_vista(doc, nombre, solo_planta=False):
         except Exception:
             continue
     return None
+
+
+def nombre_familia(tipo):
+    """Nombre de la familia de un tipo (FamilySymbol.Family o FamilyName), o None."""
+    try:
+        if hasattr(tipo, "Family") and tipo.Family:
+            return get_element_name(tipo.Family)
+    except Exception:
+        pass
+    try:
+        return sanitize_string(tipo.FamilyName)
+    except Exception:
+        return None
+
+
+def buscar_tipo_por_nombre(tipos, nombre):
+    """Tipos cuyo nombre es `nombre` o "Familia: Tipo" (lista, puede haber varios)."""
+    if not nombre:
+        return []
+    coincidencias = []
+    for tipo in tipos:
+        try:
+            nombre_tipo = get_element_name(tipo)
+        except Exception:
+            continue
+        familia = nombre_familia(tipo)
+        candidatos = [nombre_tipo]
+        if familia:
+            candidatos.append("{}: {}".format(familia, nombre_tipo))
+            candidatos.append("{} : {}".format(familia, nombre_tipo))
+        if nombre in candidatos:
+            coincidencias.append(tipo)
+    return coincidencias
+
+
+def etiqueta_tipo(tipo):
+    """'Familia: Tipo' (o solo 'Tipo' si no hay familia) para mensajes."""
+    familia = nombre_familia(tipo)
+    nombre = get_element_name(tipo)
+    return "{}: {}".format(familia, nombre) if familia else nombre

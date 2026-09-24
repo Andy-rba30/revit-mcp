@@ -28,6 +28,10 @@ def register_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func
     from .clash_tools import register_clash_tools
     from .document_tools import register_document_tools
     from .query_tools import register_query_tools
+    from .type_tools import register_type_tools
+    from .structural_tools import register_structural_tools
+    from .location_tools import register_location_tools
+    from .maintenance_tools import register_maintenance_tools
 
     # Register tools from each module
     register_status_tools(mcp_server, revit_get_func)
@@ -55,3 +59,7 @@ def register_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func
     register_clash_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func)
     register_document_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func)
     register_query_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func)
+    register_type_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func)
+    register_structural_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func)
+    register_location_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func)
+    register_maintenance_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func)
