@@ -73,10 +73,13 @@ The `revit_mcp/` folder and `startup.py` need to run inside Revit via pyRevit.
 
 ### Step 4: Verify connection
 
-Open a browser and go to:
+Every route requires the **session token** that the extension writes to
+`%LOCALAPPDATA%\RevitMcp\token` each time Revit starts (see [Security](#security)).
+From PowerShell:
 
-```
-http://localhost:48884/revit_mcp/status/
+```powershell
+$token = Get-Content "$env:LOCALAPPDATA\RevitMcp\token"
+Invoke-RestMethod "http://127.0.0.1:48884/revit_mcp/status/?token=$token"
 ```
 
 You should see:
@@ -91,13 +94,29 @@ You should see:
 }
 ```
 
+Without the token (for example opening `http://localhost:48884/revit_mcp/status/`
+in a browser) the answer is `401 {"error": "token ausente o incorrecto"}`.
+
 ### Step 5: Start the MCP server
 
 ```bash
 uv run main.py
 ```
 
-That's it. Your AI client can now connect.
+That's it. Your AI client can now connect. The bridge reads the token file by
+itself and sends it with every request; if Revit is not running it answers
+"Revit no está abierto o el conector no ha iniciado" instead of failing.
+
+To run the smoke tests (Revit open, bridge started with `--combined` or
+`--streamable-http`):
+
+```bash
+python pruebas\probar_revit.py
+```
+
+Expected: `401` without token, `200` with token, `200` for `execute_code`, and
+`421` from the bridge when the `Host` header is forged. Details in
+[CONTRATO.md](CONTRATO.md).
 
 ## Connecting Your AI Client
 
@@ -229,6 +248,38 @@ Then open `http://127.0.0.1:6274` in your browser.
 |------|-------------|
 | `execute_revit_code` | Execute IronPython code in Revit context |
 
+## Security
+
+Full details (routes, parameters, expected errors) live in [CONTRATO.md](CONTRATO.md).
+
+- **Session token.** `startup.py` generates a random 64-hex token on every
+  Revit start, stores it in `%LOCALAPPDATA%\RevitMcp\token` (ACL restricted to
+  the current user when possible) and keeps it in memory. Every route is wrapped
+  with `@requiere_token` (`revit_mcp/seguridad.py`): POST expects `"token"` in
+  the JSON body, GET expects `?token=`. Missing or wrong token → `401`.
+  `main.py` reads the file, caches it, and on a `401` re-reads it once and
+  retries (Revit restarted → new token).
+- **Loopback only.** pyRevit Routes listens on all interfaces, so block inbound
+  connections to port 48884 with this firewall rule (admin console):
+
+  ```bat
+  netsh advfirewall firewall add rule name="Block pyRevit Routes" dir=in action=block protocol=TCP localport=48884 profile=any
+  ```
+
+- **DNS rebinding.** pyRevit Routes does not expose the `Origin` header to
+  handlers, so it cannot be checked inside Revit. The MCP bridge is created with
+  `host="127.0.0.1"`, which in mcp 2.2 enables DNS-rebinding protection: any
+  request whose `Host` is not `127.0.0.1`, `localhost` or `[::1]` gets `421`.
+
+## Undo
+
+`execute_revit_code` runs the code inside a Revit `TransactionGroup` named
+`IA: <description>` (the tool's `description` argument, or the first `#`
+comment line of the code, max 60 characters). The whole order becomes a single
+undo entry in Revit. On error the group is rolled back; if a transaction opened
+by the code cannot be closed, the response says so (`open_transaction: true`)
+so you can check it in Revit.
+
 ## Architecture
 
 Two runtimes communicate over HTTP:
@@ -263,7 +314,9 @@ All tools accept **millimeters (mm)**. The server converts to Revit's internal f
 
 Adding a new tool requires 2 files + 2 registration lines:
 
-1. **Route handler** in `revit_mcp/new_module.py` (IronPython 2.7)
+1. **Route handler** in `revit_mcp/new_module.py` (IronPython 2.7) — put
+   `@requiere_token` (from `seguridad`) right below `@api.route(...)` so the
+   route requires the session token
 2. **Tool definition** in `tools/new_tools.py` (Python 3.11+)
 3. **Register routes** in `startup.py`
 4. **Register tools** in `tools/__init__.py`

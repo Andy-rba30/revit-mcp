@@ -408,7 +408,7 @@ A minimal and beginner-friendly implementation of the Model Context Protocol (MC
 - This implementation leverages the Routes module inside pyRevit to create a bridge between Revit and Large Language Models (LLMs).
 - It provides a modular, extensible template for prototyping and iterating tools that give LLMs access to your Revit models.
 - The tools are designed to be easily expanded for specific use cases. You're welcome to fork the repo and contribute.
-- **Note:** The pyRevit Routes API is currently in draft form and subject to change. It lacks built-in authentication mechanisms, so you'll need to implement your own security measures for production use.
+- **Note:** The pyRevit Routes API is currently in draft form and subject to change. It lacks built-in authentication mechanisms, so you'll need to implement your own security measures for production use. This repository adds a per-session token (`revit_mcp/seguridad.py`, `@requiere_token` on every route, token file in `%LOCALAPPDATA%\RevitMcp\token`) and relies on the MCP bridge's DNS-rebinding protection; see CONTRATO.md.
 
 This repo is aimed at:
 - Beginners to the Revit API
