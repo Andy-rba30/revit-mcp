@@ -1,11 +1,15 @@
 # -*- coding: UTF-8 -*-
 """
 Interop Module for Revit MCP
-Handles IFC export and external file linking/importing
+Handles IFC export and external file linking/importing.
+
+link_file pasa por escritura.ejecutar (copia, log, simular, IA:, creados).
+export_ifc no modifica el modelo: solo usa la transaccion "IA: Exportar IFC".
 """
 
 from utils import get_element_name, get_element_id_value, suppress_warnings
 from seguridad import requiere_token
+from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, resultado_creacion, nombre_transaccion
 from pyrevit import routes, revit, DB
 import clr
 import json
@@ -90,7 +94,7 @@ def register_interop_routes(api):
                 if target_view:
                     ifc_options.FilterViewId = target_view.Id
 
-            t = DB.Transaction(doc, "Export IFC via MCP")
+            t = DB.Transaction(doc, nombre_transaccion("Exportar IFC"))
             t.Start()
             suppress_warnings(t)
 
@@ -130,118 +134,85 @@ def register_interop_routes(api):
     @api.route("/link_file/", methods=["POST"])
     @requiere_token
     def link_file_handler(doc, request):
-        """Link or import an external file."""
-        try:
-            if not doc:
-                return routes.make_response(
-                    data={"error": "No active Revit document"}, status=503
-                )
+        """Link or import an external file. Accepts `simular`."""
 
-            data = json.loads(request.data) if isinstance(request.data, str) else request.data
-
+        def cuerpo(ctx):
+            data = ctx["data"]
             file_path = data.get("file_path")
             if not file_path:
-                return routes.make_response(
-                    data={"error": "file_path is required"},
-                    status=400,
-                )
-
+                raise EscrituraRechazada("file_path is required", 400)
             if not os.path.exists(file_path):
-                return routes.make_response(
-                    data={"error": "File not found at the specified path."},
-                    status=500,
-                )
+                raise EscrituraRechazada("File not found at the specified path: {}".format(file_path), 404)
 
             mode = data.get("mode", "link")
-            position = data.get("position")
-
             file_ext = os.path.splitext(file_path)[1].lower()
             file_name = os.path.basename(file_path)
             file_type = file_ext.lstrip(".").upper()
+            if file_ext not in (".rvt", ".dwg", ".dxf", ".dgn", ".sat", ".skp", ".3dm"):
+                raise EscrituraRechazada(
+                    "Unsupported file type '{}'. Supported: DWG, DXF, DGN, SAT, SKP, 3DM, RVT".format(file_ext), 400
+                )
+            # SAT/SKP/3DM are import-only (not linkable); force import.
+            if file_ext == ".rvt":
+                mode = "link"
+            elif not ((mode == "link") and file_ext in (".dwg", ".dxf", ".dgn")):
+                mode = "import"
 
-            t = DB.Transaction(doc, "Link/Import File via MCP")
-            t.Start()
-            suppress_warnings(t)
+            if ctx["simular"]:
+                return simulacion([{
+                    "accion": "vincular" if mode == "link" else "importar",
+                    "file_name": file_name, "file_type": file_type, "file_path": file_path,
+                    "size_kb": int(os.path.getsize(file_path) / 1024),
+                    "view": get_element_name(doc.ActiveView) if file_ext != ".rvt" else None,
+                }])
 
-            try:
-                result_id = None
-
+            result_id = None
+            with transaccion(doc, "{} {}".format("Vincular" if mode == "link" else "Importar", file_name)):
                 if file_ext == ".rvt":
-                    # Revit link
                     model_path = DB.ModelPathUtils.ConvertUserVisiblePathToModelPath(file_path)
                     link_options = DB.RevitLinkOptions(False)  # not relative
                     link_result = DB.RevitLinkType.Create(doc, model_path, link_options)
                     if link_result and link_result.ElementId:
                         result_id = get_element_id_value(link_result.ElementId)
-                        # Place instance
                         link_instance = DB.RevitLinkInstance.Create(doc, link_result.ElementId)
                         if link_instance:
                             result_id = get_element_id_value(link_instance)
-
-                elif file_ext in (".dwg", ".dxf", ".dgn", ".sat", ".skp", ".3dm"):
-                    # CAD / 3D solid geometry. Use the correct options per format,
-                    # and capture the created element via an out-param Reference
-                    # (the previous None placeholder never captured the result).
+                else:
                     active_view = doc.ActiveView
-                    if file_ext == ".sat":
+                    if file_ext == ".sat" or file_ext == ".3dm":
                         options = DB.SATImportOptions()
                     elif file_ext == ".skp":
                         options = DB.SKPImportOptions()
-                    elif file_ext == ".3dm":
-                        # Rhino import also uses SAT-style options in Revit's importer
-                        options = DB.SATImportOptions()
                     else:
                         options = DB.DWGImportOptions()
                         options.Placement = DB.ImportPlacement.Origin
-
                     idref = clr.Reference[DB.ElementId]()
-                    # SAT/SKP/3DM are import-only (not linkable); force import.
-                    do_link = (mode == "link") and file_ext in (".dwg", ".dxf", ".dgn")
-                    if do_link:
+                    if mode == "link":
                         doc.Link(file_path, options, active_view, idref)
-                        mode = "link"
                     else:
                         doc.Import(file_path, options, active_view, idref)
-                        mode = "import"
-
                     try:
                         if idref.Value and idref.Value != DB.ElementId.InvalidElementId:
                             result_id = get_element_id_value(idref.Value)
                     except Exception:
                         result_id = None
 
-                else:
-                    t.RollBack()
-                    return routes.make_response(
-                        data={"error": "Unsupported file type '{}'. Supported: DWG, DXF, DGN, SAT, SKP, 3DM, RVT".format(file_ext)},
-                        status=400,
-                    )
+            resultado = resultado_creacion(doc, [result_id] if result_id is not None else [])
+            resultado.update({
+                "element_id": result_id,
+                "file_name": file_name,
+                "file_type": file_type,
+                "mode": mode,
+                "message": "{}ed file '{}'".format(mode.capitalize(), file_name),
+            })
+            if result_id is None:
+                resultado["ok"] = False
+                resultado["verificacion"] = {
+                    "coincide": False,
+                    "detalle": "Revit did not return the id of the created link/import",
+                }
+            return resultado
 
-                t.Commit()
-
-                return routes.make_response(
-                    data={
-                        "status": "success",
-                        "element_id": result_id,
-                        "file_name": file_name,
-                        "file_type": file_type,
-                        "mode": mode,
-                        "message": "{}ed file '{}'".format(
-                            mode.capitalize(), file_name
-                        ),
-                    }
-                )
-
-            except Exception as tx_error:
-                if t.HasStarted() and not t.HasEnded():
-                    t.RollBack()
-                raise tx_error
-
-        except Exception as e:
-            logger.error("Failed to link file: {}".format(str(e)))
-            error_trace = traceback.format_exc()
-            return routes.make_response(
-                data={"error": str(e), "traceback": error_trace}, status=500
-            )
+        return ejecutar(doc, "/link_file/", request, cuerpo)
 
     logger.info("Interop routes registered successfully")

@@ -151,3 +151,88 @@ def find_family_symbol_safely(doc, target_family_name, target_type_name=None):
     except Exception as e:
         logger.error("Error finding family symbol: %s", str(e))
         return None
+
+
+# ---------------------------------------------------------------------------
+# Helpers compartidos por las rutas de escritura (unidades y busquedas)
+# ---------------------------------------------------------------------------
+MM_TO_FEET = 1.0 / 304.8
+FEET_TO_MM = 304.8
+
+
+def xyz_desde_mm(punto, z_defecto=0.0):
+    """DB.XYZ en pies a partir de un dict {"x", "y", "z"} en milimetros.
+
+    Lanza ValueError con un mensaje claro si falta el punto o no es numerico.
+    """
+    if not isinstance(punto, dict):
+        raise ValueError("point must be an object {x, y, z} in mm")
+    try:
+        return DB.XYZ(
+            float(punto.get("x", 0)) * MM_TO_FEET,
+            float(punto.get("y", 0)) * MM_TO_FEET,
+            float(punto.get("z", z_defecto)) * MM_TO_FEET,
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("invalid coordinates {}: {}".format(punto, error))
+
+
+def punto_a_mm(xyz):
+    """Dict {"x", "y", "z"} en milimetros (redondeado a 0.1) a partir de un XYZ."""
+    return {
+        "x": round(xyz.X * FEET_TO_MM, 1),
+        "y": round(xyz.Y * FEET_TO_MM, 1),
+        "z": round(xyz.Z * FEET_TO_MM, 1),
+    }
+
+
+def elementos_por_nombre(elementos):
+    """{nombre: elemento} ignorando los que no tienen nombre legible."""
+    mapa = {}
+    for elemento in elementos:
+        try:
+            mapa[get_element_name(elemento)] = elemento
+        except Exception:
+            continue
+    return mapa
+
+
+def coleccion_niveles(doc):
+    return (
+        DB.FilteredElementCollector(doc)
+        .OfCategory(DB.BuiltInCategory.OST_Levels)
+        .WhereElementIsNotElementType()
+        .ToElements()
+    )
+
+
+def mapa_niveles(doc):
+    """{nombre: DB.Level} de todos los niveles del documento."""
+    return elementos_por_nombre(coleccion_niveles(doc))
+
+
+def nivel_mas_bajo(mapa):
+    """El nivel de menor elevacion del mapa (o None si esta vacio)."""
+    if not mapa:
+        return None
+    return sorted(mapa.values(), key=lambda nivel: nivel.Elevation)[0]
+
+
+def buscar_vista(doc, nombre, solo_planta=False):
+    """Vista (no plantilla) por nombre exacto; None si no existe."""
+    clase = DB.ViewPlan if solo_planta else DB.View
+    vistas = (
+        DB.FilteredElementCollector(doc)
+        .OfClass(clase)
+        .WhereElementIsNotElementType()
+        .ToElements()
+    )
+    for vista in vistas:
+        try:
+            if vista.IsTemplate:
+                continue
+            if get_element_name(vista) == nombre:
+                return vista
+        except Exception:
+            continue
+    return None

@@ -12,7 +12,9 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
 
     @mcp.tool()
     async def execute_revit_code(
-        code: str, description: str = "", ctx: Context = None
+        code: str, description: str, simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None
     ) -> str:
         """
         Execute IronPython code directly in Revit context.
@@ -26,17 +28,26 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
 
         Use this when the existing MCP tools cannot accomplish what you need.
 
-        ALWAYS fill `description` with a few words (max 60 characters) saying what
+        `description` is REQUIRED: a few words (max 60 characters) saying what
         the code does, e.g. "Renombrar vistas de planta" or "Contar muros por nivel".
         Revit groups everything the code changes into ONE undo entry named
         "IA: <description>", so the user can undo the whole order with Ctrl+Z and
-        recognise it in the undo history. If left empty, the first line of the code
-        is used when it is a `#` comment, otherwise "Code execution".
+        recognise it in the undo history. Revit answers 400 without it.
+
+        Safety: the model file is backed up (last saved copy) and the full code
+        is written to mcp_log.jsonl. Code that deletes a collection with
+        doc.Delete(<collection>) is rejected unless forzar=true (prefer
+        delete_elements, which lists the ids first). The response includes
+        `elementos_modificados` (ids created/deleted and new warnings, computed
+        by comparing the model before and after) — Revit's DocumentChanged
+        event is not available in Routes, so in-place edits are not listed.
 
         Args:
             code: The IronPython code to execute (as a string)
-            description: Short description of the order (shown as the Revit undo
-                entry "IA: <description>"; sent to Revit as "description")
+            description: Short description of the order (required; shown as the
+                Revit undo entry "IA: <description>")
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
+            forzar: Required (true) when the code deletes a collection with doc.Delete(<collection>)
             ctx: MCP context for logging
 
         Returns:
@@ -90,10 +101,10 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
            transactions.
         """
         try:
-            payload = {"code": code, "description": description or ""}
+            payload = {"code": code, "description": description, "simular": simular, "forzar": forzar}
 
             if ctx:
-                await ctx.info("Executing code: {}".format(description or "(sin descripción)"))
+                await ctx.info("Executing code: {}".format(description))
 
             response = await revit_post("/execute_code/", payload, ctx)
             return format_response(response)

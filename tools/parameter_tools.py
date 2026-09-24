@@ -37,6 +37,7 @@ def register_parameter_tools(mcp, revit_get, revit_post, revit_image=None):
         element_id: int,
         parameter_name: str,
         value: str,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Set a single parameter value on a Revit element.
@@ -49,6 +50,7 @@ def register_parameter_tools(mcp, revit_get, revit_post, revit_image=None):
             element_id: Target element ID
             parameter_name: Name of the parameter to set (e.g., "Comments", "Mark")
             value: New value as a string — automatically converted to the correct type
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {
@@ -56,5 +58,6 @@ def register_parameter_tools(mcp, revit_get, revit_post, revit_image=None):
             "parameter_name": parameter_name,
             "value": value,
         }
+        data["simular"] = simular
         response = await revit_post("/set_parameter/", data, ctx)
         return format_response(response)

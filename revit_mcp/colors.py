@@ -6,6 +6,7 @@ Provides tools for color splashing elements based on parameter values
 
 from utils import get_element_id_value, suppress_warnings
 from seguridad import requiere_token
+from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada
 from pyrevit import routes, DB
 import json
 import logging
@@ -596,7 +597,7 @@ def get_parameter_value_for_sorting(element, parameter_name):
 
 
 def color_elements_by_parameter(
-    doc, category_name, parameter_name, use_gradient=False, custom_colors=None
+    doc, category_name, parameter_name, use_gradient=False, custom_colors=None, simular=False
 ):
     """
     Color elements in a category based on parameter values with proper gradient support
@@ -607,11 +608,13 @@ def color_elements_by_parameter(
         parameter_name (str): Name of the parameter to use for coloring
         use_gradient (bool): Whether to use gradient coloring
         custom_colors (list): Optional list of custom hex colors
+        simular (bool): Only report what would be colored (no transaction)
 
     Returns:
-        dict: Results of the coloring operation
+        dict: Results of the coloring operation. Raises EscrituraRechazada when
+        the category or its elements do not exist.
     """
-    try:
+    if True:
         # Find the category
         categories = doc.Settings.Categories
         target_category = None
@@ -622,10 +625,7 @@ def color_elements_by_parameter(
                 break
 
         if not target_category:
-            return {
-                "status": "error",
-                "message": "Category '{}' not found".format(category_name),
-            }
+            raise EscrituraRechazada("Category '{}' not found".format(category_name), 404)
 
         # Get elements from the category
         collector = (
@@ -633,13 +633,12 @@ def color_elements_by_parameter(
             .OfCategoryId(target_category.Id)
             .WhereElementIsNotElementType()
         )
-        elements = collector.ToElements()
+        elements = list(collector.ToElements())
 
         if not elements:
-            return {
-                "status": "error",
-                "message": "No elements found in category '{}'".format(category_name),
-            }
+            raise EscrituraRechazada(
+                "No elements found in category '{}'".format(category_name), 404
+            )
 
         # Group elements by parameter value using improved method
         parameter_groups = defaultdict(list)
@@ -772,15 +771,27 @@ def color_elements_by_parameter(
             # Use distinct colors
             colors = generate_distinct_colors(value_count)
 
+        if simular:
+            return simulacion(
+                [{
+                    "accion": "colorear",
+                    "category": category_name,
+                    "parameter": parameter_name,
+                    "elements": len(elements),
+                    "unique_values": value_count,
+                    "values": unique_values[:50],
+                    "use_gradient": use_gradient,
+                    "view": normalize_string(doc.ActiveView.Name),
+                }],
+                count=len(elements),
+            )
+
         # Apply colors to elements
         color_assignments = {}
         elements_colored = 0
         solid_fill_id = solid_fill_pattern_id(doc)
 
-        with DB.Transaction(doc, "Color Elements by Parameter") as t:
-            t.Start()
-            suppress_warnings(t)
-
+        with transaccion(doc, u"Colorear {} por {}".format(category_name, parameter_name)):
             # Ensure we have enough colors
             if len(colors) < value_count:
                 logger.warning(
@@ -861,10 +872,18 @@ def color_elements_by_parameter(
                             e,
                         )
 
-            t.Commit()
+        # Verificacion: releer las anulaciones graficas de una muestra
+        comprobados, con_color = _muestra_con_color(doc, elements)
+        coincide = comprobados == 0 or con_color == comprobados
 
         result = {
             "status": "success",
+            "ok": coincide,
+            "verificacion": {
+                "coincide": coincide,
+                "comprobados": comprobados,
+                "con_color": con_color,
+            },
             "message": "Successfully colored {} elements in {} color groups".format(
                 elements_colored, value_count
             ),
@@ -887,26 +906,39 @@ def color_elements_by_parameter(
 
         return result
 
-    except Exception as e:
-        logger.error("Error in color_elements_by_parameter: %s", e)
-        return {
-            "status": "error",
-            "message": "Failed to color elements: {}".format(str(e)),
-        }
+
+def _muestra_con_color(doc, elements, maximo=50):
+    """(comprobados, con color) releyendo GetElementOverrides en la vista activa."""
+    comprobados = 0
+    con_color = 0
+    try:
+        vista = doc.ActiveView
+        for element in list(elements)[:maximo]:
+            comprobados += 1
+            try:
+                if vista.GetElementOverrides(element.Id).ProjectionLineColor.IsValid:
+                    con_color += 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return comprobados, con_color
 
 
-def clear_element_colors(doc, category_name):
+def clear_element_colors(doc, category_name, simular=False):
     """
     Clear color overrides for elements in a category
 
     Args:
         doc: Revit document
         category_name (str): Name of the category to clear colors from
+        simular (bool): Only report what would be cleared (no transaction)
 
     Returns:
-        dict: Results of the clear operation
+        dict: Results of the clear operation. Raises EscrituraRechazada when
+        the category does not exist.
     """
-    try:
+    if True:
         # Find the category
         categories = doc.Settings.Categories
         target_category = None
@@ -917,10 +949,7 @@ def clear_element_colors(doc, category_name):
                 break
 
         if not target_category:
-            return {
-                "status": "error",
-                "message": "Category '{}' not found".format(category_name),
-            }
+            raise EscrituraRechazada("Category '{}' not found".format(category_name), 404)
 
         # Get elements from the category
         collector = (
@@ -928,23 +957,32 @@ def clear_element_colors(doc, category_name):
             .OfCategoryId(target_category.Id)
             .WhereElementIsNotElementType()
         )
-        elements = collector.ToElements()
+        elements = list(collector.ToElements())
 
         if not elements:
             return {
                 "status": "warning",
                 "message": "No elements found in category '{}'".format(category_name),
+                "elements_processed": 0,
             }
+
+        if simular:
+            return simulacion(
+                [{
+                    "accion": "quitar_colores",
+                    "category": category_name,
+                    "elements": len(elements),
+                    "view": normalize_string(doc.ActiveView.Name),
+                }],
+                count=len(elements),
+            )
 
         elements_cleared = 0
 
         # Get active view for clearing overrides
         active_view = doc.ActiveView
 
-        with DB.Transaction(doc, "Clear Element Colors") as t:
-            t.Start()
-            suppress_warnings(t)
-
+        with transaccion(doc, u"Quitar colores de {}".format(category_name)):
             # Clear overrides for each element in active view
             for element in elements:
                 try:
@@ -979,22 +1017,23 @@ def clear_element_colors(doc, category_name):
                         e,
                     )
 
-            t.Commit()
+        # Verificacion: ninguna anulacion de color en la muestra
+        comprobados, con_color = _muestra_con_color(doc, elements)
+        coincide = con_color == 0
 
         return {
             "status": "success",
+            "ok": coincide,
+            "verificacion": {
+                "coincide": coincide,
+                "comprobados": comprobados,
+                "con_color": con_color,
+            },
             "message": "Successfully cleared color overrides for {} elements".format(
                 elements_cleared
             ),
             "category": category_name,
             "elements_processed": elements_cleared,
-        }
-
-    except Exception as e:
-        logger.error("Error in clear_element_colors: %s", e)
-        return {
-            "status": "error",
-            "message": "Failed to clear colors: {}".format(str(e)),
         }
 
 
@@ -1102,36 +1141,24 @@ def register_color_routes(api):
             "category_name": "Walls",
             "parameter_name": "Mark",
             "use_gradient": false,
-            "custom_colors": ["#FF0000", "#00FF00", "#0000FF"]  // optional
+            "custom_colors": ["#FF0000", "#00FF00", "#0000FF"],  // optional
+            "simular": false
         }
         """
-        try:
-            data = (
-                json.loads(request.data)
-                if isinstance(request.data, str)
-                else request.data
-            )
 
+        def cuerpo(ctx):
+            data = ctx["data"]
             category_name = data.get("category_name")
             parameter_name = data.get("parameter_name")
-            use_gradient = data.get("use_gradient", False)
-            custom_colors = data.get("custom_colors", None)
-
             if not category_name or not parameter_name:
-                return routes.make_response(
-                    data={"error": "category_name and parameter_name are required"},
-                    status=400,
-                )
-
-            result = color_elements_by_parameter(
-                doc, category_name, parameter_name, use_gradient, custom_colors
+                raise EscrituraRechazada("category_name and parameter_name are required", 400)
+            return color_elements_by_parameter(
+                doc, category_name, parameter_name,
+                data.get("use_gradient", False), data.get("custom_colors", None),
+                simular=ctx["simular"],
             )
 
-            return routes.make_response(data=result)
-
-        except Exception as e:
-            logger.error("Error in color_splash route: %s", e)
-            return routes.make_response(data={"error": str(e)}, status=500)
+        return ejecutar(doc, "/color_splash/", request, cuerpo)
 
     @api.route("/clear_colors/", methods=["POST"])
     @requiere_token
@@ -1141,30 +1168,19 @@ def register_color_routes(api):
 
         Expected JSON payload:
         {
-            "category_name": "Walls"
+            "category_name": "Walls",
+            "simular": false
         }
         """
-        try:
-            data = (
-                json.loads(request.data)
-                if isinstance(request.data, str)
-                else request.data
-            )
 
+        def cuerpo(ctx):
+            data = ctx["data"]
             category_name = data.get("category_name")
-
             if not category_name:
-                return routes.make_response(
-                    data={"error": "category_name is required"}, status=400
-                )
+                raise EscrituraRechazada("category_name is required", 400)
+            return clear_element_colors(doc, category_name, simular=ctx["simular"])
 
-            result = clear_element_colors(doc, category_name)
-
-            return routes.make_response(data=result)
-
-        except Exception as e:
-            logger.error("Error in clear_colors route: %s", e)
-            return routes.make_response(data={"error": str(e)}, status=500)
+        return ejecutar(doc, "/clear_colors/", request, cuerpo)
 
     @api.route("/list_category_parameters/", methods=["POST"])
     @requiere_token

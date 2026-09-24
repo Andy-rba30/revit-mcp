@@ -15,6 +15,7 @@ def register_view_management_tools(mcp, revit_get, revit_post, revit_image=None)
         name: str,
         level_name: str = None,
         section_box: dict = None,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Create a new view in the Revit model.
@@ -35,6 +36,7 @@ def register_view_management_tools(mcp, revit_get, revit_post, revit_image=None)
                 - width (float): Section width in mm
                 - height (float): Section height in mm
                 - depth (float): Section depth in mm
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"view_type": view_type, "name": name}
@@ -42,12 +44,14 @@ def register_view_management_tools(mcp, revit_get, revit_post, revit_image=None)
             data["level_name"] = level_name
         if section_box is not None:
             data["section_box"] = section_box
+        data["simular"] = simular
         response = await revit_post("/create_view/", data, ctx)
         return format_response(response)
 
     @mcp.tool()
     async def set_active_view(
         view_name: str,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Switch the active view in Revit to the specified view.
@@ -57,8 +61,10 @@ def register_view_management_tools(mcp, revit_get, revit_post, revit_image=None)
 
         Args:
             view_name: Name of the view to activate
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"view_name": view_name}
+        data["simular"] = simular
         response = await revit_post("/set_active_view/", data, ctx)
         return format_response(response)

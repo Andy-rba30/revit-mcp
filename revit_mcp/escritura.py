@@ -726,7 +726,8 @@ def _resumen(resultado):
 def ejecutar(doc, ruta, data, cuerpo):
     """Ejecuta `cuerpo(contexto)` con preparar/registrar y devuelve la respuesta HTTP.
 
-    `cuerpo` recibe el contexto ({"ruta", "simular", "copia", "nota"}) y puede:
+    `data` puede ser el dict ya parseado o la peticion de Routes (se parsea).
+    `cuerpo` recibe el contexto ({"ruta", "simular", "copia", "nota", "data"}) y puede:
       - devolver un dict: se completa con ok/ms/copia y se responde 200
         (ok=False si el dict trae "ok": False o "error");
       - devolver directamente una respuesta de routes.make_response;
@@ -740,9 +741,16 @@ def ejecutar(doc, ruta, data, cuerpo):
     if doc is None:
         return routes.make_response(data={"error": "No active Revit document"}, status=503)
     if not isinstance(data, dict):
-        data = {}
+        # Se admite la peticion de Routes directamente: se parsea aqui para que
+        # un JSON invalido responda 400 en vez de una excepcion sin controlar.
+        try:
+            data = datos_peticion(data)
+        except EscrituraRechazada as rechazo:
+            return routes.make_response(data={"error": rechazo.mensaje}, status=rechazo.status)
     simulado = es_simulacion(data)
-    contexto = {"ruta": ruta, "simular": simulado, "copia": None, "nota": None, "doc": doc}
+    contexto = {
+        "ruta": ruta, "simular": simulado, "copia": None, "nota": None, "doc": doc, "data": data,
+    }
 
     def _ms():
         return int((time.time() - inicio) * 1000)

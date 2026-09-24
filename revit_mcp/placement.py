@@ -1,18 +1,79 @@
 # -*- coding: UTF-8 -*-
 """
 Placement Module for Revit MCP
-Handles family placement and element creation functionality
+Handles family placement, family loading and family/level listing.
+
+place_family y load_family pasan por escritura.ejecutar (copia, log,
+`simular`, transaccion "IA: ..." y verificacion de lo creado).
 """
 
-from utils import get_element_name, find_family_symbol_safely, get_element_id_value, suppress_warnings
+from utils import (
+    get_element_name, find_family_symbol_safely, get_element_id_value, make_element_id,
+    xyz_desde_mm, punto_a_mm, mapa_niveles, FEET_TO_MM,
+)
 from seguridad import requiere_token
+from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, resultado_creacion, describir_elemento
 from pyrevit import routes, revit, DB
-import json
 import os
-import traceback
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _familias_disponibles(doc, maximo=20):
+    nombres = set()
+    try:
+        symbols = DB.FilteredElementCollector(doc).OfClass(DB.FamilySymbol).ToElements()
+        for symbol in symbols:
+            try:
+                nombres.add(get_element_name(symbol.Family))
+            except Exception:
+                continue
+            if len(nombres) >= 50:
+                break
+    except Exception:
+        return ["Could not retrieve family list"]
+    return sorted(nombres)[:maximo]
+
+
+def _necesita_muro(symbol):
+    """True si la familia debe alojarse en un muro (puertas, ventanas, hosted)."""
+    try:
+        if symbol.Family.FamilyPlacementType == DB.FamilyPlacementType.OneLevelBasedHosted:
+            return True
+    except Exception:
+        pass
+    try:
+        if symbol.Category:
+            cat_id = get_element_id_value(symbol.Category.Id)
+            if cat_id in (int(DB.BuiltInCategory.OST_Windows), int(DB.BuiltInCategory.OST_Doors)):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _muro_mas_cercano(doc, point):
+    best_dist = None
+    host_wall = None
+    walls = (
+        DB.FilteredElementCollector(doc)
+        .OfCategory(DB.BuiltInCategory.OST_Walls)
+        .WhereElementIsNotElementType()
+        .ToElements()
+    )
+    for w in walls:
+        try:
+            wloc = w.Location
+            if not wloc or not hasattr(wloc, "Curve"):
+                continue
+            d = wloc.Curve.Distance(point)
+            if best_dist is None or d < best_dist:
+                best_dist = d
+                host_wall = w
+        except Exception:
+            continue
+    return host_wall
 
 
 def register_placement_routes(api):
@@ -28,420 +89,238 @@ def register_placement_routes(api):
         {
             "family_name": "Basic Wall",
             "type_name": "Generic - 200mm",
-            "location": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "location": {"x": 0.0, "y": 0.0, "z": 0.0},   # mm
             "rotation": 0.0,
             "level_name": "Level 1",
-            "properties": {
-                "Mark": "A1",
-                "Comments": "Placed through API"
-            }
+            "properties": {"Mark": "A1"},
+            "simular": false
         }
         """
-        try:
-            if not doc:
-                return routes.make_response(
-                    data={"error": "No active Revit document"}, status=503
-                )
 
-            # Parse request data
-            if not request or not request.data:
-                return routes.make_response(
-                    data={"error": "No data provided or invalid request format"},
-                    status=400,
-                )
-
-            # Parse JSON if needed
-            data = None
-            if isinstance(request.data, str):
-                try:
-                    data = json.loads(request.data)
-                except Exception as json_err:
-                    return routes.make_response(
-                        data={"error": "Invalid JSON format: {}".format(str(json_err))},
-                        status=400,
-                    )
-            else:
-                data = request.data
-
-            # Validate data structure
-            if not data or not isinstance(data, dict):
-                return routes.make_response(
-                    data={"error": "Invalid data format - expected JSON object"},
-                    status=400,
-                )
-
-            # Extract required fields
+        def cuerpo(ctx):
+            data = ctx["data"]
             family_name = data.get("family_name")
             type_name = data.get("type_name")
             location = data.get("location", {})
-            rotation = data.get("rotation", 0.0)
+            rotation = data.get("rotation", 0.0) or 0.0
             level_name = data.get("level_name")
-            properties = data.get("properties", {})
+            properties = data.get("properties", {}) or {}
 
-            # Basic validation
             if not family_name:
-                return routes.make_response(
-                    data={"error": "No family_name provided"}, status=400
-                )
-
-            # Validate location
+                raise EscrituraRechazada("No family_name provided", 400)
             if not location or not all(k in location for k in ["x", "y", "z"]):
-                return routes.make_response(
-                    data={
-                        "error": "Invalid location - must include x, y, z coordinates"
-                    },
-                    status=400,
-                )
+                raise EscrituraRechazada("Invalid location - must include x, y, z coordinates", 400)
 
-            logger.info(
-                "Placing family: {} - {}".format(
-                    family_name, type_name or "Default Type"
-                )
-            )
-
-            # Find the appropriate family symbol (type)
             target_symbol = find_family_symbol_safely(doc, family_name, type_name)
-
             if not target_symbol:
-                # Get list of available families for better error message
-                available_families = []
-                try:
-                    symbols = (
-                        DB.FilteredElementCollector(doc)
-                        .OfClass(DB.FamilySymbol)
-                        .ToElements()
-                    )
-                    family_names = set()
-                    for symbol in symbols[
-                        :50
-                    ]:  # Limit to prevent overwhelming response
-                        try:
-                            family_name_safe = get_element_name(symbol)
-                            family_names.add(family_name_safe)
-                        except:
-                            continue
-                    available_families = sorted(list(family_names))
-                except:
-                    available_families = ["Could not retrieve family list"]
-
-                return routes.make_response(
-                    data={
-                        "error": "Family type not found: {} - {}".format(
-                            family_name, type_name or "Any"
-                        ),
-                        "available_families": available_families[:20],  # Show first 20
-                    },
-                    status=404,
+                raise EscrituraRechazada(
+                    "Family type not found: {} - {}".format(family_name, type_name or "Any"),
+                    404,
+                    {"available_families": _familias_disponibles(doc)},
                 )
 
-            # Find level if specified
             target_level = None
             if level_name:
-                levels = (
-                    DB.FilteredElementCollector(doc)
-                    .OfCategory(DB.BuiltInCategory.OST_Levels)
-                    .WhereElementIsNotElementType()
-                    .ToElements()
-                )
-
-                for level in levels:
-                    try:
-                        level_name_safe = get_element_name(level)
-                        if level_name_safe == level_name:
-                            target_level = level
-                            break
-                    except:
-                        continue
-
+                target_level = mapa_niveles(doc).get(level_name)
                 if not target_level:
-                    return routes.make_response(
-                        data={"error": "Level not found: {}".format(level_name)},
-                        status=404,
-                    )
-
-            # Create the location point. Inputs are in MILLIMETERS (consistent
-            # with every other creation tool); Revit's internal unit is feet, so
-            # convert. Previously the raw mm value was used as feet, placing
-            # families ~304.8x too far from the intended point.
-            MM_TO_FEET = 1.0 / 304.8
-            try:
-                point = DB.XYZ(
-                    float(location["x"]) * MM_TO_FEET,
-                    float(location["y"]) * MM_TO_FEET,
-                    float(location["z"]) * MM_TO_FEET,
-                )
-            except (ValueError, TypeError) as coord_error:
-                return routes.make_response(
-                    data={"error": "Invalid coordinates: {}".format(str(coord_error))},
-                    status=400,
-                )
-
-            # Start a transaction
-            transaction_name = "Place Family Instance via MCP"
-            t = DB.Transaction(doc, transaction_name)
-            t.Start()
-            suppress_warnings(t)
+                    raise EscrituraRechazada("Level not found: {}".format(level_name), 404)
 
             try:
-                # Ensure the symbol is activated
+                point = xyz_desde_mm(location)
+            except ValueError as coord_error:
+                raise EscrituraRechazada("Invalid coordinates: {}".format(coord_error), 400)
+            try:
+                rotation = float(rotation)
+            except (TypeError, ValueError):
+                raise EscrituraRechazada("rotation must be a number (degrees)", 400)
+
+            needs_wall_host = _necesita_muro(target_symbol)
+            host_wall = _muro_mas_cercano(doc, point) if needs_wall_host else None
+            if needs_wall_host and host_wall is None:
+                raise EscrituraRechazada(
+                    "Family '{}' must be hosted by a wall, but no wall was found near the requested "
+                    "location. Create the host wall first.".format(family_name),
+                    400,
+                )
+
+            if ctx["simular"]:
+                return simulacion([{
+                    "accion": "colocar",
+                    "family_name": get_element_name(target_symbol.Family),
+                    "type_name": get_element_name(target_symbol),
+                    "level": level_name,
+                    "location_mm": punto_a_mm(point),
+                    "rotation_degrees": rotation,
+                    "host_wall_id": get_element_id_value(host_wall) if host_wall is not None else None,
+                    "properties": properties,
+                }])
+
+            properties_set = []
+            properties_failed = []
+            with transaccion(doc, "Colocar {}".format(family_name)):
                 if not target_symbol.IsActive:
                     target_symbol.Activate()
-                    doc.Regenerate()  # Ensure activation takes effect
+                    doc.Regenerate()
 
-                # Determine whether this family must be hosted by a wall
-                # (windows, doors, and other wall-hosted families). Using the
-                # non-hosted NewFamilyInstance overload for these silently
-                # produces an unhosted instance snapped to the origin, so we
-                # locate the nearest wall and use the host-based overload.
-                needs_wall_host = False
-                try:
-                    fpt = target_symbol.Family.FamilyPlacementType
-                    if fpt == DB.FamilyPlacementType.OneLevelBasedHosted:
-                        needs_wall_host = True
-                except Exception:
-                    pass
-                try:
-                    if target_symbol.Category:
-                        cat_id = get_element_id_value(target_symbol.Category.Id)
-                        if cat_id in (
-                            int(DB.BuiltInCategory.OST_Windows),
-                            int(DB.BuiltInCategory.OST_Doors),
-                        ):
-                            needs_wall_host = True
-                except Exception:
-                    pass
-
-                host_wall = None
-                if needs_wall_host:
-                    # Find the wall whose location curve passes closest to the point.
-                    best_dist = None
-                    walls = (
-                        DB.FilteredElementCollector(doc)
-                        .OfCategory(DB.BuiltInCategory.OST_Walls)
-                        .WhereElementIsNotElementType()
-                        .ToElements()
-                    )
-                    test_pt = DB.XYZ(point.X, point.Y, point.Z)
-                    for w in walls:
-                        try:
-                            wloc = w.Location
-                            if not wloc or not hasattr(wloc, "Curve"):
-                                continue
-                            d = wloc.Curve.Distance(test_pt)
-                            if best_dist is None or d < best_dist:
-                                best_dist = d
-                                host_wall = w
-                        except Exception:
-                            continue
-
-                # Create the instance
                 if host_wall is not None:
-                    # Wall-hosted placement (windows/doors)
                     if target_level:
                         new_instance = doc.Create.NewFamilyInstance(
-                            point,
-                            target_symbol,
-                            host_wall,
-                            target_level,
+                            point, target_symbol, host_wall, target_level,
                             DB.Structure.StructuralType.NonStructural,
                         )
                     else:
                         new_instance = doc.Create.NewFamilyInstance(
-                            point,
-                            target_symbol,
-                            host_wall,
-                            DB.Structure.StructuralType.NonStructural,
+                            point, target_symbol, host_wall, DB.Structure.StructuralType.NonStructural
                         )
-                elif needs_wall_host:
-                    # Hosted family but no wall found nearby — fail clearly
-                    # instead of creating a broken unhosted instance at the origin.
-                    t.RollBack()
-                    return routes.make_response(
-                        data={
-                            "error": "Family '{}' must be hosted by a wall, but no wall was found near the requested location. Create the host wall first.".format(family_name)
-                        },
-                        status=400,
-                    )
                 elif target_level:
-                    # Place on specific level
                     new_instance = doc.Create.NewFamilyInstance(
-                        point,
-                        target_symbol,
-                        target_level,
-                        DB.Structure.StructuralType.NonStructural,
+                        point, target_symbol, target_level, DB.Structure.StructuralType.NonStructural
                     )
                 else:
-                    # Place without level specification
                     new_instance = doc.Create.NewFamilyInstance(
                         point, target_symbol, DB.Structure.StructuralType.NonStructural
                     )
 
-                logger.info(
-                    "Family instance created with ID: {}".format(
-                        get_element_id_value(new_instance)
-                    )
-                )
-
-                # Apply rotation if specified
                 if rotation != 0:
                     try:
-                        rotation_radians = float(rotation) * (3.14159265359 / 180.0)
+                        rotation_radians = rotation * (3.14159265359 / 180.0)
                         axis = DB.Line.CreateBound(point, point.Add(DB.XYZ(0, 0, 1)))
-
                         if hasattr(new_instance.Location, "Rotate"):
-                            success = new_instance.Location.Rotate(
-                                axis, rotation_radians
-                            )
-                            if success:
-                                logger.info(
-                                    "Element rotated by {} degrees".format(rotation)
-                                )
-                            else:
-                                logger.warning(
-                                    "Rotation failed - element may not support rotation"
-                                )
+                            if not new_instance.Location.Rotate(axis, rotation_radians):
+                                properties_failed.append("rotation (element may not support rotation)")
                     except Exception as rotate_err:
-                        logger.warning(
-                            "Could not rotate element: {}".format(str(rotate_err))
-                        )
-
-                # Set custom properties
-                properties_set = []
-                properties_failed = []
+                        properties_failed.append("rotation (error: {})".format(str(rotate_err)))
 
                 for param_name, param_value in properties.items():
                     try:
                         param = new_instance.LookupParameter(param_name)
                         if param and not param.IsReadOnly:
-                            # Set parameter based on its storage type
                             if param.StorageType == DB.StorageType.String:
                                 param.Set(str(param_value))
-                                properties_set.append(param_name)
                             elif param.StorageType == DB.StorageType.Integer:
                                 param.Set(int(param_value))
-                                properties_set.append(param_name)
                             elif param.StorageType == DB.StorageType.Double:
                                 param.Set(float(param_value))
-                                properties_set.append(param_name)
                             else:
-                                properties_failed.append(
-                                    "{} (unsupported type)".format(param_name)
-                                )
+                                properties_failed.append("{} (unsupported type)".format(param_name))
+                                continue
+                            properties_set.append(param_name)
+                        elif param:
+                            properties_failed.append("{} (read-only)".format(param_name))
                         else:
-                            if param:
-                                properties_failed.append(
-                                    "{} (read-only)".format(param_name)
-                                )
-                            else:
-                                properties_failed.append(
-                                    "{} (not found)".format(param_name)
-                                )
+                            properties_failed.append("{} (not found)".format(param_name))
                     except Exception as param_error:
-                        properties_failed.append(
-                            "{} (error: {})".format(param_name, str(param_error))
-                        )
+                        properties_failed.append("{} (error: {})".format(param_name, str(param_error)))
 
-                t.Commit()
-                logger.info("Transaction committed successfully")
+                new_id = get_element_id_value(new_instance)
 
-                # Get actual placed location (may differ due to level constraints).
-                # Report in millimeters to match the input units.
-                FEET_TO_MM = 304.8
-                try:
-                    actual_location = new_instance.Location.Point
-                    actual_coords = {
-                        "x": actual_location.X * FEET_TO_MM,
-                        "y": actual_location.Y * FEET_TO_MM,
-                        "z": actual_location.Z * FEET_TO_MM,
-                    }
-                except:
-                    actual_coords = {"x": point.X * FEET_TO_MM, "y": point.Y * FEET_TO_MM, "z": point.Z * FEET_TO_MM}
-
-                # Return information about the placed instance
-                response_data = {
-                    "status": "success",
-                    "element_id": get_element_id_value(new_instance),
-                    "family_name": family_name,
-                    "type_name": type_name,
-                    "requested_location": {"x": point.X * FEET_TO_MM, "y": point.Y * FEET_TO_MM, "z": point.Z * FEET_TO_MM},
-                    "actual_location": actual_coords,
-                    "rotation_degrees": rotation,
-                    "level": level_name if target_level else None,
-                    "properties_set": properties_set,
-                    "properties_failed": properties_failed,
+            # Verificacion: la instancia existe y donde quedo realmente
+            resultado = resultado_creacion(doc, [new_id])
+            try:
+                actual_location = new_instance.Location.Point
+                actual_coords = punto_a_mm(actual_location)
+            except Exception:
+                actual_coords = punto_a_mm(point)
+            requested = punto_a_mm(point)
+            desvio = max(abs(actual_coords[e] - requested[e]) for e in ("x", "y", "z"))
+            resultado.update({
+                "element_id": new_id,
+                "family_name": family_name,
+                "type_name": type_name,
+                "requested_location": requested,
+                "actual_location": actual_coords,
+                "rotation_degrees": rotation,
+                "level": level_name if target_level else None,
+                "host_wall_id": get_element_id_value(host_wall) if host_wall is not None else None,
+                "properties_set": properties_set,
+                "properties_failed": properties_failed,
+            })
+            if desvio > 1.0 and resultado["ok"]:
+                resultado["verificacion"] = {
+                    "coincide": False,
+                    "detalle": "Instance was created but Revit placed it {} mm away from the requested "
+                    "point (hosted/level constraints); check actual_location.".format(round(desvio, 1)),
                 }
+                resultado["ok"] = False
+            return resultado
 
-                return routes.make_response(data=response_data)
-
-            except Exception as tx_error:
-                # Roll back the transaction if something went wrong
-                if t.HasStarted() and not t.HasEnded():
-                    t.RollBack()
-                    logger.error("Transaction rolled back due to error")
-                raise tx_error
-
-        except Exception as e:
-            logger.error("Failed to place family: {}".format(str(e)))
-            error_trace = traceback.format_exc()
-            return routes.make_response(
-                data={"error": str(e), "traceback": error_trace}, status=500
-            )
+        return ejecutar(doc, "/place_family/", request, cuerpo)
 
     @api.route("/load_family/", methods=["POST"])
     @requiere_token
     def load_family(doc, request):
         """
         Load a Revit family (.rfa) from disk into the active document, so its
-        types become available to place_family. Must run outside a transaction
-        (LoadFamily manages its own), so this route does not open one.
+        types become available to place_family. LoadFamily manages its own
+        transaction, so this route does not open one (but it does back up and
+        log like every other write). Accepts `simular`.
 
         Payload: { "file_path": "C:\\\\path\\\\to\\\\Family.rfa" }
         """
-        try:
-            if not doc:
-                return routes.make_response(
-                    data={"error": "No active Revit document"}, status=503
-                )
-            data = json.loads(request.data) if isinstance(request.data, str) else request.data
+
+        def cuerpo(ctx):
+            data = ctx["data"]
             file_path = data.get("file_path")
             if not file_path:
-                return routes.make_response(
-                    data={"error": "file_path is required (full path to a .rfa file)"},
-                    status=400,
-                )
+                raise EscrituraRechazada("file_path is required (full path to a .rfa file)", 400)
             if not os.path.exists(file_path):
-                return routes.make_response(
-                    data={"error": "Family file not found: {}".format(file_path)},
-                    status=404,
-                )
+                raise EscrituraRechazada("Family file not found: {}".format(file_path), 404)
+            fam_name = os.path.splitext(os.path.basename(file_path))[0]
+
+            if ctx["simular"]:
+                return simulacion([{
+                    "accion": "cargar_familia", "family_name": fam_name, "file_path": file_path,
+                    "size_kb": int(os.path.getsize(file_path) / 1024),
+                }])
 
             try:
                 result = doc.LoadFamily(file_path)
                 # IronPython may return (bool, Family) for the out-param overload
                 ok = result[0] if isinstance(result, tuple) else result
             except Exception as le:
-                return routes.make_response(
-                    data={"error": "LoadFamily failed: {}".format(str(le))},
-                    status=500,
-                )
+                raise EscrituraRechazada("LoadFamily failed: {}".format(str(le)), 500)
 
-            fam_name = os.path.splitext(os.path.basename(file_path))[0]
-            if not ok:
-                return routes.make_response(data={
-                    "status": "already_loaded",
-                    "family_name": fam_name,
-                    "file_path": file_path,
-                    "message": "Family '{}' was already loaded (or no new types added)".format(fam_name),
-                })
-            return routes.make_response(data={
-                "status": "success",
+            # Verificacion: la familia esta en el documento y cuantos tipos tiene
+            familia = None
+            for fam in DB.FilteredElementCollector(doc).OfClass(DB.Family).ToElements():
+                try:
+                    if get_element_name(fam) == fam_name:
+                        familia = fam
+                        break
+                except Exception:
+                    continue
+            tipos = []
+            if familia is not None:
+                try:
+                    for sid in familia.GetFamilySymbolIds():
+                        tipos.append(get_element_name(doc.GetElement(sid)))
+                except Exception:
+                    pass
+
+            resultado = {
+                "status": "success" if ok else "already_loaded",
                 "family_name": fam_name,
                 "file_path": file_path,
-                "message": "Loaded family '{}'. Its types are now available to place_family.".format(fam_name),
-            })
-        except Exception as e:
-            logger.error("load_family failed: {}".format(str(e)))
-            return routes.make_response(data={"error": str(e)}, status=500)
+                "loaded": bool(ok),
+                "family_id": get_element_id_value(familia) if familia is not None else None,
+                "types": sorted(tipos),
+                "ok": familia is not None,
+                "message": (
+                    "Loaded family '{}'. Its types are now available to place_family.".format(fam_name)
+                    if ok else
+                    "Family '{}' was already loaded (or no new types added)".format(fam_name)
+                ),
+            }
+            if familia is None:
+                resultado["verificacion"] = {
+                    "coincide": False,
+                    "detalle": "No family named '{}' was found in the document after LoadFamily".format(fam_name),
+                }
+            else:
+                resultado["verificacion"] = {"coincide": True}
+            return resultado
+
+        return ejecutar(doc, "/load_family/", request, cuerpo)
 
     @api.route("/list_families/", methods=["GET"])
     @requiere_token

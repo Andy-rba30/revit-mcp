@@ -15,6 +15,7 @@ def register_detail_tools(mcp, revit_get, revit_post, revit_image=None):
         end_point: dict,
         view_name: str = None,
         line_style: str = None,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Create a detail line in a Revit view for annotation purposes.
@@ -28,6 +29,7 @@ def register_detail_tools(mcp, revit_get, revit_post, revit_image=None):
             end_point: End point {"x", "y", "z"} in mm
             view_name: Target view name (defaults to active view)
             line_style: Line style name (e.g., "Medium Lines"). Uses default if omitted
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"start_point": start_point, "end_point": end_point}
@@ -35,5 +37,6 @@ def register_detail_tools(mcp, revit_get, revit_post, revit_image=None):
             data["view_name"] = view_name
         if line_style is not None:
             data["line_style"] = line_style
+        data["simular"] = simular
         response = await revit_post("/create_detail_line/", data, ctx)
         return format_response(response)

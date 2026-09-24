@@ -19,6 +19,7 @@ def register_family_tools(mcp, revit_get, revit_post):
         rotation: float = 0.0,
         level_name: str = None,
         properties: Dict[str, Any] = None,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Place a family instance at a specified location in the Revit model"""
@@ -30,6 +31,7 @@ def register_family_tools(mcp, revit_get, revit_post):
             "level_name": level_name,
             "properties": properties or {},
         }
+        data["simular"] = simular
         response = await revit_post("/place_family/", data, ctx)
         return format_response(response)
 
@@ -54,7 +56,8 @@ def register_family_tools(mcp, revit_get, revit_post):
         return format_response(response)
 
     @mcp.tool()
-    async def load_family(file_path: str, ctx: Context = None) -> str:
+    async def load_family(file_path: str, simular: bool = False,
+        ctx: Context = None) -> str:
         """Load a Revit family (.rfa file) from disk into the active document.
 
         Use this when a needed family (furniture, doors, windows, equipment) is
@@ -65,7 +68,8 @@ def register_family_tools(mcp, revit_get, revit_post):
         Args:
             file_path: Full path to the .rfa family file, e.g.
                 "C:\\ProgramData\\Autodesk\\RVT 2027\\Libraries\\English\\Furniture\\Chair.rfa"
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
-        response = await revit_post("/load_family/", {"file_path": file_path}, ctx)
+        response = await revit_post("/load_family/", {"file_path": file_path, "simular": simular}, ctx)
         return format_response(response)

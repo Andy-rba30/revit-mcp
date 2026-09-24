@@ -12,6 +12,7 @@ def register_structure_tools(mcp, revit_get, revit_post, revit_image=None):
     @mcp.tool()
     async def create_grid(
         grids: list[dict],
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Create grid lines for the structural layout of a building.
@@ -25,15 +26,18 @@ def register_structure_tools(mcp, revit_get, revit_post, revit_image=None):
                 - start_point (dict): {"x": float, "y": float, "z": float} in mm (required)
                 - end_point (dict): {"x": float, "y": float, "z": float} in mm (required)
                 - name (str): Grid line name (optional, auto-assigned)
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"grids": grids}
+        data["simular"] = simular
         response = await revit_post("/create_grid/", data, ctx)
         return format_response(response)
 
     @mcp.tool()
     async def create_structural_framing(
         elements: list[dict],
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Create structural beams and framing elements in Revit.
@@ -51,8 +55,10 @@ def register_structure_tools(mcp, revit_get, revit_post, revit_image=None):
                 - type_name (str): Beam family type name (optional)
                 - level_name (str): Target level name — sets the beam elevation (optional)
                 - name (str): Description for reference (optional)
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"elements": elements}
+        data["simular"] = simular
         response = await revit_post("/create_framing/", data, ctx)
         return format_response(response)

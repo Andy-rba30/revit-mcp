@@ -201,3 +201,17 @@ class Line(object):
     @staticmethod
     def CreateBound(a, b):
         return Line()
+
+
+class StorageType(object):
+    None_ = _Enum("None")
+    Integer = _Enum("Integer")
+    Double = _Enum("Double")
+    String = _Enum("String")
+    ElementId = _Enum("ElementId")
+
+
+class LabelUtils(object):
+    @staticmethod
+    def GetLabelForGroup(group_id):
+        return "Group"

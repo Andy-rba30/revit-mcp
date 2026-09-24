@@ -13,6 +13,7 @@ def register_document_tools(mcp, revit_get, revit_post, revit_image=None):
     async def save_document(
         file_path: str = None,
         overwrite: bool = True,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Save the active Revit document to disk so work persists.
@@ -26,8 +27,10 @@ def register_document_tools(mcp, revit_get, revit_post, revit_image=None):
             file_path: Full .rvt path to save to, e.g. "C:\\Models\\ESB.rvt"
                 (required the first time a template-based model is saved)
             overwrite: Overwrite an existing file at that path (defaults to True)
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"file_path": file_path, "overwrite": overwrite}
+        data["simular"] = simular
         response = await revit_post("/save_document/", data, ctx)
         return format_response(response)

@@ -1,17 +1,29 @@
 # -*- coding: UTF-8 -*-
 """
 Parameters Module for Revit MCP
-Handles reading element properties and setting parameter values
+Handles reading element properties and setting parameter values.
+
+set_parameter pasa por escritura.ejecutar: copia, log, `simular`, transaccion
+"IA: ..." y verificacion antes/despues (ok=false si lo releido no coincide).
+Las funciones valor_parametro / asignar_parametro / coincide_valor las reutilizan
+editing.py (modify_element) y tipos.py (set_type_parameter).
 """
 
-from utils import get_element_name, get_element_id_value, make_element_id, suppress_warnings
+from utils import get_element_name, get_element_id_value, make_element_id
 from seguridad import requiere_token
+from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, bbox_mm, nombre_nivel
 from pyrevit import routes, revit, DB
-import json
 import traceback
 import logging
 
 logger = logging.getLogger(__name__)
+
+try:
+    _texto = unicode  # IronPython 2.7
+    _cadena = basestring
+except NameError:  # pragma: no cover - CPython 3 en las pruebas
+    _texto = str
+    _cadena = str
 
 
 def _safe_str(value):
@@ -86,6 +98,108 @@ def _get_param_value_display(param, doc):
     except Exception:
         return ""
     return ""
+
+
+def valor_parametro(param, doc):
+    """Valor legible del parametro (alias publico de _get_param_value_display)."""
+    return _get_param_value_display(param, doc)
+
+
+def valor_bruto(param):
+    """Valor interno del parametro segun su StorageType (None si no tiene)."""
+    try:
+        if not param.HasValue:
+            return None
+        if param.StorageType == DB.StorageType.String:
+            return param.AsString()
+        if param.StorageType == DB.StorageType.Integer:
+            return param.AsInteger()
+        if param.StorageType == DB.StorageType.Double:
+            return param.AsDouble()
+        if param.StorageType == DB.StorageType.ElementId:
+            eid = param.AsElementId()
+            if eid is None:
+                return None
+            return get_element_id_value(eid)
+    except Exception:
+        return None
+    return None
+
+
+def convertir_valor(param, value):
+    """Convierte `value` al tipo que espera el parametro. Lanza ValueError."""
+    try:
+        if param.StorageType == DB.StorageType.String:
+            return _texto(value) if not isinstance(value, _cadena) else value
+        if param.StorageType == DB.StorageType.Integer:
+            if isinstance(value, _cadena):
+                bajo = value.strip().lower()
+                if bajo in ("true", "yes", "si", "sí"):
+                    return 1
+                if bajo in ("false", "no"):
+                    return 0
+            return int(float(value))
+        if param.StorageType == DB.StorageType.Double:
+            return float(value)
+        if param.StorageType == DB.StorageType.ElementId:
+            return make_element_id(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "value {!r} is not valid for a {} parameter: {}".format(value, param.StorageType, error)
+        )
+    raise ValueError("unsupported storage type {}".format(param.StorageType))
+
+
+def asignar_parametro(param, value):
+    """param.Set(...) con el valor convertido; devuelve True si Revit acepto."""
+    convertido = convertir_valor(param, value)
+    return param.Set(convertido)
+
+
+def coincide_valor(param, value):
+    """True si el valor releido del parametro coincide con `value`."""
+    try:
+        convertido = convertir_valor(param, value)
+    except ValueError:
+        return False
+    actual = valor_bruto(param)
+    try:
+        if param.StorageType == DB.StorageType.Double:
+            return actual is not None and abs(float(actual) - float(convertido)) < 1e-6
+        if param.StorageType == DB.StorageType.Integer:
+            return actual == int(convertido)
+        if param.StorageType == DB.StorageType.ElementId:
+            return actual == get_element_id_value(convertido)
+        return (actual or u"") == (convertido or u"")
+    except Exception:
+        return False
+
+
+def buscar_parametro(doc, elem, parameter_name, incluir_tipo=True):
+    """Parametro de ejemplar (o de tipo si incluir_tipo) por nombre; None si no."""
+    param = elem.LookupParameter(parameter_name)
+    if param or not incluir_tipo:
+        return param
+    try:
+        type_id = elem.GetTypeId()
+        if type_id and type_id != DB.ElementId.InvalidElementId:
+            elem_type = doc.GetElement(type_id)
+            if elem_type:
+                return elem_type.LookupParameter(parameter_name)
+    except Exception:
+        pass
+    return None
+
+
+def nombres_parametros(elem, maximo=30):
+    available = []
+    for p in elem.Parameters:
+        try:
+            available.append(p.Definition.Name)
+        except Exception:
+            continue
+    available.sort()
+    return available[:maximo]
 
 
 def register_parameter_routes(api):
@@ -204,119 +318,86 @@ def register_parameter_routes(api):
     @api.route("/set_parameter/", methods=["POST"])
     @requiere_token
     def set_parameter_handler(doc, request):
-        """Set a single parameter value on an element."""
-        try:
-            if not doc:
-                return routes.make_response(
-                    data={"error": "No active Revit document"}, status=503
-                )
+        """Set a single parameter value on an element. Accepts `simular`."""
 
-            data = json.loads(request.data) if isinstance(request.data, str) else request.data
-
+        def cuerpo(ctx):
+            data = ctx["data"]
             element_id = data.get("element_id")
             parameter_name = data.get("parameter_name")
             value = data.get("value")
 
             if element_id is None:
-                return routes.make_response(
-                    data={"error": "element_id is required"}, status=400
-                )
+                raise EscrituraRechazada("element_id is required", 400)
             if not parameter_name:
-                return routes.make_response(
-                    data={"error": "parameter_name is required"}, status=400
-                )
+                raise EscrituraRechazada("parameter_name is required", 400)
             if value is None:
-                return routes.make_response(
-                    data={"error": "value is required"}, status=400
-                )
+                raise EscrituraRechazada("value is required", 400)
 
-            elem_id = make_element_id(element_id)
-            elem = doc.GetElement(elem_id)
+            elem = doc.GetElement(make_element_id(element_id))
             if not elem:
-                return routes.make_response(
-                    data={"error": "Element {} not found".format(element_id)},
-                    status=404,
-                )
+                raise EscrituraRechazada("Element {} not found".format(element_id), 404)
 
-            # Find the parameter
-            param = elem.LookupParameter(parameter_name)
+            param = buscar_parametro(doc, elem, parameter_name)
             if not param:
-                # Try type parameters
-                type_id = elem.GetTypeId()
-                if type_id and type_id != DB.ElementId.InvalidElementId:
-                    elem_type = doc.GetElement(type_id)
-                    if elem_type:
-                        param = elem_type.LookupParameter(parameter_name)
-
-            if not param:
-                available = []
-                for p in elem.Parameters:
-                    try:
-                        available.append(p.Definition.Name)
-                    except Exception:
-                        continue
-                available.sort()
-                return routes.make_response(
-                    data={
-                        "error": "Parameter '{}' not found on element {}".format(
-                            parameter_name, element_id
-                        ),
-                        "available_parameters": available[:30],
-                    },
-                    status=404,
+                raise EscrituraRechazada(
+                    "Parameter '{}' not found on element {}".format(parameter_name, element_id),
+                    404,
+                    {"available_parameters": nombres_parametros(elem)},
                 )
-
             if param.IsReadOnly:
-                return routes.make_response(
-                    data={"error": "Parameter '{}' is read-only and cannot be modified.".format(parameter_name)},
-                    status=500,
+                raise EscrituraRechazada(
+                    "Parameter '{}' is read-only and cannot be modified.".format(parameter_name), 400
                 )
-
-            # Get old value
-            old_value = _get_param_value_display(param, doc)
-
-            t = DB.Transaction(doc, "Set Parameter via MCP")
-            t.Start()
-            suppress_warnings(t)
-
+            es_de_tipo = elem.LookupParameter(parameter_name) is None
             try:
-                # Set value based on storage type
-                if param.StorageType == DB.StorageType.String:
-                    param.Set(str(value))
-                elif param.StorageType == DB.StorageType.Integer:
-                    param.Set(int(value))
-                elif param.StorageType == DB.StorageType.Double:
-                    param.Set(float(value))
-                elif param.StorageType == DB.StorageType.ElementId:
-                    param.Set(make_element_id(value))
+                convertido = convertir_valor(param, value)
+            except ValueError as error:
+                raise EscrituraRechazada(str(error), 400)
 
-                t.Commit()
-
-                new_value = _get_param_value_display(param, doc)
-
-                return routes.make_response(
-                    data={
-                        "status": "success",
+            antes = valor_parametro(param, doc)
+            if ctx["simular"]:
+                return simulacion(
+                    [{
+                        "accion": "set_parameter",
                         "element_id": int(element_id),
                         "parameter_name": parameter_name,
-                        "old_value": old_value,
-                        "new_value": str(value),
-                        "message": "Set '{}' from '{}' to '{}' on element {}".format(
-                            parameter_name, old_value, value, element_id
-                        ),
-                    }
+                        "is_type_parameter": es_de_tipo,
+                        "storage_type": str(param.StorageType),
+                        "antes": antes,
+                        "despues": _texto(convertido) if not isinstance(convertido, _cadena) else convertido,
+                    }]
                 )
 
-            except Exception as tx_error:
-                if t.HasStarted() and not t.HasEnded():
-                    t.RollBack()
-                raise tx_error
+            with transaccion(doc, "Parametro {} de {}".format(parameter_name, element_id)):
+                aceptado = param.Set(convertido)
 
-        except Exception as e:
-            logger.error("Failed to set parameter: {}".format(str(e)))
-            error_trace = traceback.format_exc()
-            return routes.make_response(
-                data={"error": str(e), "traceback": error_trace}, status=500
-            )
+            despues = valor_parametro(param, doc)
+            coincide = coincide_valor(param, value)
+            resultado = {
+                "element_id": int(element_id),
+                "parameter_name": parameter_name,
+                "is_type_parameter": es_de_tipo,
+                "antes": antes,
+                "despues": despues,
+                "old_value": antes,
+                "new_value": despues,
+                "ok": bool(coincide),
+                "message": "Set '{}' from '{}' to '{}' on element {}".format(
+                    parameter_name, antes, despues, element_id
+                ),
+            }
+            if coincide:
+                resultado["verificacion"] = {"coincide": True}
+            else:
+                resultado["verificacion"] = {
+                    "coincide": False,
+                    "detalle": "Revit accepted the call (Set returned {}) but the value read back "
+                    "({!r}) does not match the requested value ({!r}); no retry was attempted.".format(
+                        aceptado, despues, value
+                    ),
+                }
+            return resultado
+
+        return ejecutar(doc, "/set_parameter/", request, cuerpo)
 
     logger.info("Parameter routes registered successfully")

@@ -1,13 +1,21 @@
 # -*- coding: UTF-8 -*-
 """
 Editing Module for Revit MCP
-Handles element deletion, modification, and selection retrieval
+Handles element deletion, modification, and selection retrieval.
+
+delete_elements y modify_element pasan por escritura.ejecutar: copia, log,
+`simular`, transaccion "IA: ...", verificacion (eliminados / antes-despues) y
+limite de 200 elementos por llamada salvo `forzar`.
 """
 
-from utils import get_element_name, make_element_id, get_element_id_value, suppress_warnings
+from utils import get_element_name, make_element_id, get_element_id_value
 from seguridad import requiere_token
+from escritura import (
+    ejecutar, transaccion, simulacion, EscrituraRechazada, comprobar_alcance,
+    describir_elemento, verificar_eliminados,
+)
+from parameters import valor_parametro, asignar_parametro, coincide_valor
 from pyrevit import routes, revit, DB
-import json
 import traceback
 import logging
 
@@ -20,243 +28,176 @@ def register_editing_routes(api):
     @api.route("/delete_elements/", methods=["POST"])
     @requiere_token
     def delete_elements_handler(doc, request):
-        """Delete one or more elements from the Revit model."""
-        try:
-            if not doc:
-                return routes.make_response(
-                    data={"error": "No active Revit document"}, status=503
-                )
+        """Delete one or more elements. Accepts `simular` and `forzar` (>200)."""
 
-            # Parse request data
-            if not request or not request.data:
-                return routes.make_response(
-                    data={"error": "No data provided"}, status=400
-                )
-
-            data = json.loads(request.data) if isinstance(request.data, str) else request.data
-
+        def cuerpo(ctx):
+            data = ctx["data"]
             element_ids = data.get("element_ids", [])
             if not element_ids:
-                return routes.make_response(
-                    data={"error": "No element_ids provided"}, status=400
-                )
+                raise EscrituraRechazada("No element_ids provided", 400)
+            comprobar_alcance(data, len(element_ids), "elementos a borrar")
 
             # Validate all elements exist before deleting
-            elements_to_delete = []
+            objetivos = []
             for eid in element_ids:
                 elem_id = make_element_id(eid)
                 elem = doc.GetElement(elem_id)
                 if not elem:
-                    return routes.make_response(
-                        data={"error": "Element {} not found in the active model".format(eid)},
-                        status=404,
+                    raise EscrituraRechazada(
+                        "Element {} not found in the active model".format(eid), 404
                     )
-                elements_to_delete.append(elem_id)
+                objetivos.append((elem_id, describir_elemento(doc, elem)))
 
-            # Delete in a single transaction
-            t = DB.Transaction(doc, "Delete Elements via MCP")
-            t.Start()
-            suppress_warnings(t)
+            if ctx["simular"]:
+                haria = [dict(accion="borrar", **descripcion) for _, descripcion in objetivos]
+                return simulacion(haria, count=len(haria))
 
-            try:
-                deleted_ids = []
-                cascaded_ids = []
-
-                for elem_id in elements_to_delete:
-                    # doc.Delete returns a collection of all deleted IDs (including cascaded)
+            pedidos = [get_element_id_value(elem_id) for elem_id, _ in objetivos]
+            cascada = []
+            with transaccion(doc, "Borrar elementos"):
+                for elem_id, _ in objetivos:
+                    # doc.Delete returns all deleted IDs (including cascaded)
                     result = doc.Delete(elem_id)
-                    primary_id = get_element_id_value(elem_id)
-                    deleted_ids.append(primary_id)
-
-                    # Track cascaded deletions
                     if result:
                         for del_id in result:
                             del_id_int = get_element_id_value(del_id)
-                            if del_id_int != primary_id and del_id_int not in cascaded_ids:
-                                cascaded_ids.append(del_id_int)
+                            if del_id_int not in pedidos and del_id_int not in cascada:
+                                cascada.append(del_id_int)
 
-                t.Commit()
-
-                # Remove primary IDs from cascaded list
-                cascaded_ids = [cid for cid in cascaded_ids if cid not in deleted_ids]
-
-                message = "Deleted {} element{}".format(
-                    len(deleted_ids),
-                    "s" if len(deleted_ids) != 1 else ""
-                )
-                if cascaded_ids:
-                    message += " ({} hosted element{} also removed)".format(
-                        len(cascaded_ids),
-                        "s" if len(cascaded_ids) != 1 else ""
-                    )
-
-                return routes.make_response(
-                    data={
-                        "status": "success",
-                        "deleted_count": len(deleted_ids),
-                        "deleted_ids": deleted_ids,
-                        "cascaded_ids": cascaded_ids,
-                        "message": message,
-                    }
-                )
-
-            except Exception as tx_error:
-                if t.HasStarted() and not t.HasEnded():
-                    t.RollBack()
-                raise tx_error
-
-        except Exception as e:
-            logger.error("Failed to delete elements: {}".format(str(e)))
-            error_trace = traceback.format_exc()
-            return routes.make_response(
-                data={"error": str(e), "traceback": error_trace}, status=500
+            resultado = verificar_eliminados(doc, pedidos, cascada)
+            resultado["deleted_ids"] = resultado["eliminados"]
+            resultado["cascaded_ids"] = resultado["en_cascada"]
+            resultado["antes"] = [descripcion for _, descripcion in objetivos]
+            message = "Deleted {} element{}".format(
+                len(resultado["eliminados"]), "s" if len(resultado["eliminados"]) != 1 else ""
             )
+            if cascada:
+                message += " ({} hosted element{} also removed)".format(
+                    len(cascada), "s" if len(cascada) != 1 else ""
+                )
+            resultado["message"] = message
+            return resultado
+
+        return ejecutar(doc, "/delete_elements/", request, cuerpo)
 
     @api.route("/modify_element/", methods=["POST"])
     @requiere_token
     def modify_element_handler(doc, request):
-        """Modify parameter values on a Revit element."""
-        try:
-            if not doc:
-                return routes.make_response(
-                    data={"error": "No active Revit document"}, status=503
-                )
+        """Modify parameter values on a Revit element. Accepts `simular`."""
 
-            if not request or not request.data:
-                return routes.make_response(
-                    data={"error": "No data provided"}, status=400
-                )
-
-            data = json.loads(request.data) if isinstance(request.data, str) else request.data
-
+        def cuerpo(ctx):
+            data = ctx["data"]
             element_id = data.get("element_id")
             parameters = data.get("parameters", {})
-
             if element_id is None:
-                return routes.make_response(
-                    data={"error": "No element_id provided"}, status=400
-                )
-
+                raise EscrituraRechazada("No element_id provided", 400)
             if not parameters:
-                return routes.make_response(
-                    data={"error": "No parameters provided"}, status=400
-                )
+                raise EscrituraRechazada("No parameters provided", 400)
 
-            # Find the element
-            elem_id = make_element_id(element_id)
-            elem = doc.GetElement(elem_id)
+            elem = doc.GetElement(make_element_id(element_id))
             if not elem:
-                return routes.make_response(
-                    data={"error": "Element {} not found in the active model".format(element_id)},
-                    status=404,
+                raise EscrituraRechazada(
+                    "Element {} not found in the active model".format(element_id), 404
                 )
 
-            # Start transaction
-            t = DB.Transaction(doc, "Modify Element via MCP")
-            t.Start()
-            suppress_warnings(t)
-
-            try:
-                changes = []
-                failed = []
-
-                for param_name, new_value in parameters.items():
-                    param = elem.LookupParameter(param_name)
-                    if not param:
-                        # List available parameters for better error messages
-                        available = []
-                        for p in elem.Parameters:
-                            try:
-                                available.append(p.Definition.Name)
-                            except Exception:
-                                continue
-                        available.sort()
-                        failed.append({
-                            "parameter": param_name,
-                            "reason": "not found",
-                            "available_parameters": available[:20],
-                        })
-                        continue
-
-                    if param.IsReadOnly:
-                        failed.append({
-                            "parameter": param_name,
-                            "reason": "read-only",
-                        })
-                        continue
-
-                    # Get old value
-                    old_value = ""
-                    try:
-                        if param.StorageType == DB.StorageType.String:
-                            old_value = param.AsString() or ""
-                        elif param.StorageType == DB.StorageType.Integer:
-                            old_value = str(param.AsInteger())
-                        elif param.StorageType == DB.StorageType.Double:
-                            old_value = str(round(param.AsDouble(), 6))
-                        elif param.StorageType == DB.StorageType.ElementId:
-                            old_value = str(get_element_id_value(param.AsElementId()))
-                    except Exception:
-                        old_value = ""
-
-                    # Set new value
-                    try:
-                        if param.StorageType == DB.StorageType.String:
-                            param.Set(str(new_value))
-                        elif param.StorageType == DB.StorageType.Integer:
-                            param.Set(int(new_value))
-                        elif param.StorageType == DB.StorageType.Double:
-                            param.Set(float(new_value))
-                        elif param.StorageType == DB.StorageType.ElementId:
-                            param.Set(make_element_id(new_value))
-                        else:
-                            failed.append({
-                                "parameter": param_name,
-                                "reason": "unsupported storage type",
-                            })
+            # Resolve every parameter first (no transaction yet)
+            planes = []
+            failed = []
+            for param_name, new_value in parameters.items():
+                param = elem.LookupParameter(param_name)
+                if not param:
+                    available = []
+                    for p in elem.Parameters:
+                        try:
+                            available.append(p.Definition.Name)
+                        except Exception:
                             continue
+                    available.sort()
+                    failed.append({
+                        "parameter": param_name,
+                        "reason": "not found",
+                        "available_parameters": available[:20],
+                    })
+                    continue
+                if param.IsReadOnly:
+                    failed.append({"parameter": param_name, "reason": "read-only"})
+                    continue
+                planes.append({
+                    "parameter": param_name,
+                    "param": param,
+                    "new_value": new_value,
+                    "antes": valor_parametro(param, doc),
+                })
 
-                        changes.append({
-                            "parameter": param_name,
-                            "old_value": old_value,
-                            "new_value": str(new_value),
-                            "status": "set",
-                        })
+            if ctx["simular"]:
+                haria = [
+                    {
+                        "accion": "set_parameter", "element_id": int(element_id),
+                        "parameter": p["parameter"], "antes": p["antes"], "despues": p["new_value"],
+                    }
+                    for p in planes
+                ]
+                return simulacion(haria, count=len(haria), failed=failed)
+
+            with transaccion(doc, "Modificar elemento {}".format(element_id)):
+                for plan in planes:
+                    try:
+                        asignar_parametro(plan["param"], plan["new_value"])
+                        plan["set"] = True
                     except Exception as set_err:
+                        plan["set"] = False
                         failed.append({
-                            "parameter": param_name,
+                            "parameter": plan["parameter"],
                             "reason": "set failed: {}".format(str(set_err)),
                         })
 
-                t.Commit()
+            # Verificacion: releer cada parametro
+            antes = {}
+            despues = {}
+            changes = []
+            desajustes = []
+            for plan in planes:
+                if not plan.get("set"):
+                    continue
+                valor_despues = valor_parametro(plan["param"], doc)
+                antes[plan["parameter"]] = plan["antes"]
+                despues[plan["parameter"]] = valor_despues
+                coincide = coincide_valor(plan["param"], plan["new_value"])
+                changes.append({
+                    "parameter": plan["parameter"],
+                    "old_value": plan["antes"],
+                    "new_value": valor_despues,
+                    "status": "set" if coincide else "mismatch",
+                })
+                if not coincide:
+                    desajustes.append(
+                        "'{}': requested {!r}, read back {!r}".format(
+                            plan["parameter"], plan["new_value"], valor_despues
+                        )
+                    )
 
-                message = "Modified {} parameter{} on element {}".format(
-                    len(changes),
-                    "s" if len(changes) != 1 else "",
-                    element_id,
-                )
+            resultado = {
+                "element_id": int(element_id),
+                "antes": antes,
+                "despues": despues,
+                "changes": changes,
+                "failed": failed,
+                "ok": not desajustes,
+                "message": "Modified {} parameter{} on element {}".format(
+                    len(changes), "s" if len(changes) != 1 else "", element_id
+                ),
+            }
+            if desajustes:
+                resultado["verificacion"] = {
+                    "coincide": False,
+                    "detalle": "Values read back after commit differ from the request: "
+                    + "; ".join(desajustes),
+                }
+            else:
+                resultado["verificacion"] = {"coincide": True}
+            return resultado
 
-                return routes.make_response(
-                    data={
-                        "status": "success",
-                        "element_id": element_id,
-                        "changes": changes,
-                        "failed": failed,
-                        "message": message,
-                    }
-                )
-
-            except Exception as tx_error:
-                if t.HasStarted() and not t.HasEnded():
-                    t.RollBack()
-                raise tx_error
-
-        except Exception as e:
-            logger.error("Failed to modify element: {}".format(str(e)))
-            error_trace = traceback.format_exc()
-            return routes.make_response(
-                data={"error": str(e), "traceback": error_trace}, status=500
-            )
+        return ejecutar(doc, "/modify_element/", request, cuerpo)
 
     @api.route("/selected_elements/", methods=["GET"])
     @requiere_token
