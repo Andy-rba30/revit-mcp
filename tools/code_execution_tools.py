@@ -12,7 +12,7 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
 
     @mcp.tool()
     async def execute_revit_code(
-        code: str, description: str = "Code execution", ctx: Context = None
+        code: str, description: str = "", ctx: Context = None
     ) -> str:
         """
         Execute IronPython code directly in Revit context.
@@ -26,9 +26,17 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
 
         Use this when the existing MCP tools cannot accomplish what you need.
 
+        ALWAYS fill `description` with a few words (max 60 characters) saying what
+        the code does, e.g. "Renombrar vistas de planta" or "Contar muros por nivel".
+        Revit groups everything the code changes into ONE undo entry named
+        "IA: <description>", so the user can undo the whole order with Ctrl+Z and
+        recognise it in the undo history. If left empty, the first line of the code
+        is used when it is a `#` comment, otherwise "Code execution".
+
         Args:
             code: The IronPython code to execute (as a string)
-            description: Optional description of what the code does
+            description: Short description of the order (shown as the Revit undo
+                entry "IA: <description>"; sent to Revit as "description")
             ctx: MCP context for logging
 
         Returns:
@@ -77,13 +85,15 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
            if hasattr(element_type, 'FamilyName'):
                family_name = element_type.FamilyName
 
-        4. The Tool already wraps the code around a transaction.
+        4. The Tool already wraps the code around a transaction (inside a
+           TransactionGroup named "IA: <description>"). Do not start nested
+           transactions.
         """
         try:
-            payload = {"code": code, "description": description}
+            payload = {"code": code, "description": description or ""}
 
             if ctx:
-                await ctx.info("Executing code: {}".format(description))
+                await ctx.info("Executing code: {}".format(description or "(sin descripción)"))
 
             response = await revit_post("/execute_code/", payload, ctx)
             return format_response(response)

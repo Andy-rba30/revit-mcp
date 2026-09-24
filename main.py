@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 import httpx
 import anyio
 from mcp.server.mcpserver import MCPServer, Image, Context
@@ -14,6 +15,45 @@ mcp = MCPServer("Revit MCP Server")
 REVIT_HOST = os.environ.get("REVIT_HOST", "localhost")
 REVIT_PORT = 48884  # Default pyRevit Routes port
 BASE_URL = f"http://{REVIT_HOST}:{REVIT_PORT}/revit_mcp"
+
+# Token de sesión que startup.py (dentro de Revit) escribe en cada arranque.
+# Se envía en cada petición: POST -> clave "token" en el cuerpo JSON,
+# GET -> parámetro ?token=. Ver CONTRATO.md.
+RUTA_TOKEN = os.path.expandvars(r"%LOCALAPPDATA%\RevitMcp\token")
+MENSAJE_SIN_TOKEN = "Revit no está abierto o el conector no ha iniciado"
+MENSAJE_TOKEN_CAMBIO = "el token cambió: Revit se reinició, reintenta en unos segundos"
+
+_token_cache: Optional[str] = None
+
+# httpx registra cada URL a nivel INFO y en GET la URL lleva ?token=...;
+# se sube el umbral para que el token no acabe en el log del puente.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+def leer_token(forzar: bool = False) -> Optional[str]:
+    """Devuelve el token de %LOCALAPPDATA%\\RevitMcp\\token (cacheado).
+
+    Devuelve None, sin lanzar, si el archivo no existe o está vacío: eso
+    significa que Revit no está abierto o la extensión aún no ha arrancado.
+    """
+    global _token_cache
+    if _token_cache and not forzar:
+        return _token_cache
+    try:
+        with open(RUTA_TOKEN, "r", encoding="utf-8") as archivo:
+            valor = archivo.read().strip()
+    except OSError:
+        _token_cache = None
+        return None
+    _token_cache = valor or None
+    return _token_cache
+
+
+def olvidar_token() -> None:
+    """Borra la caché; la siguiente llamada relee el archivo."""
+    global _token_cache
+    _token_cache = None
+
 
 # Shared HTTP client with keep-alive connection pooling. Reusing a single
 # AsyncClient across all tool calls avoids the per-request TCP/handshake cost
@@ -44,36 +84,72 @@ async def revit_post(endpoint: str, data: Dict[str, Any], ctx: Context = None, *
 
 async def revit_image(endpoint: str, ctx: Context = None) -> Union[Image, str]:
     """GET request that returns an Image object"""
-    try:
-        client = _get_client()
-        response = await client.get(endpoint, timeout=60.0)
-
-        if response.status_code == 200:
+    response = await _enviar_con_token("GET", endpoint, timeout=60.0)
+    if isinstance(response, str):
+        return response
+    if response.status_code == 200:
+        try:
             data = response.json()
             image_bytes = base64.b64decode(data["image_data"])
             return Image(data=image_bytes, format="png")
-        else:
-            return f"Error: {response.status_code} - {response.text}"
-    except Exception as e:
-        return f"Error: {e}"
+        except Exception as e:
+            return f"Error: {e}"
+    return f"Error: {response.status_code} - {response.text}"
 
 
-async def _revit_call(method: str, endpoint: str, data: Dict = None, ctx: Context = None, 
+async def _enviar(method: str, endpoint: str, token: str, data: Dict = None,
+                  params: Dict = None, timeout: float = 30.0) -> httpx.Response:
+    """Una petición HTTP a Revit con el token incluido (POST: cuerpo; GET: query)."""
+    client = _get_client()
+    if method == "GET":
+        query = dict(params or {})
+        query["token"] = token
+        return await client.get(endpoint, params=query, timeout=timeout)
+    cuerpo = dict(data or {})
+    cuerpo["token"] = token
+    return await client.post(
+        endpoint,
+        json=cuerpo,
+        headers={"Content-Type": "application/json"},
+        timeout=timeout,
+    )
+
+
+async def _enviar_con_token(method: str, endpoint: str, data: Dict = None,
+                            params: Dict = None, timeout: float = 30.0
+                            ) -> Union[httpx.Response, str]:
+    """Envía la petición con el token; ante 401 relee el archivo y reintenta una vez.
+
+    Devuelve la respuesta httpx, o un texto explicativo (nunca lanza) cuando no
+    hay token, Revit no responde o el token cambió porque Revit se reinició.
+    """
+    token = leer_token()
+    if token is None:
+        return MENSAJE_SIN_TOKEN
+    for intento in (1, 2):
+        try:
+            response = await _enviar(method, endpoint, token, data, params, timeout)
+        except httpx.ConnectError:
+            return MENSAJE_SIN_TOKEN
+        except Exception as e:
+            return f"Error: {e}"
+        if response.status_code != 401:
+            return response
+        if intento == 1:
+            olvidar_token()
+            token = leer_token(forzar=True)
+            if token is None:
+                return MENSAJE_SIN_TOKEN
+    return MENSAJE_TOKEN_CAMBIO
+
+
+async def _revit_call(method: str, endpoint: str, data: Dict = None, ctx: Context = None,
                      timeout: float = 30.0, params: Dict = None) -> Union[Dict, str]:
     """Internal function handling all HTTP calls"""
+    response = await _enviar_con_token(method, endpoint, data=data, params=params, timeout=timeout)
+    if isinstance(response, str):
+        return response
     try:
-        client = _get_client()
-
-        if method == "GET":
-            response = await client.get(endpoint, params=params, timeout=timeout)
-        else:  # POST
-            response = await client.post(
-                endpoint,
-                json=data,
-                headers={"Content-Type": "application/json"},
-                timeout=timeout,
-            )
-
         return response.json() if response.status_code == 200 else f"Error: {response.status_code} - {response.text}"
     except Exception as e:
         return f"Error: {e}"
@@ -94,12 +170,16 @@ async def run_combined_async():
     import uvicorn
 
     # Get the streamable-http app first - it has the proper lifespan
-    # that initializes the session manager's task group
-    http_app = mcp.streamable_http_app(host="127.0.0.1", port=8000, stateless_http=True, json_response=True)
+    # that initializes the session manager's task group.
+    # host="127.0.0.1" activa en el SDK mcp 2.2 la protección contra DNS
+    # rebinding (allowed_hosts 127.0.0.1:*, localhost:*, [::1]:* y los
+    # allowed_origins equivalentes; cualquier otro Host/Origin recibe 421).
+    # Estas fábricas no aceptan port=: el puerto lo fija uvicorn más abajo.
+    http_app = mcp.streamable_http_app(host="127.0.0.1", stateless_http=True, json_response=True)
 
     # Get SSE routes (SSE doesn't need special lifespan - it creates
     # task groups per-request in connect_sse())
-    sse_app = mcp.sse_app(host="127.0.0.1", port=8000)
+    sse_app = mcp.sse_app(host="127.0.0.1")
 
     # Add SSE routes to the http app (preserving its lifespan)
     for route in sse_app.routes:
@@ -126,4 +206,4 @@ if __name__ == "__main__":
         anyio.run(run_combined_async)
         sys.exit(0)
     else:
-        mcp.run(transport="stdio")
+        mcp.run(transport="stdio")
