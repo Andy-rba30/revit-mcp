@@ -2,7 +2,7 @@
 """Annotation tools — dimensions and wall tags"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_ESCRITURA
 
 
 def register_annotation_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -31,7 +31,7 @@ def register_annotation_tools(mcp, revit_get, revit_post, revit_image=None):
         """
         data = {"element_ids": element_ids, "dimension_type": dimension_type}
         data["simular"] = simular
-        response = await revit_post("/create_dimensions/", data, ctx)
+        response = await revit_post("/create_dimensions/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
@@ -54,5 +54,5 @@ def register_annotation_tools(mcp, revit_get, revit_post, revit_image=None):
         """
         data = {"use_leader": use_leader, "tag_type_name": tag_type_name}
         data["simular"] = simular
-        response = await revit_post("/tag_walls/", data, ctx)
+        response = await revit_post("/tag_walls/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)

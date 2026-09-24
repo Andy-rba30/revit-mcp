@@ -2,7 +2,7 @@
 """Tagging tools — tag elements with annotation symbols"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_ESCRITURA
 
 
 def register_tag_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -48,5 +48,5 @@ def register_tag_tools(mcp, revit_get, revit_post, revit_image=None):
         if offset is not None:
             data["offset"] = offset
         data["simular"] = simular
-        response = await revit_post("/tag_elements/", data, ctx)
+        response = await revit_post("/tag_elements/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)

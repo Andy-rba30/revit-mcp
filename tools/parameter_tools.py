@@ -2,7 +2,7 @@
 """Parameter tools — read element properties and set parameter values"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_ESCRITURA
 
 
 def register_parameter_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -17,9 +17,11 @@ def register_parameter_tools(mcp, revit_get, revit_post, revit_image=None):
     ) -> str:
         """Get all properties and parameters of a Revit element.
 
-        Returns the element's category, family, type, and a complete list of
-        both instance and type parameters with their values, storage types,
-        and read-only status.
+        Returns the element's category, family, type (and type_id), bounding
+        box in mm (bbox_mm), level, workset, phase_created, phase_demolished,
+        design_option, host_id (if hosted), pinned, and a complete list of both
+        instance and type parameters with their values, storage types,
+        read-only status and is_type_parameter.
 
         Args:
             element_id: Revit element ID to inspect
@@ -59,5 +61,5 @@ def register_parameter_tools(mcp, revit_get, revit_post, revit_image=None):
             "value": value,
         }
         data["simular"] = simular
-        response = await revit_post("/set_parameter/", data, ctx)
+        response = await revit_post("/set_parameter/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)

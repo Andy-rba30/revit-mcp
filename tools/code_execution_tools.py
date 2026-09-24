@@ -2,7 +2,7 @@
 """Code execution tools for the MCP server."""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_LARGO
 
 
 def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -106,7 +106,7 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
             if ctx:
                 await ctx.info("Executing code: {}".format(description))
 
-            response = await revit_post("/execute_code/", payload, ctx)
+            response = await revit_post("/execute_code/", payload, ctx, timeout=TIMEOUT_LARGO)
             return format_response(response)
 
         except (ConnectionError, ValueError, RuntimeError) as e:

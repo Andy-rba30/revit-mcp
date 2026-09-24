@@ -2,7 +2,7 @@
 """Interop tools — IFC export and external file linking"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_LARGO
 
 
 def register_interop_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -36,7 +36,7 @@ def register_interop_tools(mcp, revit_get, revit_post, revit_image=None):
         }
         if view_name is not None:
             data["view_name"] = view_name
-        response = await revit_post("/export_ifc/", data, ctx)
+        response = await revit_post("/export_ifc/", data, ctx, timeout=TIMEOUT_LARGO)
         return format_response(response)
 
     @mcp.tool()
@@ -63,5 +63,5 @@ def register_interop_tools(mcp, revit_get, revit_post, revit_image=None):
         if position is not None:
             data["position"] = position
         data["simular"] = simular
-        response = await revit_post("/link_file/", data, ctx)
+        response = await revit_post("/link_file/", data, ctx, timeout=TIMEOUT_LARGO)
         return format_response(response)

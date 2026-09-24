@@ -3,7 +3,7 @@
 
 from mcp.server.mcpserver import Context
 from typing import Dict, Any
-from .utils import format_response
+from .utils import format_response, TIMEOUT_LARGO, TIMEOUT_ESCRITURA
 
 
 def register_family_tools(mcp, revit_get, revit_post):
@@ -32,19 +32,31 @@ def register_family_tools(mcp, revit_get, revit_post):
             "properties": properties or {},
         }
         data["simular"] = simular
-        response = await revit_post("/place_family/", data, ctx)
+        response = await revit_post("/place_family/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
     async def list_families(
-        contains: str = None, limit: int = 50, ctx: Context = None
+        contains: str = None, limit: int = 50, category: str = None, ctx: Context = None
     ) -> str:
-        """Get a flat list of available family types in the current Revit model"""
+        """Get a flat list of available family types in the current Revit model.
+
+        Args:
+            contains: Case-insensitive substring of "family name + type name"
+                (e.g. "door", "HEB", "Generic - 200")
+            limit: Maximum number of types returned (default 50); the response
+                says `total_matched` and `truncated` so you can narrow the filter
+            category: Case-insensitive substring of the category name
+                (e.g. "Doors", "Structural Columns", "Windows")
+            ctx: MCP context for logging
+        """
         params = {}
         if contains:
             params["contains"] = contains
         if limit != 50:
             params["limit"] = str(limit)
+        if category:
+            params["category"] = category
 
         result = await revit_get("/list_families/", ctx, params=params)
         return format_response(result)
@@ -71,5 +83,5 @@ def register_family_tools(mcp, revit_get, revit_post):
             simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
-        response = await revit_post("/load_family/", {"file_path": file_path, "simular": simular}, ctx)
+        response = await revit_post("/load_family/", {"file_path": file_path, "simular": simular}, ctx, timeout=TIMEOUT_LARGO)
         return format_response(response)

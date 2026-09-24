@@ -3,7 +3,7 @@
 
 from mcp.server.mcpserver import Context
 from typing import Dict, Any, Optional, List
-from .utils import format_response
+from .utils import format_response, TIMEOUT_ESCRITURA
 
 
 def register_colors_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -53,7 +53,7 @@ def register_colors_tools(mcp, revit_get, revit_post, revit_image=None):
                     )
                 )
             data["simular"] = simular
-            response = await revit_post("/color_splash/", data, ctx)
+            response = await revit_post("/color_splash/", data, ctx, timeout=TIMEOUT_ESCRITURA)
             return format_response(response)
 
         except Exception as e:
@@ -85,7 +85,7 @@ def register_colors_tools(mcp, revit_get, revit_post, revit_image=None):
             if ctx:
                 await ctx.info("Clearing color overrides for {} elements".format(category_name))
             data["simular"] = simular
-            response = await revit_post("/clear_colors/", data, ctx)
+            response = await revit_post("/clear_colors/", data, ctx, timeout=TIMEOUT_ESCRITURA)
             return format_response(response)
 
         except Exception as e:

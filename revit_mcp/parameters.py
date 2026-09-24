@@ -175,6 +175,54 @@ def coincide_valor(param, value):
         return False
 
 
+def contexto_elemento(doc, elem):
+    """bbox_mm, level, workset, phase_created, phase_demolished, design_option,
+    host_id y pinned de un elemento (None cuando no aplica)."""
+    contexto = {
+        "bbox_mm": bbox_mm(elem),
+        "level": nombre_nivel(doc, elem),
+        "workset": None,
+        "phase_created": None,
+        "phase_demolished": None,
+        "design_option": None,
+        "host_id": None,
+        "pinned": None,
+    }
+    try:
+        if doc.IsWorkshared:
+            workset = doc.GetWorksetTable().GetWorkset(elem.WorksetId)
+            if workset is not None:
+                contexto["workset"] = _safe_str(workset.Name)
+    except Exception:
+        pass
+    for clave, atributo in (("phase_created", "CreatedPhaseId"), ("phase_demolished", "DemolishedPhaseId")):
+        try:
+            fase_id = getattr(elem, atributo)
+            if fase_id and fase_id != DB.ElementId.InvalidElementId:
+                fase = doc.GetElement(fase_id)
+                if fase is not None:
+                    contexto[clave] = _safe_str(get_element_name(fase))
+        except Exception:
+            pass
+    try:
+        opcion = elem.DesignOption
+        if opcion is not None:
+            contexto["design_option"] = _safe_str(get_element_name(opcion))
+    except Exception:
+        pass
+    try:
+        host = getattr(elem, "Host", None)
+        if host is not None:
+            contexto["host_id"] = get_element_id_value(host)
+    except Exception:
+        pass
+    try:
+        contexto["pinned"] = bool(elem.Pinned)
+    except Exception:
+        pass
+    return contexto
+
+
 def buscar_parametro(doc, elem, parameter_name, incluir_tipo=True):
     """Parametro de ejemplar (o de tipo si incluir_tipo) por nombre; None si no."""
     param = elem.LookupParameter(parameter_name)
@@ -263,6 +311,7 @@ def register_parameter_routes(api):
                         "read_only": param.IsReadOnly,
                         "group": _safe_str(_get_param_group_name(param)),
                         "is_instance": True,
+                        "is_type_parameter": False,
                     })
                 except Exception:
                     continue
@@ -287,26 +336,35 @@ def register_parameter_routes(api):
                                     "read_only": param.IsReadOnly,
                                     "group": _safe_str(_get_param_group_name(param)),
                                     "is_instance": False,
+                                    "is_type_parameter": True,
                                 })
                             except Exception:
                                 continue
             except Exception:
                 pass
 
-            return routes.make_response(
-                data={
-                    "status": "success",
-                    "element_id": int(element_id),
-                    "category": category,
-                    "family": family,
-                    "type": type_name,
-                    "parameters": parameters,
-                    "parameter_count": len(parameters),
-                    "message": "Found {} parameters on element {}".format(
-                        len(parameters), element_id
-                    ),
-                }
-            )
+            contexto = contexto_elemento(doc, elem)
+            datos = {
+                "status": "success",
+                "element_id": int(element_id),
+                "category": category,
+                "family": family,
+                "type": type_name,
+                "type_id": None,
+                "parameters": parameters,
+                "parameter_count": len(parameters),
+                "message": "Found {} parameters on element {}".format(
+                    len(parameters), element_id
+                ),
+            }
+            try:
+                type_id = elem.GetTypeId()
+                if type_id and type_id != DB.ElementId.InvalidElementId:
+                    datos["type_id"] = get_element_id_value(type_id)
+            except Exception:
+                pass
+            datos.update(contexto)
+            return routes.make_response(data=datos)
 
         except Exception as e:
             logger.error("Failed to get element properties: {}".format(str(e)))

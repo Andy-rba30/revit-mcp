@@ -2,7 +2,7 @@
 """Transform tools — move, copy, rotate, and mirror elements"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_ESCRITURA
 
 
 def register_transform_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -53,5 +53,5 @@ def register_transform_tools(mcp, revit_get, revit_post, revit_image=None):
             data["mirror_plane"] = mirror_plane
         data["simular"] = simular
         data["forzar"] = forzar
-        response = await revit_post("/transform_elements/", data, ctx)
+        response = await revit_post("/transform_elements/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)

@@ -2,7 +2,7 @@
 """Detail tools — detail lines for view-specific annotation"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_ESCRITURA
 
 
 def register_detail_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -38,5 +38,5 @@ def register_detail_tools(mcp, revit_get, revit_post, revit_image=None):
         if line_style is not None:
             data["line_style"] = line_style
         data["simular"] = simular
-        response = await revit_post("/create_detail_line/", data, ctx)
+        response = await revit_post("/create_detail_line/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)

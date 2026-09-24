@@ -16,6 +16,12 @@ def register_status_tools(mcp, revit_get):
 
     @mcp.tool()
     async def get_revit_model_info(ctx: Context) -> str:
-        """Get comprehensive information about the current Revit model"""
+        """Get comprehensive information about the current Revit model.
+
+        Includes project info, element counts, warnings, levels, rooms, views,
+        sheets, links and a `file` block with is_workshared, path, last_saved
+        (file date on disk), units (project unit system), project_base_point_mm,
+        survey_point_mm and true_north_deg.
+        """
         response = await revit_get("/model_info/", ctx)
         return format_response(response)

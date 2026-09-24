@@ -326,9 +326,13 @@ def register_placement_routes(api):
     @requiere_token
     def list_families(doc, request):
         """
-        Simplified: Get a flat list of up to 50 family names and their types in the current Revit model.
+        Flat list of family types in the current model, filtered by query params:
+          contains  - substring (case-insensitive) of "family_name type_name"
+          category  - substring (case-insensitive) of the category name
+          limit     - max results (default 50)
         Returns:
-            list: [{ 'family_name': str, 'type_name': str, 'category': str, 'is_active': bool }]
+            {"families": [{family_name, type_name, category, is_active, type_id}],
+             "count", "total_matched", "truncated", "filters"}
         """
         try:
             if not doc:
@@ -336,32 +340,58 @@ def register_placement_routes(api):
                     data={"error": "No active Revit document"}, status=503
                 )
 
+            params = getattr(request, "query_params", None) or {}
+            if not isinstance(params, dict):
+                params = {}
+            contains = (params.get("contains") or "").strip().lower()
+            category = (params.get("category") or "").strip().lower()
+            try:
+                limit = int(params.get("limit") or 50)
+            except (TypeError, ValueError):
+                limit = 50
+            if limit <= 0:
+                limit = 50
+
             symbols = (
                 DB.FilteredElementCollector(doc).OfClass(DB.FamilySymbol).ToElements()
             )
             families = []
+            total_matched = 0
             for symbol in symbols:
-                if len(families) >= 50:
-                    break
                 try:
                     family_name = get_element_name(symbol.Family)
                     type_name = get_element_name(symbol)
-                    category = symbol.Category.Name if symbol.Category else "Unknown"
-                    is_active = symbol.IsActive
-                    families.append(
-                        {
-                            "family_name": family_name,
-                            "type_name": type_name,
-                            "category": category,
-                            "is_active": is_active,
-                        }
-                    )
+                    cat_name = symbol.Category.Name if symbol.Category else "Unknown"
                 except Exception:
                     continue
+                if category and category not in cat_name.lower():
+                    continue
+                if contains and contains not in (family_name + " " + type_name).lower():
+                    continue
+                total_matched += 1
+                if len(families) >= limit:
+                    continue
+                try:
+                    is_active = symbol.IsActive
+                except Exception:
+                    is_active = None
+                families.append(
+                    {
+                        "family_name": family_name,
+                        "type_name": type_name,
+                        "category": cat_name,
+                        "is_active": is_active,
+                        "type_id": get_element_id_value(symbol),
+                    }
+                )
             return routes.make_response(
                 data={
                     "families": families,
+                    "count": len(families),
+                    "total_matched": total_matched,
+                    "truncated": total_matched > len(families),
                     "truncated_total": len(families),
+                    "filters": {"contains": contains or None, "category": category or None, "limit": limit},
                     "status": "success",
                 }
             )

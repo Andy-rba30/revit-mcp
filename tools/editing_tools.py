@@ -2,7 +2,7 @@
 """Editing tools — delete, modify, and select elements"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_ESCRITURA
 
 
 def register_editing_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -31,7 +31,7 @@ def register_editing_tools(mcp, revit_get, revit_post, revit_image=None):
         data = {"element_ids": element_ids}
         data["simular"] = simular
         data["forzar"] = forzar
-        response = await revit_post("/delete_elements/", data, ctx)
+        response = await revit_post("/delete_elements/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
@@ -55,7 +55,7 @@ def register_editing_tools(mcp, revit_get, revit_post, revit_image=None):
         """
         data = {"element_id": element_id, "parameters": parameters}
         data["simular"] = simular
-        response = await revit_post("/modify_element/", data, ctx)
+        response = await revit_post("/modify_element/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()

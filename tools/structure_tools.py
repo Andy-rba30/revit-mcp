@@ -2,7 +2,7 @@
 """Structure tools — grids and structural framing"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_ESCRITURA
 
 
 def register_structure_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -31,7 +31,7 @@ def register_structure_tools(mcp, revit_get, revit_post, revit_image=None):
         """
         data = {"grids": grids}
         data["simular"] = simular
-        response = await revit_post("/create_grid/", data, ctx)
+        response = await revit_post("/create_grid/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
@@ -60,5 +60,5 @@ def register_structure_tools(mcp, revit_get, revit_post, revit_image=None):
         """
         data = {"elements": elements}
         data["simular"] = simular
-        response = await revit_post("/create_framing/", data, ctx)
+        response = await revit_post("/create_framing/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)

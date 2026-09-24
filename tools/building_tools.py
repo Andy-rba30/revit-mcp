@@ -2,7 +2,7 @@
 """Building creation tools — walls, floors, roofs, ceilings, and levels"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_ESCRITURA
 
 
 def register_building_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -37,7 +37,7 @@ def register_building_tools(mcp, revit_get, revit_post, revit_image=None):
         """
         data = {"elements": elements}
         data["simular"] = simular
-        response = await revit_post("/create_line/", data, ctx)
+        response = await revit_post("/create_line/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
@@ -66,7 +66,7 @@ def register_building_tools(mcp, revit_get, revit_post, revit_image=None):
         """
         data = {"elements": elements}
         data["simular"] = simular
-        response = await revit_post("/create_surface/", data, ctx)
+        response = await revit_post("/create_surface/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
@@ -89,5 +89,5 @@ def register_building_tools(mcp, revit_get, revit_post, revit_image=None):
         """
         data = {"levels": levels}
         data["simular"] = simular
-        response = await revit_post("/create_level/", data, ctx)
+        response = await revit_post("/create_level/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)

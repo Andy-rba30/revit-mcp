@@ -2,7 +2,7 @@
 """Documentation tools — sheets, schedules, and document export"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_LARGO, TIMEOUT_ESCRITURA
 
 
 def register_documentation_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -36,7 +36,7 @@ def register_documentation_tools(mcp, revit_get, revit_post, revit_image=None):
             "title_block_name": title_block_name,
         }
         data["simular"] = simular
-        response = await revit_post("/create_sheet/", data, ctx)
+        response = await revit_post("/create_sheet/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
@@ -67,7 +67,7 @@ def register_documentation_tools(mcp, revit_get, revit_post, revit_image=None):
             "schedule_name": schedule_name,
         }
         data["simular"] = simular
-        response = await revit_post("/create_schedule/", data, ctx)
+        response = await revit_post("/create_schedule/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
@@ -93,5 +93,5 @@ def register_documentation_tools(mcp, revit_get, revit_post, revit_image=None):
             "format": format,
             "resolution": resolution,
         }
-        response = await revit_post("/export_document/", data, ctx)
+        response = await revit_post("/export_document/", data, ctx, timeout=TIMEOUT_LARGO)
         return format_response(response)

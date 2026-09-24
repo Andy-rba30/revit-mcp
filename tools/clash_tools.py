@@ -2,7 +2,7 @@
 """Clash detection tools — hard interference checking for BIM coordination"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_LARGO
 
 
 def register_clash_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -47,5 +47,5 @@ def register_clash_tools(mcp, revit_get, revit_post, revit_image=None):
             "set_b_categories": set_b_categories,
             "max_clashes": max_clashes,
         }
-        response = await revit_post("/clash_check/", data, ctx)
+        response = await revit_post("/clash_check/", data, ctx, timeout=TIMEOUT_LARGO)
         return format_response(response)

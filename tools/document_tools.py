@@ -2,7 +2,7 @@
 """Document tools — saving and persistence"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_LARGO
 
 
 def register_document_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -32,5 +32,5 @@ def register_document_tools(mcp, revit_get, revit_post, revit_image=None):
         """
         data = {"file_path": file_path, "overwrite": overwrite}
         data["simular"] = simular
-        response = await revit_post("/save_document/", data, ctx)
+        response = await revit_post("/save_document/", data, ctx, timeout=TIMEOUT_LARGO)
         return format_response(response)
