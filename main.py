@@ -7,9 +7,28 @@ from mcp.server.mcpserver import MCPServer, Image, Context
 import base64
 from typing import Optional, Dict, Any, Union
 
+# Instrucciones para el agente (precedencia, flujo obligatorio, reglas de
+# dominio, glosario y errores típicos). Viven en INSTRUCCIONES_AGENTE.md, junto
+# a este archivo, y se envían al cliente como `instructions` del servidor.
+RUTA_INSTRUCCIONES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "INSTRUCCIONES_AGENTE.md")
+
+
+def leer_instrucciones() -> str:
+    try:
+        with open(RUTA_INSTRUCCIONES, "r", encoding="utf-8") as archivo:
+            return archivo.read()
+    except OSError as error:
+        logging.getLogger(__name__).warning("No se pudo leer %s: %s", RUTA_INSTRUCCIONES, error)
+        return (
+            "Usa las herramientas específicas antes que execute_revit_code; ejecuta "
+            "los cambios con simular=true, confirma con el usuario y comprueba "
+            "antes/despues. Todas las unidades en milímetros."
+        )
+
+
 # Create a generic MCP server for interacting with Revit
 # Use stateless_http=True and json_response=True for better compatibility
-mcp = MCPServer("Revit MCP Server")
+mcp = MCPServer("Revit MCP Server", instructions=leer_instrucciones())
 
 # Configuration
 REVIT_HOST = os.environ.get("REVIT_HOST", "localhost")
