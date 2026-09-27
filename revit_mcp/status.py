@@ -13,6 +13,15 @@ logger = logging.getLogger(__name__)
 def register_status_routes(api):
     """Register all status-related routes with the API"""
     
+    @api.route('/ping/', methods=["GET"])
+    def revit_ping():
+        """Sin token: solo dice que la extension esta cargada y escuchando.
+
+        Es lo que debe sondear un cliente mientras Revit arranca: no revela
+        nada del modelo y no genera avisos de 401. Despues, releer el token
+        (cambia en cada arranque) y llamar a /status/."""
+        return routes.make_response(data={"ok": True, "api_name": "revit_mcp"})
+
     @api.route('/status/', methods=["GET"])
     @requiere_token
     def revit_status(doc):

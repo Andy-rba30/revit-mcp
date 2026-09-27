@@ -93,6 +93,7 @@ al total de elementos que va a crear.
 
 | Método | Ruta | Parámetros | Respuesta |
 |--------|------|------------|-----------|
+| GET | `/ping/` | — (sin token) | `{"ok": true}` en cuanto la extensión escucha. Para esperar a que Revit arranque: sondear `/ping/`, releer el token (cambia en cada arranque) y entonces llamar a `/status/`. Cada 401 se registra en pyRevit una vez por ruta y minuto, con el recuento |
 | GET | `/status/` | — | `{"status": "active", "health": "healthy", "revit_available": true, "document_title": ..., "api_name": "revit_mcp"}`; `503` sin documento |
 | GET | `/model_info/` | — | Proyecto, recuentos, avisos, vistas, planos, habitaciones, vínculos y bloque `file`: `is_workshared`, `path`, `last_saved`, `units`, `project_base_point_mm`, `survey_point_mm`, `true_north_deg` |
 | GET | `/model_statistics/` | — | Estadísticas del modelo (elementos, categorías) |

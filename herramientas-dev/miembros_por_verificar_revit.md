@@ -80,7 +80,7 @@ Pendiente tras la validación de la 0.3.0 (27/09/2026): `Grid.Create` (la herram
 
 | Tipo | Miembro | Versión mínima | Ruta que lo usa | Estado |
 |---|---|---|---|---|
-| método | `Grid.Create(Document, Line)` + `Grid.Name` (rechaza nombres repetidos) | 2011 | `/grid_levels/` (`structure.crear_rejilla`), `/create_grid/` | por verificar |
+| método | `Grid.Create(Document, Line)` + `Grid.Name` (rechaza nombres repetidos) | 2011 | `/grid_levels/` (`structure.crear_rejilla`), `/create_grid/` | verificado (0.3.1 en Revit 2027 es: V1 V2 V3 H1 H2, 115 ms) |
 | método | `Level.Create(Document, double)` + `Level.Name` | 2011 | `/grid_levels/` (`building.crear_nivel`), `/create_level/` | verificado (0.3.0 en Revit 2027 es, 2a.3b) |
 | método | `ViewSheet.Create(Document, ElementId cajetín)`, `ViewSheet.SheetNumber`, `View.Name` | 2013 | `/sheet_set/` (`documentation.crear_plano`), `/create_sheet/` | verificado (0.3.0 en Revit 2027 es, `/sheet_set/` MCP-01) |
 | método | `Viewport.CanAddViewToSheet(Document, ElementId, ElementId)` y `Viewport.Create(Document, ElementId, ElementId, XYZ)` | 2014 | `/sheet_set/` | verificado (0.3.0 en Revit 2027 es, 2 vistas colocadas) |
@@ -97,4 +97,4 @@ Pendiente tras la validación de la 0.3.0 (27/09/2026): `Grid.Create` (la herram
 | método | `ElementTransformUtils.MoveElement` sobre un `ImportInstance` | 2012 | `/import_civil/` (`origin_offset_mm` con DWG) | por verificar |
 | propiedad | `ViewPlan.GenLevel` para elegir la planta del nivel | 2011 | `/import_civil/` (vista de colocación) | verificado (0.3.0 en Revit 2027 es, `/view_extents/` level) |
 | formato | LandXML: `<Units><Metric linearUnit>` y `<P>` en orden norte-este-cota (Y X Z) | LandXML 1.2 | `/import_civil/` (`macros.leer_landxml`) | por verificar con un archivo real de Civil 3D |
-| propiedad | `Level.ProjectElevation` (origen interno; `Level.Elevation` es la mostrada según la Base de elevación del tipo) | 2014 | `utils.elevacion_interna`: `/create_level/`, `/grid_levels/`, `/list_levels/`, pilares, zapatas, vigas y MEP | por verificar (0.3.2: en la validación de la 0.3.1 un nivel pedido a 99000 mm se leyó como 117450 con `Elevation`) |
+| propiedad | `Level.ProjectElevation` (origen interno; `Level.Elevation` es la mostrada según la Base de elevación del tipo) | 2014 | `utils.elevacion_interna`: `/create_level/`, `/grid_levels/`, `/list_levels/`, pilares, zapatas, vigas y MEP | verificado (0.3.2 en Revit 2027 es: 99000 interno / 117450 mostrado; `/list_levels/` Zapata B.O -4600 / 13850) |

@@ -129,3 +129,12 @@ Y debajo:
   niveles, pilares, zapatas, vigas y MEP; las respuestas traen `elevation_mm` (interno) y `elevation_shown_mm`.
 - `list_warnings` seguía con 9 `failure: null` porque el agente reinició el puente pero no recargó pyRevit: la tabla
   de GUID vive en `revit_mcp/`, que corre dentro de Revit. Pendiente de repetir tras recargar.
+
+### Tercera pasada (0.3.2, Revit reiniciado): 2a cerrada
+
+- `create_grid_and_levels` nivel a 99000: `elevation_mm` 99000 y `elevation_shown_mm` 117450 (coincide con la
+  cabecera del nivel en Revit). `/list_levels/`: Zapata B.O -4600 / 13850, NPT +30.40 11100 / 29550.
+- `list_warnings(group_by)`: los 15 grupos con `failure` identificado; ninguno `null`.
+- Efecto colateral visto en la ventana de pyRevit: decenas de `Peticion rechazada (401) en /status/` porque el
+  agente sondeaba `/status/` con el token anterior mientras Revit arrancaba. En 0.3.3: `GET /ping/` sin token para
+  esperar a Revit, y el aviso de 401 se registra una vez por ruta y minuto con el recuento.
