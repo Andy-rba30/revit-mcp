@@ -13,6 +13,7 @@ Todas pasan por escritura.ejecutar (copia, log, simular, IA:, creados).
 """
 
 from utils import (
+    elevacion_interna, elevacion_mostrada,
     get_element_name, get_element_id_value, make_element_id, xyz_desde_mm, punto_a_mm,
     mapa_niveles, buscar_tipo_por_nombre, etiqueta_tipo, MM_TO_FEET, FEET_TO_MM,
 )
@@ -123,12 +124,12 @@ def register_estructural_routes(api):
                     xyz = xyz_desde_mm(punto)
                     base = _nivel(level_map, col.get("base_level"), "Column {}".format(idx))
                     top = _nivel(level_map, col.get("top_level"), "Column {}".format(idx), obligatorio=False)
-                    if top is not None and top.Elevation <= base.Elevation:
+                    if top is not None and elevacion_interna(top) <= elevacion_interna(base):
                         raise ValueError("Column {}: top_level must be above base_level".format(idx))
                     symbol = _elegir(simbolos, col.get("type_name"), "structural column", "Column {}".format(idx))
                     rotation = float(col.get("rotation", 0) or 0)
                     # El punto se coloca a la cota del nivel base + z pedido (z = desfase)
-                    xyz = DB.XYZ(xyz.X, xyz.Y, base.Elevation + xyz.Z)
+                    xyz = DB.XYZ(xyz.X, xyz.Y, elevacion_interna(base) + xyz.Z)
                     planes.append({
                         "idx": idx, "xyz": xyz, "base": base, "top": top, "symbol": symbol,
                         "rotation": rotation, "top_offset": col.get("top_offset"),
@@ -229,7 +230,7 @@ def register_estructural_routes(api):
                         xyz = xyz_desde_mm(f["point"])
                         nivel = _nivel(level_map, f.get("level") or f.get("level_name"), etiqueta)
                         symbol = _elegir(zapatas, f.get("type_name"), "structural foundation", etiqueta)
-                        xyz = DB.XYZ(xyz.X, xyz.Y, nivel.Elevation + xyz.Z)
+                        xyz = DB.XYZ(xyz.X, xyz.Y, elevacion_interna(nivel) + xyz.Z)
                         planes.append({"idx": idx, "kind": "isolated", "xyz": xyz, "level": nivel,
                                        "symbol": symbol, "rotation": float(f.get("rotation", 0) or 0)})
                     elif f.get("wall_id") is not None or f.get("curve"):

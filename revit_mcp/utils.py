@@ -179,6 +179,25 @@ MM_TO_FEET = 1.0 / 304.8
 FEET_TO_MM = 304.8
 
 
+def elevacion_interna(nivel):
+    """Elevacion del nivel en pies respecto al origen interno del proyecto.
+
+    Es el marco de Level.Create, de las XYZ y de bbox_mm. Level.Elevation, en
+    cambio, es la que muestra Revit y depende de la "Base de elevacion" del tipo
+    de nivel (punto base del proyecto o punto de reconocimiento): en un modelo
+    con el punto base desplazado, ambas difieren. Level.ProjectElevation existe
+    desde Revit 2014; si faltara, se usa Elevation."""
+    try:
+        return float(nivel.ProjectElevation)
+    except Exception:
+        return float(nivel.Elevation)
+
+
+def elevacion_mostrada(nivel):
+    """Elevacion del nivel en pies tal como la muestra Revit (Level.Elevation)."""
+    return float(nivel.Elevation)
+
+
 def xyz_desde_mm(punto, z_defecto=0.0):
     """DB.XYZ en pies a partir de un dict {"x", "y", "z"} en milimetros.
 

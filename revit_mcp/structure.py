@@ -7,6 +7,7 @@ Todas las rutas pasan por escritura.ejecutar (copia, log, simular, IA:).
 """
 
 from utils import (
+    elevacion_interna,
     get_element_name, get_element_id_value, make_element_id, xyz_desde_mm, punto_a_mm,
     elementos_por_nombre, mapa_niveles, coleccion_niveles,
 )
@@ -167,7 +168,7 @@ def register_structure_routes(api):
                     level_elev = 0.0
                     try:
                         if level is not None:
-                            level_elev = level.Elevation
+                            level_elev = elevacion_interna(level)
                     except Exception:
                         level_elev = 0.0
                     if abs(level_elev) > 1e-9:

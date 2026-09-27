@@ -8,6 +8,7 @@ place_family y load_family pasan por escritura.ejecutar (copia, log,
 """
 
 from utils import (
+    elevacion_interna, elevacion_mostrada,
     buscar_por_nombre,
     get_element_name, find_family_symbol_safely, get_element_id_value, make_element_id,
     xyz_desde_mm, punto_a_mm, mapa_niveles, FEET_TO_MM,
@@ -493,12 +494,13 @@ def register_placement_routes(api):
             for level in levels:
                 try:
                     level_name = get_element_name(level)
-                    elevation = level.Elevation
+                    elevation = elevacion_interna(level)
 
                     levels_info.append(
                         {
                             "name": level_name,
                             "elevation_mm": round(elevation * 304.8, 0),
+                            "elevation_shown_mm": round(elevacion_mostrada(level) * 304.8, 0),
                             "elevation_feet": round(elevation, 4),
                             "id": get_element_id_value(level),
                         }

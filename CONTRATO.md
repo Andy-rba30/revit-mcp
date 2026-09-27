@@ -98,7 +98,7 @@ al total de elementos que va a crear.
 | GET | `/model_statistics/` | — | Estadísticas del modelo (elementos, categorías) |
 | GET | `/room_data/` | — | Habitaciones con nivel, área y parámetros |
 | GET | `/selected_elements/` | — | Elementos seleccionados en Revit |
-| GET | `/list_levels/` | — | Niveles con elevación |
+| GET | `/list_levels/` | — | Niveles con `elevation` (pies, mostrada), `elevation_mm` (origen interno) y `elevation_shown_mm` (la que muestra Revit) |
 | GET | `/element_properties/<element_id>` | `element_id` en la ruta | Propiedades y parámetros (`is_type_parameter` por parámetro) más `bbox_mm`, `level`, `workset`, `phase_created`, `phase_demolished`, `design_option`, `host_id`, `pinned`, `type_id` |
 | GET | `/warnings/` | `max` (100) | `warnings[]`: `descripcion`, `severidad`, `element_ids[]`; `total`, `truncated` |
 | GET | `/worksets/` | — | `is_workshared`, `worksets[]`: `id`, `nombre`, `propietario`, `editable`, `abierto`, `activo` |
@@ -136,7 +136,7 @@ al total de elementos que va a crear.
 |--------|------|------------|-----------|
 | POST | `/create_line/` | `elements`: muros/vigas (puntos en mm, tipo, nivel), `simular` | `creados[]`, `errors[]` por elemento |
 | POST | `/create_surface/` | `elements`: suelos/cubiertas (contornos en mm, tipo, nivel), `simular` | `creados[]`, `errors[]` |
-| POST | `/create_level/` | `levels`: (nombre, elevación mm), `simular` | `creados[]` con `elevation_mm` verificada |
+| POST | `/create_level/` | `levels`: (nombre, elevación mm respecto al origen interno, el marco de las XYZ), `simular` | `creados[]` con `elevation_mm` verificada (origen interno) y `elevation_shown_mm` (la que muestra Revit según la Base de elevación del tipo de nivel: con el punto base desplazado difieren) |
 | POST | `/create_grid/` | `grids`: (nombre, inicio, fin mm), `simular` | `creados[]` con `name` |
 | POST | `/create_framing/` | `elements`: vigas (puntos mm, tipo, nivel), `simular` | `creados[]` |
 | POST | `/create_column/` | `columns[]`: `point` (mm), `base_level`*, `top_level`, `top_offset`, `type_name`, `rotation`, `simular` | `creados[]` con `top_level` y `point_mm` |

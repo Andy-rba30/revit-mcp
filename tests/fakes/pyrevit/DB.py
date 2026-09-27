@@ -670,12 +670,28 @@ class Toposolid(Element):
 
 
 class Level(Element):
-    Elevation = 0.0
+    # Como en Revit: Create y ProjectElevation trabajan respecto al origen interno;
+    # Elevation es la mostrada, que depende de la Base de elevacion del tipo. Las
+    # pruebas simulan un punto base desplazado con Level.desfase_base (pies).
+    desfase_base = 0.0
+    _interna = 0.0
+
+    @property
+    def ProjectElevation(self):
+        return self._interna
+
+    @property
+    def Elevation(self):
+        return self._interna + Level.desfase_base
+
+    @Elevation.setter
+    def Elevation(self, valor):
+        self._interna = float(valor) - Level.desfase_base
 
     @staticmethod
     def Create(doc, elevacion):
         nivel = Level()
-        nivel.Elevation = float(elevacion)
+        nivel._interna = float(elevacion)
         nivel.bic = BuiltInCategory.OST_Levels
         nivel.Category = Category("Niveles", BuiltInCategory.OST_Levels, CategoryType.Annotation)
         doc.agregar(nivel)
