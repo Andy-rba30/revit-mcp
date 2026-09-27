@@ -98,3 +98,23 @@ Pendiente tras la validación de la 0.3.0 (27/09/2026): `Grid.Create` (la herram
 | propiedad | `ViewPlan.GenLevel` para elegir la planta del nivel | 2011 | `/import_civil/` (vista de colocación) | verificado (0.3.0 en Revit 2027 es, `/view_extents/` level) |
 | formato | LandXML: `<Units><Metric linearUnit>` y `<P>` en orden norte-este-cota (Y X Z) | LandXML 1.2 | `/import_civil/` (`macros.leer_landxml`) | por verificar con un archivo real de Civil 3D |
 | propiedad | `Level.ProjectElevation` (origen interno; `Level.Elevation` es la mostrada según la Base de elevación del tipo) | 2014 | `utils.elevacion_interna`: `/create_level/`, `/grid_levels/`, `/list_levels/`, pilares, zapatas, vigas y MEP | verificado (0.3.2 en Revit 2027 es: 99000 interno / 117450 mostrado; `/list_levels/` Zapata B.O -4600 / 13850) |
+
+## Consolidación (0.4.0): lotes, macros propias y rendimiento
+
+Todo lo de esta entrega está probado en CPython contra el `pyrevit` simulado; ninguna prueba se ha ejecutado aún en un
+Revit real. `pruebas/probar_revit.py --fase cons` cubre `/set_parameters/`, `/create_elements/` (simulado), `/macros/`,
+`/macros/run/`, `/snapshot/` con `timings` y el nombre retirado en el puente.
+
+| Tipo | Miembro | Versión mínima | Ruta que lo usa | Estado |
+|---|---|---|---|---|
+| método | `Ceiling.Create(Document, IList<CurveLoop>, ElementId tipo, ElementId nivel)` + clase `CeilingType` | 2022 | `/create_elements/` y `/create_surface/` (kind `ceiling`; reserva: suelo como en 0.3.x) | por verificar |
+| enumeración | `BuiltInParameter.CEILING_HEIGHTABOVELEVEL_PARAM` (desfase del techo) | 2011 | `building.crear_superficie` (techo con `offset`) | por verificar |
+| método | `ElementTransformUtils.CopyElement` repetido con `vector * i` en una transacción | 2012 | `/transform_elements/` (`operation=array`) | por verificar |
+| método | `Element.GetOrderedParameters()` en cada elemento de la instantánea (antes `Parameters`) | 2015 | `/snapshot/` (`instantaneas._parametros_de`) | verificado en `/element_properties/`; por verificar el tiempo en 2746 elementos |
+| método | `Element.get_BoundingBox(None)` solo con `include_bbox` | 2011 | `/snapshot/` | verificado (0.3.0); por verificar el ahorro con `include_bbox=false` |
+| módulo | `threading.Thread` + `System.IO.File.Copy` desde un hilo que no es el de Revit (solo E/S de archivos) | IronPython 2.7 | `escritura.CopiaDiferida` (todas las escrituras salvo `RUTAS_COPIA_SINCRONA`) | por verificar (`copia.ms` y `copia.espera_ms` en la respuesta) |
+| módulo | `imp.load_source(nombre, ruta)` para cargar `macro.py` y recargarlo al cambiar el `mtime` | IronPython 2.7 | `/macros/run/` (`macros_usuario.cargar_modulo`) | por verificar (en CPython 3.12+ se usa `importlib.util`) |
+| propiedad | `ViewSheet.SheetNumber` asignada dos veces (número temporal y definitivo) para evitar duplicados | 2013 | macro de ejemplo `numerar_planos` | por verificar |
+| argumento | `uidoc` inyectado por Routes en `/macros/run/` (`run(doc, uidoc, args, api)`) | pyRevit 4.8 | `/macros/run/` | por verificar (las macros de ejemplo no lo usan) |
+| parámetro | `BuiltInParameter.VIEWER_SHEET_NUMBER` como `fields` de `/query/` sobre `OST_Views` (`---` = sin plano) | 2011 | herramienta `list_views(on_sheet=...)` | por verificar |
+| método | `Category.Id` comparado con `int(BuiltInCategory)` para resolver `OST_...` en `/list_category_parameters/` | 2011 | herramienta `list_types(with_parameters=true)` | por verificar |
