@@ -506,3 +506,19 @@ def test_view_extents_3d_y_errores(api, doc):
     assert _post(api, "/view_extents/", doc, {"view_id": 10}).status == 400
     assert _post(api, "/view_extents/", doc, {"view_name": u"No existe"}).status == 404
     assert _post(api, "/view_extents/", doc, {}).status == 400
+
+
+def test_warnings_group_by_sugerencias_por_guid(api, doc):
+    """0.3.1: los fallos sin miembro en BuiltInFailures se reconocen por el GUID visto en Revit 2027."""
+    import modelo_falso as mf
+    import navegacion
+    guid = "4D5FEA31-BA0D-45D0-B439-7008C39A42B7"  # barandilla no continua (mayusculas: se compara en minusculas)
+    doc.avisos.append(mf.Aviso(u"El barandal no es continuo.", [77], definicion=DB.FailureDefinitionId(guid)))
+    navegacion._tabla_sugerencias = None
+    respuesta = _get(api, "/warnings/", doc, {"group_by": "description"})
+    assert respuesta.status == 200, respuesta.data
+    grupo = [g for g in respuesta.data["groups"] if g["element_ids"] == [77]][0]
+    assert grupo["failure"] == u"Barandilla.NoContinua" and "transicion" in grupo["sugerencia"]
+    assert grupo["failure_definition_guid"] == guid.lower()
+    assert len(navegacion.SUGERENCIAS_POR_GUID) == 9
+    assert len(set(g.lower() for g, _, _ in navegacion.SUGERENCIAS_POR_GUID)) == 9

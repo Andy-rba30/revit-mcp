@@ -126,6 +126,31 @@ SUGERENCIAS_FALLOS = (
     ("AreaFailures", "AreaNotEnclosed",
      u"Area sin recinto cerrado: cierra el contorno con lineas de area."),
 )
+# Fallos que en la validacion de la 0.3.0 (Revit 2027 en espanol) salieron con
+# `failure: null` porque su miembro de BuiltInFailures no esta en la tabla de
+# arriba. Se identifican por el GUID del FailureDefinitionId, que es el mismo en
+# todos los idiomas y versiones. El nombre es descriptivo (no es un miembro de
+# la API). Los de BuiltInFailures tienen prioridad si coinciden.
+SUGERENCIAS_POR_GUID = (
+    ("ec905b6a-064b-48e1-a6c7-51e2cf092490", u"Inexacto.LineaDeBoceto",
+     u"Linea de boceto ligeramente fuera de eje: edita el boceto del elemento y ajusta sus vertices a coordenadas redondas."),
+    ("4d5fea31-ba0d-45d0-b439-7008c39a42b7", u"Barandilla.NoContinua",
+     u"Barandilla no continua en una transicion con angulo agudo: cambia el estilo de transicion en el tipo de barandilla o corrige el camino."),
+    ("057af793-26e5-4556-bc69-91d67e8a6fd2", u"Escalera.ExtremoSuperior",
+     u"El tramo no llega (o se pasa) de la elevacion superior de la escalera: ajusta el parametro Altura superior relativa del tramo o anade/quita peldanos."),
+    ("e79a1d64-a28f-4abe-9a89-3963be321f97", u"Escalera.ExtremoInferior",
+     u"El tramo no llega (o se pasa) de la elevacion de base de la escalera: ajusta Altura de base relativa del tramo o anade/quita peldanos."),
+    ("3cb50fb0-840c-4ea9-b06f-e2c1ab524da8", u"Escalera.ComponentesNoConectados",
+     u"Tramos y descansillos de la escalera no conectados: edita la escalera y une los extremos de los componentes."),
+    ("5e59fb09-9f8e-4600-89c8-c524dc481196", u"Escalera.ContrahuellaMayorQueMaxima",
+     u"Contrahuella real mayor que la maxima del tipo: anade peldanos al tramo o sube la altura maxima de contrahuella en el tipo."),
+    ("18fc24c5-afa3-4b15-aefc-021f02f92695", u"Muro.EnlazadoSinTocarDestino",
+     u"Muro enlazado que no toca su destino: revisa la restriccion superior/base o vuelve a enlazarlo al suelo o cubierta correcto."),
+    ("eb89b4da-b7f6-4097-971b-12c0c946eda9", u"Muro.TelarNoCreado",
+     u"No se pudo crear el telar al cortar un muro unido por esquina: revisa la union de esquina (join_geometry) o el ajuste de telares del tipo de muro."),
+    ("f58a5ef5-e976-44fe-90ea-14765df8904a", u"Suelo.GrosorInexactoPorFormaEditada",
+     u"Suelo con edicion de forma extrema: el grosor mostrado puede no coincidir en secciones; reduce la deformacion o restablece la forma."),
+)
 SUGERENCIA_GENERICA = u"Sin sugerencia especifica para este tipo: revisa los elementos listados en Revit."
 _tabla_sugerencias = None
 
@@ -1239,6 +1264,8 @@ def tabla_sugerencias():
     if _tabla_sugerencias is not None:
         return _tabla_sugerencias
     tabla = {}
+    for guid, nombre, sugerencia in SUGERENCIAS_POR_GUID:
+        tabla[guid.lower()] = (nombre, sugerencia)
     grupos = getattr(DB, "BuiltInFailures", None)
     for grupo, nombre, sugerencia in SUGERENCIAS_FALLOS:
         try:

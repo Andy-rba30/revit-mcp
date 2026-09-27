@@ -103,3 +103,19 @@ Y debajo:
   confirmar que se conservan las tildes.
 - **Fallos `failure: null`** del paso 12 con su `descripcion` y `failure_definition_guid`.
 - Versión de Revit e idioma, y el resultado total de `probar_revit.py --fase 2a` (`N/13`).
+
+---
+
+## Resultado de la validación (Revit 2027 en español, Modelo_Copia, 27/09/2026)
+
+- `probar_revit.py --fase 2a`: 13/13.
+- Correctos: `find_elements`, `describe_element`, `dependency_graph`, `query_elements` (nativo por longitud, en Python
+  por comentarios vacíos, por nivel con 404 controlado, por vista, `op` inválido → 400), `list_warnings(group_by)`,
+  `schedule_to_json`, `get_view_extents` (planta NPT +30.40), `snapshot_model` (2746 elementos, 8,2 s; 409 al repetir;
+  400 con una ruta como nombre), `diff_snapshots` (detecta `Comentarios` antes/después), `create_sheet_set`
+  (plano MCP-01 con dos vistas) e `import_from_civil` con CSV P,N,E,Z (categoría `Sólido topográfico`).
+- Fallo: `create_grid_and_levels` desde MCP rechazaba `x_names="V1"` (el esquema de la herramienta exigía lista;
+  la ruta y el contrato aceptan el prefijo). Corregido en 0.3.1. `Grid.Create` sigue sin verificar en Revit.
+- Sin probar: DWG en `import_from_civil` (no había archivo) y `create_sheet_set` con una vista ya colocada.
+- 9 tipos de advertencia salieron con `failure: null`; sus GUID están ahora en `navegacion.SUGERENCIAS_POR_GUID`.
+- Rendimiento a vigilar: el snapshot bloquea Revit 8 s en un modelo de 2746 elementos.

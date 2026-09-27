@@ -15,8 +15,8 @@ def register_macro_tools(mcp, revit_get, revit_post, revit_image=None):
     async def create_grid_and_levels(
         x_spacings_mm: list[float] = None,
         y_spacings_mm: list[float] = None,
-        x_names: list[str] = None,
-        y_names: list[str] = None,
+        x_names: str | list[str] = None,
+        y_names: str | list[str] = None,
         levels: list[dict] = None,
         origin_mm: dict = None,
         extension_mm: float = 2000,
