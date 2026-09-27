@@ -69,6 +69,10 @@ Estados: `verificado` (ejecutado en Revit 2027 en español, 0.2.2), `no existe`,
 | módulo | `hashlib.md5` (biblioteca de IronPython 2.7; reserva `zlib.crc32`) | IronPython 2.7 | `/snapshot/` (hash de parámetros) | por verificar |
 | expresión | `int(BuiltInCategory)` comparado con `get_element_id_value(Category.Id)` | 2011 | `/snapshot/` (niveles y rejillas por defecto) | por verificar (`placement._necesita_muro` ya usa `int(bic)`) |
 | método | `FilteredElementCollector(doc).WhereElementIsNotElementType()` sin más filtros (recorrido completo) | 2011 | `/snapshot/` por defecto, `/query/` sin criterios nativos | verificado (`/model_statistics/`) |
+| constructor | `ElementId(BuiltInParameter)` para `ParameterValueProvider` | 2011 | `/query/` (`navegacion.regla_nativa`) | por verificar |
+| propiedad | `Solid.Volume`, `Solid.SurfaceArea`, `Solid.ComputeCentroid()` | 2011 | `/describe/` (`include_geometry`) | por verificar |
+| propiedad | `Document.Phases` (`PhaseArray`) | 2011 | `/query/` (`phase` por nombre) | por verificar |
+| método | `TableView.GetCellText(SectionType.Header, 0, 0)` (título de la tabla) | 2013 | `/schedule/` | por verificar (`SectionType.Body` también) |
 
 ## Entrega 2a (0.3.0): Bloque D, macros de proyecto
 
@@ -82,6 +86,9 @@ Estados: `verificado` (ejecutado en Revit 2027 en español, 0.2.2), `no existe`,
 | método | `ScheduleSheetInstance.Create(Document, ElementId, ElementId, XYZ)`, `ScheduleSheetInstance.ScheduleId`, `.OwnerViewId` | 2014 | `/sheet_set/` (tablas) | por verificar |
 | método | `Element.get_BoundingBox(ViewSheet)` del cajetín para centrar la vista | 2011 | `/sheet_set/` (`position_mm` omitido) | por verificar |
 | método | `Document.Link(string, DWGImportOptions, View, out ElementId)` | 2011 | `/import_civil/` (`interop.vincular_cad`), `/link_file/` | por verificar |
+| método | `Document.Link(string, DGNImportOptions, View, out ElementId)` (`.dgn`; la sobrecarga DWG no lo admite) | 2011 | `/import_civil/`, `/link_file/` con `.dgn` | por verificar |
+| método | `Document.Regenerate()` antes de `AcquireCoordinates` sobre el vínculo recién creado | 2011 | `/import_civil/` (`use_shared_coordinates`) | por verificar |
+| propiedad | `BasePoint.Pinned`, `BasePoint.Clipped` (409 si el punto base está fijado o recortado) | 2011 | `/import_civil/` (`coordenadas.comprobar_puntos_base_libres`), `/set_project_location/` | por verificar |
 | propiedad | `DWGImportOptions.Placement` = `ImportPlacement.Origin` / `Centered` / `Shared` / `Site` | 2011 | `/import_civil/` (`placement`), `/link_file/` | por verificar |
 | método | `Document.AcquireCoordinates(ElementId)` sobre un `ImportInstance` (DWG vinculado) | 2018 | `/import_civil/` (`use_shared_coordinates`) | por verificar (el caso RVT ya estaba pendiente) |
 | propiedad | `ProjectLocation.GetProjectPosition(XYZ)` → `EastWest`, `NorthSouth`, `Elevation`, `Angle` | 2011 | `/import_civil/` (409 si ya hay coordenadas compartidas) | por verificar |

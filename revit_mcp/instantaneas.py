@@ -82,13 +82,18 @@ def nombre_limpio(name):
 
 
 def ruta_snapshot(doc, name):
-    """Ruta del .json de la instantanea: `name` es un nombre o una ruta completa."""
+    """Ruta del .json de la instantanea, siempre dentro de carpeta_snapshots(doc).
+
+    `name` es un nombre, no una ruta: con separadores o ruta absoluta se rechaza
+    (400) para que /snapshot/ y /diff_snapshots/ no escriban ni lean archivos
+    arbitrarios."""
     texto = _texto_seguro(name).strip()
     if not texto:
         raise EscrituraRechazada("name is required", 400)
-    es_ruta = os.path.isabs(texto) or os.sep in texto or "/" in texto or "\\" in texto
-    if es_ruta:
-        return texto if texto.lower().endswith(".json") else texto + ".json"
+    if os.path.isabs(texto) or os.sep in texto or "/" in texto or "\\" in texto:
+        raise EscrituraRechazada(
+            u"name must be a snapshot name, not a path (snapshots are stored in {})".format(carpeta_snapshots(doc)), 400,
+        )
     if texto.lower().endswith(".json"):
         texto = texto[:-5]
     return os.path.join(carpeta_snapshots(doc), nombre_limpio(texto) + ".json")

@@ -810,6 +810,8 @@ class Viewport(Element):
         vista = doc.GetElement(vista_id)
         if vista is None or isinstance(vista, ViewSchedule) or getattr(vista, "IsTemplate", False):
             return False
+        if getattr(vista, "ViewType", None) is ViewType.Legend:
+            return True  # como en Revit: una leyenda puede estar en varios planos
         for elemento in doc.elementos.values():
             if isinstance(elemento, Viewport) and elemento.ViewId == vista_id:
                 return False
@@ -918,6 +920,12 @@ class Options(object):
 
 
 class DWGImportOptions(object):
+    def __init__(self):
+        self.Placement = ImportPlacement.Origin
+        self.ThisViewOnly = False
+
+
+class DGNImportOptions(object):
     def __init__(self):
         self.Placement = ImportPlacement.Origin
         self.ThisViewOnly = False

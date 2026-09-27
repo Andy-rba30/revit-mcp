@@ -403,3 +403,72 @@ def test_create_toposolid_y_link_file_siguen_creando(api, doc, tmp_path):
     r = _post(api, "/link_file/", doc, {"file_path": ruta, "mode": "link"})
     assert r.status == 200 and r.data["ok"] is True and r.data["mode"] == "link"
     assert doc.vinculados[0].placement is DB.ImportPlacement.Origin
+
+
+# ---------------------------------------------------------------------------
+# Correcciones de la revision de la 2a
+# ---------------------------------------------------------------------------
+def test_opciones_cad_dgn_usa_dgnimportoptions():
+    """Document.Link con DWGImportOptions no admite .dgn: hace falta DGNImportOptions."""
+    from interop import opciones_cad
+    opciones = opciones_cad(".dgn", "center")
+    assert isinstance(opciones, DB.DGNImportOptions) and opciones.Placement is DB.ImportPlacement.Centered
+    assert isinstance(opciones_cad(".dwg", "origin"), DB.DWGImportOptions)
+    assert isinstance(opciones_cad(".dxf"), DB.DWGImportOptions)
+
+
+def test_import_civil_dwg_409_si_un_punto_base_esta_fijado(api, doc, tmp_path, monkeypatch):
+    """Misma proteccion que set_project_location: adquirir coordenadas mueve los puntos base."""
+    import macros
+
+    class _Punto(object):
+        Pinned = True
+        Clipped = False
+
+    monkeypatch.setattr(macros, "puntos_base", lambda d: [("survey point", _Punto())])
+    ruta = _archivo(tmp_path, "topografia.dwg", u"dwg")
+    cuerpo = {"file_path": ruta, "level": u"Nivel 1", "use_shared_coordinates": True}
+    r = _post(api, "/import_civil/", doc, dict(cuerpo, simular=True))
+    assert r.status == 409 and r.data["pinned"] is True and r.data["clipped"] is False
+    assert "survey point is pinned" in r.data["error"] and doc.vinculados == [] and DB.Transaction.creadas == []
+    # sin adquirir coordenadas el punto base no importa
+    assert _post(api, "/import_civil/", doc, {"file_path": ruta, "level": u"Nivel 1"}).status == 200
+    # con forzar se adquiere igualmente y se regenera antes
+    r = _post(api, "/import_civil/", doc, dict(cuerpo, forzar=True))
+    assert r.status == 200 and doc.coordenadas_adquiridas == [r.data["link_id"]] and doc.regeneraciones >= 1
+
+
+def test_comprobar_puntos_base_libres():
+    from coordenadas import comprobar_puntos_base_libres
+    from escritura import EscrituraRechazada
+
+    class _Punto(object):
+        def __init__(self, pinned, clipped):
+            self.Pinned, self.Clipped = pinned, clipped
+
+    comprobar_puntos_base_libres([("project base point", _Punto(False, False)), ("survey point", None)])
+    with pytest.raises(EscrituraRechazada) as info:
+        comprobar_puntos_base_libres([("project base point", _Punto(True, True))])
+    assert info.value.status == 409 and "pinned and clipped" in str(info.value)
+
+
+def test_sheet_set_una_leyenda_puede_ir_en_varios_planos(api, doc):
+    leyenda = mf.VistaPlanta(doc, 105, u"Leyenda general")
+    leyenda.ViewType = DB.ViewType.Legend
+    viewport = DB.Viewport()
+    viewport.ViewId = DB.ElementId(105)
+    viewport.SheetId = DB.ElementId(500)
+    doc.agregar(viewport)
+    cuerpo = {"sheets": [
+        {"number": "E-101", "views": [u"Leyenda general", u"Planta Nivel 1"]},
+        {"number": "E-102", "views": [u"Leyenda general", u"Planta Nivel 1"]},
+    ]}
+    r = _post(api, "/sheet_set/", doc, dict(cuerpo, simular=True))
+    assert r.status == 200, r.data
+    plan = r.data["plan"]
+    assert [v["view"] for v in plan["sheets"][0]["views"]] == [u"Leyenda general", u"Planta Nivel 1"]
+    assert [v["view"] for v in plan["sheets"][1]["views"]] == [u"Leyenda general"]
+    assert [s["view"] for s in plan["sheets"][1]["skipped"]] == [u"Planta Nivel 1"]
+    r = _post(api, "/sheet_set/", doc, cuerpo)
+    assert r.status == 200, r.data
+    assert [v["view"] for v in r.data["sheets"][1]["views_placed"]] == [u"Leyenda general"]

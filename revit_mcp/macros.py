@@ -37,7 +37,7 @@ from topografia import (
     MAX_PUNTOS, FACTOR_A_MM,
 )
 from interop import vincular_cad, PLACEMENTS
-from coordenadas import ubicacion_proyecto
+from coordenadas import ubicacion_proyecto, puntos_base, comprobar_puntos_base_libres
 from pyrevit import routes, revit, DB
 import io
 import os
@@ -363,11 +363,17 @@ def planificar_planos(doc, data):
             if isinstance(vista, DB.ViewSheet):
                 saltadas.append({"view": nombre_vista, "view_id": vista_id, "reason": u"es un plano, no se puede colocar en otro plano"})
                 continue
-            if vista_id in colocadas:
+            # Una leyenda puede estar en varios planos; el resto de vistas solo en uno.
+            es_leyenda = False
+            try:
+                es_leyenda = vista.ViewType == DB.ViewType.Legend
+            except Exception:
+                pass
+            if vista_id in colocadas and not es_leyenda:
                 saltadas.append({"view": nombre_vista, "view_id": vista_id,
                                  "reason": u"ya esta en el plano {}".format(colocadas[vista_id])})
                 continue
-            if vista_id in vistas_pedidas:
+            if vista_id in vistas_pedidas and not es_leyenda:
                 saltadas.append({"view": nombre_vista, "view_id": vista_id, "reason": u"ya se coloca en otro plano de esta misma peticion"})
                 continue
             vistas_pedidas.add(vista_id)
@@ -741,6 +747,10 @@ def register_macros_routes(api):
                     u"No floor plan view for level '{}' and no active view to place the link".format(level_name), 400,
                 )
             antes = ubicacion_proyecto(doc) if use_shared else None
+            if use_shared and not es_forzado(data):
+                # Mismas protecciones que set_project_location: adquirir coordenadas
+                # mueve los puntos base; 409 si alguno esta fijado o recortado.
+                comprobar_puntos_base_libres(puntos_base(doc))
             if use_shared and _coordenadas_ya_definidas(doc) and not es_forzado(data):
                 raise EscrituraRechazada(
                     "The project already has shared coordinates (project position is not zero); acquiring them "
@@ -765,6 +775,12 @@ def register_macros_routes(api):
                 if desfase is not None:
                     DB.ElementTransformUtils.MoveElement(doc, make_element_id(link_id), desfase)
                 if use_shared:
+                    # El ImportInstance se acaba de crear (y mover) en esta misma
+                    # transaccion: regenerar para que su posicion este resuelta.
+                    try:
+                        doc.Regenerate()
+                    except Exception:
+                        pass
                     doc.AcquireCoordinates(make_element_id(link_id))
             resultado = resultado_creacion(doc, [link_id])
             resultado["link_id"] = link_id

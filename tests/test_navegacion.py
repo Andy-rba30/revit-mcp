@@ -462,7 +462,7 @@ def test_schedule_to_json_por_nombre_y_por_id(api, doc):
     assert datos["schedule"] == {"id": 300, "name": u"Tabla de muros", "title": u"Tabla de muros"}
     assert datos["headers"] == [u"Familia y tipo", u"Longitud", u"Marca"] and datos["headers_from"] == "body row 0"
     assert datos["rows"] == [[u"Genérico - 200 mm", u"5000", u"M-1"], [u"Genérico - 200 mm", u"3000", u"M-2"]]
-    assert datos["row_count"] == 2 and datos["total_rows"] == 3 and datos["truncated"] is False
+    assert datos["row_count"] == 2 and datos["total_rows"] == 2 and datos["truncated"] is False
     assert [c["name"] for c in datos["fields"]] == [u"Familia y tipo", u"Longitud", u"Marca"]
     assert _post(api, "/schedule/", doc, {"view_id": 300}).data["rows"] == datos["rows"]
 

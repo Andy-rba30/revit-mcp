@@ -202,3 +202,15 @@ def test_diff_avisa_si_las_categorias_no_coinciden(api, doc):
     assert respuesta.status == 200
     assert respuesta.data["counts"]["removed"] == 3
     assert "categorias" in respuesta.data["warning"]
+
+
+def test_snapshot_name_no_puede_ser_una_ruta(api, doc, tmp_path):
+    """0.3.0: `name` es un nombre; con separadores o ruta absoluta se rechaza (400) y no se escribe nada."""
+    fuera = str(tmp_path / "fuera.json")
+    for nombre in (fuera, u"../fuera", u"sub\\fuera", u"sub/fuera"):
+        r = _post(api, "/snapshot/", doc, {"name": nombre})
+        assert r.status == 400 and "not a path" in r.data["error"], (nombre, r.data)
+        r = _post(api, "/diff_snapshots/", doc, {"a": nombre})
+        assert r.status == 400, (nombre, r.data)
+    assert not os.path.exists(fuera)
+    assert not os.path.isdir(os.path.join(os.path.dirname(doc.PathName), "snapshots"))

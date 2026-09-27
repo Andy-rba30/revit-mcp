@@ -1405,7 +1405,8 @@ def tabla_a_json(doc, tabla, start_row=0, max_rows=FILAS_DEFECTO):
         "headers_from": origen_encabezados,
         "rows": filas,
         "row_count": len(filas),
-        "total_rows": total_filas,
+        # Filas de datos: la fila 0 del cuerpo es de encabezados cuando ShowHeaders esta activo
+        "total_rows": total_filas - 1 if (mostrar_encabezados and total_filas > 0) else total_filas,
         "columns": columnas,
         "start_row": start_row,
         "truncated": fin < total_filas,

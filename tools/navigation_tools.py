@@ -231,7 +231,7 @@ def register_navigation_tools(mcp, revit_get, revit_post, revit_image=None):
         it is now.
 
         Args:
-            a: Older snapshot name (or full path of its .json)
+            a: Older snapshot name (a name, not a path; snapshots live in <rvt folder>\\snapshots\\)
             b: Newer snapshot name; omitted = the live model
             max_items: Maximum entries per list (default 500)
             ctx: MCP context for logging

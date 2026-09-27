@@ -31,7 +31,9 @@ def opciones_cad(file_ext, placement="origin"):
         return DB.SATImportOptions()
     if file_ext == ".skp":
         return DB.SKPImportOptions()
-    options = DB.DWGImportOptions()
+    # Document.Link(string, DWGImportOptions, ...) solo admite DWG/DXF; un .dgn
+    # necesita la sobrecarga con DGNImportOptions (Placement es de BaseImportOptions).
+    options = DB.DGNImportOptions() if file_ext == ".dgn" else DB.DWGImportOptions()
     nombre = PLACEMENTS.get((placement or "origin").lower(), "Origin")
     try:
         options.Placement = getattr(DB.ImportPlacement, nombre)
