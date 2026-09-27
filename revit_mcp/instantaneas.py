@@ -19,13 +19,21 @@ configurable y la respuesta avisa si se trunca.
 diff_snapshots compara dos instantaneas por UniqueId: `added`, `removed` y
 `modified` (parametros que cambiaron, cambios de tipo o nivel y movimientos
 de la caja envolvente de mas de 1 mm).
+
+0.4.0, rendimiento medible: en la validacion de 0.3.1 la instantanea tardo
+8,2 s con 2746 elementos bloqueando Revit. Ahora `timings` desglosa los ms
+por etapa (recoleccion, descripcion, bbox, parametros, hash, escritura),
+`include_bbox=false` evita get_BoundingBox, los parametros se leen una vez
+con GetOrderedParameters() y se hashea la cadena concatenada, y los nombres
+de tipo, nivel y de los elementos referenciados por ElementId se cachean por
+id en vez de pedirselos a Revit por cada parametro de cada elemento.
 """
 
 from utils import get_element_name, get_element_id_value, buscar_por_nombre
 from seguridad import requiere_token
 from escritura import (
     describir_elemento, carpeta_log, EscrituraRechazada, titulo_documento, ruta_documento,
-    _iso, _ahora, _a_texto,
+    bbox_mm, nombre_categoria, _iso, _ahora, _a_texto,
 )
 from parameters import factor_a_interno
 from clash import _resolve_bic
@@ -120,7 +128,66 @@ def _hash(texto):
     return "crc32:{:08x}".format(zlib.crc32(datos) & 0xffffffff)
 
 
-def _valor_serializable(param, doc):
+class CacheNombres(object):
+    """Nombres de tipo, nivel y elementos referenciados, por id (una lectura por id y no por parametro)."""
+
+    def __init__(self, doc):
+        self.doc = doc
+        self._nombres = {}      # id -> nombre del elemento (tipos, niveles, referencias)
+        self._niveles = {}      # id de elemento -> nombre de su nivel (via LevelId o parametro)
+        self.consultas = 0
+
+    def nombre_por_id(self, eid):
+        if _es_invalido(eid):
+            return None
+        try:
+            clave = get_element_id_value(eid)
+        except Exception:
+            return None
+        if clave not in self._nombres:
+            self.consultas += 1
+            try:
+                elem = self.doc.GetElement(eid)
+                self._nombres[clave] = get_element_name(elem) if elem is not None else clave
+            except Exception:
+                self._nombres[clave] = clave
+        return self._nombres[clave]
+
+    def tipo(self, elem):
+        try:
+            tipo_id = elem.GetTypeId()
+        except Exception:
+            tipo_id = None
+        if _es_invalido(tipo_id):
+            try:
+                return get_element_name(elem)
+            except Exception:
+                return None
+        return self.nombre_por_id(tipo_id)
+
+    def nivel(self, elem):
+        nivel_id = None
+        try:
+            nivel_id = elem.LevelId
+        except Exception:
+            nivel_id = None
+        if _es_invalido(nivel_id):
+            for bip in ("FAMILY_LEVEL_PARAM", "LEVEL_PARAM", "SCHEDULE_LEVEL_PARAM", "FAMILY_BASE_LEVEL_PARAM"):
+                try:
+                    parametro = elem.get_Parameter(getattr(DB.BuiltInParameter, bip))
+                    if parametro:
+                        candidato = parametro.AsElementId()
+                        if not _es_invalido(candidato):
+                            nivel_id = candidato
+                            break
+                except Exception:
+                    continue
+        if _es_invalido(nivel_id):
+            return None
+        return self.nombre_por_id(nivel_id)
+
+
+def _valor_serializable(param, doc, cache=None):
     """Valor comparable: Double en unidades del contrato (3 decimales), Integer,
     String o el nombre del elemento referenciado por un ElementId."""
     try:
@@ -139,6 +206,8 @@ def _valor_serializable(param, doc):
             eid = param.AsElementId()
             if _es_invalido(eid):
                 return None
+            if cache is not None:
+                return cache.nombre_por_id(eid)
             elem = doc.GetElement(eid)
             return get_element_name(elem) if elem is not None else get_element_id_value(eid)
     except Exception:
@@ -146,7 +215,19 @@ def _valor_serializable(param, doc):
     return None
 
 
-def _parametros_elemento(doc, elem, nombres):
+def _parametros_de(elem):
+    """GetOrderedParameters() una sola vez (reserva: Parameters)."""
+    try:
+        return list(elem.GetOrderedParameters())
+    except Exception:
+        pass
+    try:
+        return list(elem.Parameters)
+    except Exception:
+        return []
+
+
+def _parametros_elemento(doc, elem, nombres, cache=None):
     """{nombre visible: valor} de los parametros pedidos o de todos los de ejemplar."""
     valores = {}
     if nombres:
@@ -158,45 +239,60 @@ def _parametros_elemento(doc, elem, nombres):
                 etiqueta = _texto_seguro(param.Definition.Name)
             except Exception:
                 etiqueta = _texto_seguro(nombre)
-            valores[etiqueta] = _valor_serializable(param, doc)
+            valores[etiqueta] = _valor_serializable(param, doc, cache)
         return valores
-    try:
-        iterador = list(elem.Parameters)
-    except Exception:
-        iterador = []
-    for param in iterador:
+    for param in _parametros_de(elem):
         try:
             etiqueta = _texto_seguro(param.Definition.Name)
         except Exception:
             continue
         if etiqueta in valores:
             continue  # Revit repite algunos nombres visibles
-        valores[etiqueta] = _valor_serializable(param, doc)
+        valores[etiqueta] = _valor_serializable(param, doc, cache)
     return valores
 
 
-def firma_elemento(doc, elem, nombres=None, incluir_parametros=True):
-    base = describir_elemento(doc, elem) or {}
-    valores = _parametros_elemento(doc, elem, nombres)
-    texto = u"|".join(
+def _texto_hash(valores):
+    return u"|".join(
         u"{}={}".format(clave, u"<null>" if valores[clave] is None else _texto_seguro(valores[clave]))
         for clave in sorted(valores.keys())
     )
+
+
+def firma_elemento(doc, elem, nombres=None, incluir_parametros=True, incluir_bbox=True, cache=None, timings=None):
+    """Firma de un elemento; con `cache` y `timings` (dict de ms) se usa desde instantanea()."""
+    if cache is None:
+        cache = CacheNombres(doc)
+    t0 = time.time()
+    try:
+        identificador = get_element_id_value(elem)
+    except Exception:
+        identificador = None
     try:
         unique_id = _texto_seguro(elem.UniqueId)
     except Exception:
         unique_id = None
     datos = {
-        "id": base.get("id"),
+        "id": identificador,
         "unique_id": unique_id,
-        "categoria": base.get("categoria"),
-        "tipo": base.get("tipo"),
-        "nivel": base.get("nivel"),
-        "bbox_mm": base.get("bbox_mm"),
-        "hash": _hash(texto),
+        "categoria": nombre_categoria(elem),
+        "tipo": cache.tipo(elem),
+        "nivel": cache.nivel(elem),
     }
+    t1 = time.time()
+    datos["bbox_mm"] = bbox_mm(elem) if incluir_bbox else None
+    t2 = time.time()
+    valores = _parametros_elemento(doc, elem, nombres, cache)
+    t3 = time.time()
+    datos["hash"] = _hash(_texto_hash(valores))
+    t4 = time.time()
     if incluir_parametros:
         datos["params"] = valores
+    if timings is not None:
+        timings["descripcion_ms"] = timings.get("descripcion_ms", 0.0) + (t1 - t0) * 1000
+        timings["bbox_ms"] = timings.get("bbox_ms", 0.0) + (t2 - t1) * 1000
+        timings["parametros_ms"] = timings.get("parametros_ms", 0.0) + (t3 - t2) * 1000
+        timings["hash_ms"] = timings.get("hash_ms", 0.0) + (t4 - t3) * 1000
     return datos
 
 
@@ -260,21 +356,28 @@ def elementos_snapshot(doc, categorias=None):
 
 
 def instantanea(doc, name, categorias=None, parametros=None, incluir_parametros=True,
-                max_elements=MAX_ELEMENTOS_DEFECTO):
-    """Instantanea en memoria (dict listo para guardar en JSON)."""
+                max_elements=MAX_ELEMENTOS_DEFECTO, incluir_bbox=True):
+    """Instantanea en memoria (dict listo para guardar en JSON) con `timings` por etapa (ms)."""
     inicio = time.time()
     elementos, etiquetas = elementos_snapshot(doc, categorias)
     total = len(elementos)
+    timings = {"recoleccion_ms": (time.time() - inicio) * 1000, "descripcion_ms": 0.0, "bbox_ms": 0.0,
+               "parametros_ms": 0.0, "hash_ms": 0.0}
+    cache = CacheNombres(doc)
     firmas = {}
     for elem in elementos[:max_elements]:
         try:
-            firma = firma_elemento(doc, elem, parametros, incluir_parametros)
+            firma = firma_elemento(doc, elem, parametros, incluir_parametros, incluir_bbox, cache, timings)
         except Exception as error:
             logger.debug("Elemento saltado en la instantanea: %s", str(error))
             continue
         if not firma.get("unique_id"):
             continue
         firmas[firma["unique_id"]] = firma
+    timings = dict((clave, int(round(valor))) for clave, valor in timings.items())
+    timings["total_ms"] = int((time.time() - inicio) * 1000)
+    timings["elements"] = len(firmas)
+    timings["name_lookups"] = cache.consultas
     return {
         "version": VERSION_FORMATO,
         "name": name,
@@ -285,12 +388,14 @@ def instantanea(doc, name, categorias=None, parametros=None, incluir_parametros=
         "categories_requested": list(categorias) if categorias else None,
         "parameters": list(parametros) if parametros else None,
         "include_parameters": bool(incluir_parametros),
+        "include_bbox": bool(incluir_bbox),
         "max_elements": max_elements,
         "count": len(firmas),
         "total_elements": total,
         "truncated": total > max_elements,
         "elements": firmas,
-        "ms": int((time.time() - inicio) * 1000),
+        "ms": timings["total_ms"],
+        "timings": timings,
     }
 
 
@@ -451,6 +556,7 @@ def register_instantaneas_routes(api):
             categorias = _lista(data.get("categories"))
             parametros = _lista(data.get("parameters")) or None
             incluir = bool(data.get("include_parameters", True))
+            incluir_bbox = bool(data.get("include_bbox", True))
             max_elements = _entero(data.get("max_elements"), MAX_ELEMENTOS_DEFECTO, minimo=1, maximo=MAX_ELEMENTOS_TOPE)
             overwrite = bool(data.get("overwrite", False))
             if os.path.exists(ruta) and not overwrite:
@@ -459,8 +565,12 @@ def register_instantaneas_routes(api):
                     {"ruta": ruta},
                 )
             etiqueta = os.path.splitext(os.path.basename(ruta))[0]
-            datos = instantanea(doc, etiqueta, categorias, parametros, incluir, max_elements)
+            datos = instantanea(doc, etiqueta, categorias, parametros, incluir, max_elements, incluir_bbox)
+            inicio_escritura = time.time()
             guardar_snapshot(datos, ruta, overwrite)
+            datos["timings"]["escritura_ms"] = int((time.time() - inicio_escritura) * 1000)
+            datos["timings"]["total_ms"] += datos["timings"]["escritura_ms"]
+            datos["ms"] = datos["timings"]["total_ms"]
             respuesta = dict((clave, valor) for clave, valor in datos.items() if clave != "elements")
             respuesta["ruta"] = ruta
             respuesta["status"] = "success"
@@ -491,6 +601,7 @@ def register_instantaneas_routes(api):
                 datos_b = instantanea(
                     doc, "actual", datos_a.get("categories_requested"), datos_a.get("parameters"),
                     datos_a.get("include_parameters", True), datos_a.get("max_elements") or MAX_ELEMENTOS_DEFECTO,
+                    datos_a.get("include_bbox", True),
                 )
                 ruta_b = None
             else:

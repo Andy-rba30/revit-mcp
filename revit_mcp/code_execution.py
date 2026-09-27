@@ -25,7 +25,7 @@ from utils import suppress_warnings, get_element_id_value, make_element_id, busc
 from seguridad import requiere_token
 from escritura import (
     ejecutar, simulacion, EscrituraRechazada, es_forzado, nombre_transaccion,
-    describir_elemento,
+    describir_elemento, esperar_copia_pendiente,
 )
 import json
 import logging
@@ -361,6 +361,8 @@ def register_code_execution_routes(api):
                 captured_output.close()
 
                 if t is not None:
+                    # 0.4.0: la copia del .rvt corre en un hilo; nunca se confirma sin ella
+                    esperar_copia_pendiente()
                     estado = t.Commit()
                     if estado != DB.TransactionStatus.Committed:
                         raise RuntimeError(

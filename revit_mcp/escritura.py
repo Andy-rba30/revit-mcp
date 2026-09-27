@@ -4,7 +4,7 @@ Escritura segura para las rutas de Revit MCP (IronPython 2.7, dentro de Revit).
 
 Toda ruta que modifica el modelo pasa por tres funciones de este modulo:
 
-  preparar(doc, nombre_ruta)
+  preparar(doc, nombre_ruta, diferida=False)
       Comprueba el estado del documento (409 si hay una transaccion abierta de
       otra operacion o el documento es de solo lectura) y, si el modelo esta
       guardado en disco y NO es de trabajo compartido, copia el .rvt a
@@ -12,6 +12,14 @@ Toda ruta que modifica el modelo pasa por tres funciones de este modulo:
       ultimas 10 copias y no repite la copia si ya hay una de hace menos de
       30 minutos). La copia refleja el ULTIMO GUARDADO en disco, no el estado
       en memoria; el documento nunca se guarda desde aqui.
+
+      0.4.0, copia diferida: con diferida=True (lo que hace `ejecutar` salvo en
+      RUTAS_COPIA_SINCRONA) el .rvt se copia en un hilo aparte
+      (System.IO.File.Copy) mientras el manejador valida, y `transaccion`
+      espera a que termine justo antes de Commit. La garantia no cambia: nunca
+      se confirma una escritura sin la copia terminada. La respuesta dice
+      `copia.ms` (lo que tardo la copia) y `copia.espera_ms` (lo que espero la
+      transaccion).
 
   registrar(doc, ruta, args, ok, ms, error, resultado_resumen)
       Escribe una linea JSON en <carpeta del rvt>\\mcp_log.jsonl (o en
@@ -42,6 +50,7 @@ import logging
 import os
 import re
 import shutil
+import threading
 import time
 import traceback
 
@@ -69,6 +78,12 @@ CARPETA_COPIAS = "backups"
 LIMITE_ELEMENTOS = 200
 FEET_TO_MM = 304.8
 MM_TO_FEET = 1.0 / 304.8
+# 0.4.0: la copia del .rvt se hace en un hilo aparte y se espera antes de Commit.
+# Estas rutas escriben sin escritura.transaccion (LoadFamily y SaveAs abren la
+# suya; set_active_view no abre ninguna), asi que para ellas la copia sigue
+# siendo sincrona antes de ejecutar el cuerpo.
+COPIA_DIFERIDA = True
+RUTAS_COPIA_SINCRONA = ("/load_family/", "/save_document/", "/set_active_view/")
 
 NOTA_COPIA = (
     u"La copia refleja el ultimo guardado en disco, no el estado en memoria; "
@@ -274,19 +289,18 @@ def _podar_copias(carpeta, base):
             logger.warning(u"No se pudo borrar la copia antigua %s: %s", ruta, error)
 
 
-def crear_copia(doc, sufijo=None, forzar=False):
-    """Copia el .rvt guardado a <carpeta>\\backups\\<nombre>_<marca>[_<sufijo>].rvt.
+def planificar_copia(doc, sufijo=None, forzar=False):
+    """Decide la copia sin tocar el disco mas que para listar backups\\.
 
-    Devuelve un dict con `ruta`, `refleja_guardado_de` (fecha del archivo),
-    `reutilizada` (True si ya habia una copia de hace menos de 30 minutos y no
-    se forzo otra) y `nota`. Devuelve None si el documento no esta guardado en
-    disco o es de trabajo compartido.
-    """
+    Se llama en el hilo de Revit (lee doc.PathName / doc.IsWorkshared). Devuelve
+    (None, None) si no hay copia que hacer (sin guardar o compartido), (dict,
+    None) si se reutiliza una copia reciente, o (dict, (origen, destino, carpeta,
+    base)) con lo que hay que copiar."""
     origen = ruta_documento(doc)
     if not origen or not os.path.isfile(origen):
-        return None
+        return None, None
     if es_compartido(doc):
-        return None
+        return None, None
 
     carpeta = os.path.join(os.path.dirname(origen), CARPETA_COPIAS)
     base = os.path.splitext(os.path.basename(origen))[0]
@@ -303,35 +317,136 @@ def crear_copia(doc, sufijo=None, forzar=False):
                     "refleja_guardado_de": _fecha_archivo(ruta),
                     "reutilizada": True,
                     "nota": NOTA_COPIA,
-                }
+                    "ms": 0,
+                }, None
 
-    if not os.path.isdir(carpeta):
-        os.makedirs(carpeta)
     nombre = u"{}_{}".format(base, ahora.strftime("%Y%m%d_%H%M%S"))
     if sufijo:
         limpio = re.sub(r"[^\w\-]+", "_", _texto(sufijo)).strip("_")
         if limpio:
             nombre = u"{}_{}".format(nombre, limpio)
     destino = os.path.join(carpeta, nombre + u".rvt")
-    _copiar_archivo(origen, destino)
-    _podar_copias(carpeta, base)
-    return {
+    info = {
         "ruta": destino,
         "refleja_guardado_de": _fecha_archivo(origen),
         "reutilizada": False,
         "nota": NOTA_COPIA,
+        "ms": None,
     }
+    return info, (origen, destino, carpeta, base)
+
+
+def _copiar_planificada(trabajo):
+    """Copia el archivo planificado (vale desde otro hilo: solo E/S de archivos)."""
+    origen, destino, carpeta, base = trabajo
+    if not os.path.isdir(carpeta):
+        os.makedirs(carpeta)
+    _copiar_archivo(origen, destino)
+    _podar_copias(carpeta, base)
+
+
+def crear_copia(doc, sufijo=None, forzar=False):
+    """Copia el .rvt guardado a <carpeta>\\backups\\<nombre>_<marca>[_<sufijo>].rvt (sincrono).
+
+    Devuelve un dict con `ruta`, `refleja_guardado_de` (fecha del archivo),
+    `reutilizada` (True si ya habia una copia de hace menos de 30 minutos y no
+    se forzo otra), `nota` y `ms` (lo que tardo la copia). Devuelve None si el
+    documento no esta guardado en disco o es de trabajo compartido.
+    """
+    info, trabajo = planificar_copia(doc, sufijo, forzar)
+    if info is None or trabajo is None:
+        return info
+    inicio = time.time()
+    _copiar_planificada(trabajo)
+    info["ms"] = int((time.time() - inicio) * 1000)
+    return info
+
+
+class CopiaDiferida(object):
+    """Copia del .rvt en un hilo aparte; `esperar()` bloquea hasta que termine.
+
+    El plan (rutas, reutilizacion) se calcula en el hilo de Revit; el hilo solo
+    hace System.IO.File.Copy y la poda de copias viejas. `info` es el dict que
+    va en la respuesta (`copia`) y se completa al terminar: `ms` (duracion de la
+    copia), `espera_ms` (lo que espero quien llamo a esperar), `estado`
+    (terminada | error) y `error` si fallo."""
+
+    def __init__(self, info, trabajo):
+        self.info = info
+        self.trabajo = trabajo
+        self.hilo = None
+        self.error = None
+        self.terminada = trabajo is None
+        self.inicio = None
+        info["diferida"] = True
+        info["espera_ms"] = 0
+        info["estado"] = "terminada" if trabajo is None else "pendiente"
+
+    def iniciar(self):
+        if self.trabajo is None:
+            return self
+        self.inicio = time.time()
+        self.hilo = threading.Thread(target=self._correr)
+        self.hilo.daemon = True
+        self.hilo.start()
+        return self
+
+    def _correr(self):
+        try:
+            _copiar_planificada(self.trabajo)
+        except Exception as error:
+            self.error = error
+        self.info["ms"] = int((time.time() - self.inicio) * 1000)
+        self.terminada = True
+
+    def esperar(self):
+        """Espera a que la copia termine (idempotente) y completa `info`."""
+        if self.hilo is not None and self.hilo.is_alive():
+            inicio = time.time()
+            self.hilo.join()
+            self.info["espera_ms"] = self.info.get("espera_ms", 0) + int((time.time() - inicio) * 1000)
+        if self.error is not None:
+            self.info["estado"] = "error"
+            self.info["error"] = _texto(self.error)
+            self.info["nota"] = u"No se pudo hacer la copia de seguridad: {}".format(self.error)
+        else:
+            self.info["estado"] = "terminada"
+        return self.info
+
+
+# Copia en curso de la peticion actual (Routes atiende una peticion cada vez en
+# el hilo de Revit). transaccion.__exit__ la espera antes de Commit; ejecutar la
+# espera al final y la retira.
+_COPIA_PENDIENTE = None
+
+
+def esperar_copia_pendiente():
+    """Bloquea hasta que termine la copia diferida de la peticion actual, si la hay."""
+    global _COPIA_PENDIENTE
+    pendiente = _COPIA_PENDIENTE
+    if pendiente is None:
+        return None
+    return pendiente.esperar()
+
+
+def _retirar_copia_pendiente():
+    global _COPIA_PENDIENTE
+    pendiente = _COPIA_PENDIENTE
+    _COPIA_PENDIENTE = None
+    return pendiente
 
 
 # ---------------------------------------------------------------------------
 # preparar
 # ---------------------------------------------------------------------------
-def preparar(doc, nombre_ruta):
+def preparar(doc, nombre_ruta, diferida=False):
     """Comprueba el documento y hace la copia. Devuelve el contexto de la escritura.
 
     Lanza EscrituraRechazada(409) si `doc.IsModifiable` es True (hay una
     transaccion abierta de otra operacion) o si `doc.IsReadOnly` es True, y
-    EscrituraRechazada(503) si no hay documento.
+    EscrituraRechazada(503) si no hay documento. Con diferida=True la copia se
+    lanza en un hilo (CopiaDiferida) y queda como _COPIA_PENDIENTE para que
+    transaccion la espere antes de Commit.
     """
     if doc is None:
         raise EscrituraRechazada(u"No active Revit document", 503)
@@ -366,8 +481,15 @@ def preparar(doc, nombre_ruta):
         contexto["nota"] = NOTA_COMPARTIDO
         return contexto
 
+    global _COPIA_PENDIENTE
     try:
-        contexto["copia"] = crear_copia(doc)
+        if diferida and COPIA_DIFERIDA:
+            info, trabajo = planificar_copia(doc)
+            if info is not None:
+                _COPIA_PENDIENTE = CopiaDiferida(info, trabajo).iniciar()
+            contexto["copia"] = info
+        else:
+            contexto["copia"] = crear_copia(doc)
     except Exception as error:
         # Una copia fallida no debe impedir el trabajo, pero se dice claramente.
         logger.warning(u"[%s] No se pudo hacer la copia de seguridad: %s", nombre_ruta, error)
@@ -523,6 +645,8 @@ class transaccion(object):
                     logger.warning(u"No se pudo revertir '%s': %s", self.nombre, error)
             return False
         if self._activa():
+            # 0.4.0: nunca se confirma sin la copia de seguridad terminada.
+            esperar_copia_pendiente()
             self.estado = self.t.Commit()
             if not _confirmada(self.estado):
                 motivos = list(getattr(_utils, "ULTIMOS_ERRORES", []) or [])
@@ -728,6 +852,16 @@ def _resumen(resultado):
     return resumen
 
 
+def _terminar_copia(contexto):
+    """Espera la copia diferida (si la hay), la retira y refleja en el contexto si fallo."""
+    pendiente = _retirar_copia_pendiente()
+    if pendiente is None:
+        return
+    info = pendiente.esperar()
+    if info.get("estado") == "error" and not contexto.get("nota"):
+        contexto["nota"] = info.get("nota")
+
+
 def ejecutar(doc, ruta, data, cuerpo):
     """Ejecuta `cuerpo(contexto)` con preparar/registrar y devuelve la respuesta HTTP.
 
@@ -760,23 +894,29 @@ def ejecutar(doc, ruta, data, cuerpo):
     def _ms():
         return int((time.time() - inicio) * 1000)
 
+    _retirar_copia_pendiente()
     try:
         if not simulado:
-            contexto.update(preparar(doc, ruta))
+            contexto.update(preparar(doc, ruta, diferida=ruta not in RUTAS_COPIA_SINCRONA))
         resultado = cuerpo(contexto)
     except EscrituraRechazada as rechazo:
+        _terminar_copia(contexto)
         registrar(doc, ruta, data, False, _ms(), error=rechazo.mensaje, simulado=simulado)
         cuerpo_error = {"error": rechazo.mensaje}
         cuerpo_error.update(rechazo.extra)
+        if contexto.get("copia"):
+            cuerpo_error.setdefault("copia", contexto["copia"])
         return routes.make_response(data=cuerpo_error, status=rechazo.status)
     except Exception as error:
         traza = traceback.format_exc()
         logger.error(u"[%s] %s\n%s", ruta, error, traza)
+        _terminar_copia(contexto)
         registrar(doc, ruta, data, False, _ms(), error=_texto(error), simulado=simulado)
         respuesta = {"error": _texto(error), "traceback": traza}
         if contexto.get("copia"):
             respuesta["copia"] = contexto["copia"]
         return routes.make_response(data=respuesta, status=500)
+    _terminar_copia(contexto)
 
     ms = _ms()
     if _es_respuesta(resultado):

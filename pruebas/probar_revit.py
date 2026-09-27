@@ -8,7 +8,7 @@ compartido para que se creen copias en backups\\) y el puente MCP en marcha
 (python main.py --combined, o --streamable-http, en 8000).
 
 Uso:
-    python pruebas\\probar_revit.py [--element-id ID] [--parameter Comments] [--fase 2a]
+    python pruebas\\probar_revit.py [--element-id ID] [--parameter Comments] [--fase 2a|cons]
 
 Cada prueba imprime nombre, código de estado y cuerpo tal cual llega.
 Termina con código de salida 0 si todas dan el resultado esperado.
@@ -36,11 +36,22 @@ Con --fase 2a se añaden (0.3.0), sin depender de nombres visibles en inglés:
         exactamente ese nivel (el nivel se borra al final)
   2a.4  create_grid_and_levels(simular=true) no crea nada (recuento de rejillas
         y niveles igual antes y después; sin copia; entrada simulada en el log)
+Con --fase cons se añaden (0.4.0, consolidación):
+  cons.1  set_parameters con 20 elementos en UNA llamada frente a 20 llamadas a
+          set_parameter (se comparan los ms; después se restauran los valores)
+  cons.2  create_elements con 3 kind mezclados y simular=true (plan.counts, sin copia)
+  cons.3  run_macro comentarios_por_nivel con simular=true y real (las macros de
+          ejemplo se copian a %LOCALAPPDATA%\\RevitMcp\\macros si no están); después se
+          restauran los comentarios con set_parameters
+  cons.4  snapshot_model devuelve timings por etapa
+  cons.5  una llamada al puente MCP con un nombre retirado (set_parameter) responde con
+          el mensaje de sustitución (set_parameters)
 Las fases 2b y 2c se añadirán con sus entregas.
 """
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 
@@ -123,8 +134,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--element-id", type=int, default=None, help="elemento para las pruebas 6 y 7 (por defecto, el primer muro)")
     parser.add_argument("--parameter", default="Comments", help="parámetro de texto editable (por defecto Comments)")
-    parser.add_argument("--fase", choices=["2a", "2b", "2c"], default=None,
-                        help="añade las pruebas de esa entrega de la fase 2 (2a: navegación y macros)")
+    parser.add_argument("--fase", choices=["2a", "2b", "2c", "cons"], default=None,
+                        help="añade las pruebas de esa entrega (2a: navegación y macros; cons: consolidación 0.4.0)")
     args = parser.parse_args()
 
     resultados = []
@@ -309,6 +320,8 @@ def main():
 
     if args.fase == "2a":
         pruebas_2a(cliente, token, resultados)
+    elif args.fase == "cons":
+        pruebas_cons(cliente, token, resultados)
     elif args.fase:
         print("=" * 70)
         print("Fase {}: sin pruebas todavía (entrega pendiente)".format(args.fase))
@@ -461,6 +474,183 @@ def pruebas_2a(cliente, token, resultados):
         ultima = next((e for e in reversed(entradas) if e.get("ruta") == "/grid_levels/"), None)
         ok = ultima is not None and ultima.get("simulado") is True
         print("   log: {}".format("entrada simulada encontrada" if ok else "NO hay entrada simulada de /grid_levels/"))
+    resultados.append(ok)
+
+
+# ---------------------------------------------------------------------------
+# Consolidación (0.4.0): lotes, macros propias y rendimiento medible
+# ---------------------------------------------------------------------------
+RUTA_MACROS = os.environ.get("REVIT_MCP_MACROS") or os.path.expandvars(r"%LOCALAPPDATA%\RevitMcp\macros")
+MACROS_EJEMPLO = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "herramientas-dev", "macros-ejemplo")
+
+
+def _instalar_macros_ejemplo():
+    """Copia las macros de ejemplo a la carpeta de macros si no están (misma máquina que Revit)."""
+    instaladas = []
+    for nombre in ("numerar_planos", "comentarios_por_nivel"):
+        origen = os.path.join(MACROS_EJEMPLO, nombre)
+        destino = os.path.join(RUTA_MACROS, nombre)
+        if os.path.isdir(origen) and not os.path.isdir(destino):
+            try:
+                shutil.copytree(origen, destino)
+                instaladas.append(nombre)
+            except OSError as error:
+                print("   no se pudo copiar {}: {}".format(nombre, error))
+    return instaladas
+
+
+def pruebas_cons(cliente, token, resultados):
+    marca_tiempo = int(time.time())
+
+    # cons.1 set_parameters con 20 elementos en una llamada frente a 20 set_parameter
+    r = _post(cliente, "/query/", token, {"category": "OST_Walls", "page_size": 20, "fields": ["Comments"], "sort_by": "id"})
+    elementos = _json(r).get("elements") or []
+    if len(elementos) < 2:
+        resultados.append(resultado_manual("cons.1 set_parameters", False, "   Hacen falta al menos 2 muros"))
+        ids = []
+    else:
+        ids = [e["id"] for e in elementos]
+        originales = {}
+        for e in elementos:
+            campos = e.get("fields") or {}
+            originales[e["id"]] = list(campos.values())[0] if campos else ""
+        valor = "MCP cons {}".format(marca_tiempo)
+        inicio = time.time()
+        ms_individual = 0
+        ok = True
+        for identificador in ids:
+            r = _post(cliente, "/set_parameter/", token, {"element_id": identificador, "parameter_name": "Comments", "value": valor})
+            ok = ok and r.status_code == 200 and _json(r).get("ok") is True
+            ms_individual += int(_json(r).get("ms") or 0)
+        pared_individual = int((time.time() - inicio) * 1000)
+        inicio = time.time()
+        r = _post(cliente, "/set_parameters/", token, {
+            "changes": [{"element_ids": ids, "parameters": {"Comments": valor + " lote"}}]})
+        pared_lote = int((time.time() - inicio) * 1000)
+        ok = mostrar("cons.1 POST /set_parameters/ ({} elementos en una llamada)".format(len(ids)), 200, r, cuerpo_max=1200) and ok
+        datos = _json(r)
+        if ok:
+            ok = (datos.get("ok") is True and datos.get("parameters_set") == len(ids)
+                  and datos.get("verificacion", {}).get("coincide") is True and datos.get("fallidos") == [])
+            if not ok:
+                print("   (se esperaba ok=true, parameters_set={} y fallidos vacío)".format(len(ids)))
+        print("   {} llamadas a set_parameter: {} ms en Revit, {} ms de pared; 1 llamada a set_parameters: {} ms en Revit, {} ms de pared".format(
+            len(ids), ms_individual, pared_individual, datos.get("ms"), pared_lote))
+        # restaurar
+        cambios = [{"element_ids": [i], "parameters": {"Comments": originales[i] or ""}} for i in ids]
+        r = _post(cliente, "/set_parameters/", token, {"changes": cambios})
+        print("   restaurados: {} (fallidos: {})".format(r.status_code, len(_json(r).get("fallidos") or [])))
+        resultados.append(ok)
+
+    # cons.2 create_elements con 3 kind mezclados y simular=true
+    niveles = _json(cliente.get(REVIT + "/list_levels/", params={"token": token})).get("levels") or []
+    nivel_bajo = niveles[0]["name"] if niveles else None
+    lote = [
+        {"kind": "level", "name": "MCP cons nivel {}".format(marca_tiempo), "elevation_mm": 123000},
+        {"kind": "grid", "name": "MCPC{}".format(marca_tiempo % 1000), "start_point": {"x": 0, "y": -1000, "z": 0}, "end_point": {"x": 0, "y": 9000, "z": 0}},
+        {"kind": "wall", "start_point": {"x": 0, "y": 0, "z": 0}, "end_point": {"x": 3000, "y": 0, "z": 0}, "level_name": nivel_bajo, "height": 2500},
+    ]
+    rejillas_antes, _ = _ids_query(cliente, token, "OST_Grids")
+    r = _post(cliente, "/create_elements/", token, {"elements": lote, "simular": True})
+    ok = mostrar("cons.2 POST /create_elements/ simular=true (level + grid + wall)", 200, r, cuerpo_max=1500)
+    datos = _json(r)
+    if ok:
+        plan = datos.get("plan") or {}
+        ok = (datos.get("simulado") is True and "copia" not in datos and plan.get("total") == 3
+              and plan.get("counts") == {"level": 1, "grid": 1, "wall": 1}
+              and [h.get("kind") for h in datos.get("haria") or []] == ["level", "grid", "wall"])
+        if not ok:
+            print("   (se esperaba simulado=true, plan.total=3, counts {level, grid, wall} y sin copia)")
+    if ok:
+        rejillas_despues, _ = _ids_query(cliente, token, "OST_Grids")
+        ok = rejillas_despues == rejillas_antes
+        print("   rejillas {} -> {} [{}]".format(len(rejillas_antes), len(rejillas_despues), "OK" if ok else "FALLO"))
+    resultados.append(ok)
+
+    # cons.3 run_macro comentarios_por_nivel simular y real
+    instaladas = _instalar_macros_ejemplo()
+    if instaladas:
+        print("   macros de ejemplo copiadas a {}: {}".format(RUTA_MACROS, ", ".join(instaladas)))
+    r = cliente.get(REVIT + "/macros/", params={"token": token})
+    ok = mostrar("cons.3a GET /macros/", 200, r, cuerpo_max=1500)
+    catalogo = _json(r)
+    nombres = [m.get("name") for m in catalogo.get("macros") or []]
+    if ok:
+        ok = "comentarios_por_nivel" in nombres and "numerar_planos" in nombres
+        if not ok:
+            print("   (faltan las macros de ejemplo en {}; invalidas: {})".format(RUTA_MACROS, catalogo.get("invalidas")))
+    resultados.append(ok)
+    if ok and nivel_bajo:
+        argumentos = {"category": "OST_Walls", "level": nivel_bajo}
+        r = _post(cliente, "/macros/run/", token, {"name": "comentarios_por_nivel", "args": argumentos, "simular": True})
+        ok = mostrar("cons.3b POST /macros/run/ comentarios_por_nivel simular=true", 200, r, cuerpo_max=1500)
+        datos = _json(r)
+        plan = datos.get("plan") or {}
+        if ok:
+            ok = datos.get("simulado") is True and "copia" not in datos and isinstance(plan.get("count"), int)
+            if not ok:
+                print("   (se esperaba simulado=true, plan.count y sin copia)")
+        if ok and plan.get("count", 0) > 200:
+            print("   plan.count = {} > 200: la ejecución real exige forzar; se marca solo la simulación".format(plan["count"]))
+            resultados.append(ok)
+        elif ok:
+            r = _post(cliente, "/macros/run/", token, {"name": "comentarios_por_nivel", "args": argumentos})
+            ok = mostrar("cons.3c POST /macros/run/ comentarios_por_nivel real", 200, r, cuerpo_max=1500)
+            datos = _json(r)
+            if ok:
+                ok = (datos.get("ok") is True and datos.get("writes") is True
+                      and len(datos.get("despues") or {}) == plan.get("count") and bool(datos.get("copia")) or plan.get("count") == 0)
+                if not ok:
+                    print("   (se esperaba ok=true, writes=true, despues con plan.count elementos y copia)")
+            antes = datos.get("antes") or {}
+            if antes:
+                cambios = [{"element_id": int(i), "parameters": {"Comments": v or ""}} for i, v in antes.items()]
+                r = _post(cliente, "/set_parameters/", token, {"changes": cambios})
+                print("   comentarios restaurados con set_parameters: {} ({} elementos)".format(r.status_code, len(cambios)))
+            resultados.append(ok)
+    else:
+        resultados.append(resultado_manual("cons.3b/c run_macro", False, "   sin macro o sin niveles"))
+
+    # cons.4 snapshot_model con timings
+    r = _post(cliente, "/snapshot/", token, {"name": "prueba_cons", "overwrite": True})
+    ok = mostrar("cons.4 POST /snapshot/ con timings", 200, r, cuerpo_max=1200)
+    datos = _json(r)
+    timings = datos.get("timings") or {}
+    if ok:
+        ok = all(clave in timings for clave in ("recoleccion_ms", "descripcion_ms", "bbox_ms", "parametros_ms", "hash_ms", "escritura_ms", "total_ms"))
+        if not ok:
+            print("   (faltan etapas en timings)")
+        else:
+            print("   {} elementos en {} ms: recolección {} / descripción {} / bbox {} / parámetros {} / hash {} / escritura {} [{}]".format(
+                datos.get("count"), timings.get("total_ms"), timings.get("recoleccion_ms"), timings.get("descripcion_ms"),
+                timings.get("bbox_ms"), timings.get("parametros_ms"), timings.get("hash_ms"), timings.get("escritura_ms"),
+                "< 3 s" if (timings.get("total_ms") or 0) < 3000 else "objetivo < 3 s no alcanzado"))
+    resultados.append(ok)
+    try:
+        if datos.get("ruta") and os.path.isfile(datos["ruta"]):
+            os.remove(datos["ruta"])
+    except OSError as error:
+        print("   no se pudo borrar {}: {}".format(datos.get("ruta"), error))
+
+    # cons.5 nombre retirado en el puente MCP
+    cabeceras = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+    inicializar = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                   "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                              "clientInfo": {"name": "probar_revit", "version": "1"}}}
+    llamada = {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+               "params": {"name": "set_parameter", "arguments": {"element_id": 1, "parameter_name": "Comments", "value": "x"}}}
+    try:
+        cliente.post(PUENTE, json=inicializar, headers=cabeceras)
+        cliente.post(PUENTE, json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=cabeceras)
+        r = cliente.post(PUENTE, json=llamada, headers=cabeceras)
+        ok = mostrar("cons.5 tools/call set_parameter (retirada) en el puente", 200, r, cuerpo_max=800)
+        texto = r.text
+        if ok:
+            ok = "set_parameters" in texto and ("isError" in texto or "is_error" in texto)
+            if not ok:
+                print("   (se esperaba isError=true con el texto 'set_parameters(...)')")
+    except Exception as error:
+        ok = resultado_manual("cons.5 nombre retirado en el puente", False, "   {}".format(error))
     resultados.append(ok)
 
 
