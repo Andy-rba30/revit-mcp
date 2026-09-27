@@ -66,3 +66,6 @@ Estados: `verificado` (ejecutado en Revit 2027 en español, 0.2.2), `no existe`,
 | método | `ViewPlan.GetViewRange()`, `PlanViewRange.GetLevelId/GetOffset(PlanViewPlane)`, constantes `PlanViewRange.Unlimited/Current/LevelAbove/LevelBelow` | 2014 | `/view_extents/` | por verificar |
 | método | `View3D.IsSectionBoxActive`, `View3D.GetSectionBox()` | 2011 | `/view_extents/` | por verificar |
 | enumeración | `BuiltInParameter.VIEWER_SHEET_NUMBER`, `BuiltInParameter.VIEW_PHASE` | 2011 | `/view_extents/` (`sheet_number`, `phase`) | por verificar |
+| módulo | `hashlib.md5` (biblioteca de IronPython 2.7; reserva `zlib.crc32`) | IronPython 2.7 | `/snapshot/` (hash de parámetros) | por verificar |
+| expresión | `int(BuiltInCategory)` comparado con `get_element_id_value(Category.Id)` | 2011 | `/snapshot/` (niveles y rejillas por defecto) | por verificar (`placement._necesita_muro` ya usa `int(bic)`) |
+| método | `FilteredElementCollector(doc).WhereElementIsNotElementType()` sin más filtros (recorrido completo) | 2011 | `/snapshot/` por defecto, `/query/` sin criterios nativos | verificado (`/model_statistics/`) |
