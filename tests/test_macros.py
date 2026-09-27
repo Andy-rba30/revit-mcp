@@ -472,3 +472,24 @@ def test_sheet_set_una_leyenda_puede_ir_en_varios_planos(api, doc):
     r = _post(api, "/sheet_set/", doc, cuerpo)
     assert r.status == 200, r.data
     assert [v["view"] for v in r.data["sheets"][1]["views_placed"]] == [u"Leyenda general"]
+
+
+def test_tool_create_grid_and_levels_acepta_prefijo_o_lista():
+    """0.3.1: el esquema MCP de x_names/y_names admite el prefijo ("V1") ademas de la lista, como la ruta."""
+    import typing
+    from tools.macro_tools import register_macro_tools
+
+    capturadas = {}
+
+    class _Mcp(object):
+        def tool(self):
+            def decorador(funcion):
+                capturadas[funcion.__name__] = funcion
+                return funcion
+            return decorador
+
+    register_macro_tools(_Mcp(), None, None)
+    pistas = typing.get_type_hints(capturadas["create_grid_and_levels"])
+    for clave in ("x_names", "y_names"):
+        argumentos = typing.get_args(pistas[clave])
+        assert str in argumentos and list[str] in argumentos, (clave, pistas[clave])
