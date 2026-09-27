@@ -349,3 +349,136 @@ def test_verificar_eliminados(doc_guardado):
     assert resultado["en_cascada"] == [9]
     assert resultado["ok"] is False
     assert "7" in resultado["verificacion"]["detalle"]
+
+
+# ---------------------------------------------------------------------------
+# Verificacion de creaciones con ids enteros (fallo visto en Revit el 2026-09-27:
+# toda creacion respondia ok=false "no se encontraron los elementos ['id']")
+# ---------------------------------------------------------------------------
+class _ElementoMinimo(object):
+    def __init__(self, identificador):
+        self.Id = DB.ElementId(identificador)
+        self.Category = None
+        self.LevelId = DB.ElementId.InvalidElementId
+
+    def GetTypeId(self):
+        return DB.ElementId.InvalidElementId
+
+    def get_BoundingBox(self, vista):
+        return None
+
+    def get_Parameter(self, bip):
+        return None
+
+
+def test_get_element_id_value_acepta_enteros():
+    import utils
+
+    assert utils.get_element_id_value(615578) == 615578
+    assert utils.get_element_id_value(DB.ElementId(9)) == 9
+    assert utils.get_element_id_value(_ElementoMinimo(4)) == 4
+    with pytest.raises(ValueError):
+        utils.get_element_id_value(None)
+
+
+def test_describir_elemento_con_id_entero(doc_guardado):
+    doc_guardado.elementos[615578] = _ElementoMinimo(615578)
+    assert escritura.describir_elemento(doc_guardado, 615578)["id"] == 615578
+    assert escritura.describir_elemento(doc_guardado, DB.ElementId(615578))["id"] == 615578
+    assert escritura.describir_elemento(doc_guardado, 1) is None
+
+
+def test_resultado_creacion_encuentra_los_ids_enteros(doc_guardado):
+    import utils
+
+    utils.ULTIMOS_AVISOS = []
+    doc_guardado.elementos[615578] = _ElementoMinimo(615578)
+    resultado = escritura.resultado_creacion(doc_guardado, [615578], extra={"message": "hola"})
+    assert resultado["ok"] is True and resultado["count"] == 1
+    assert resultado["creados"][0]["id"] == 615578
+    assert resultado["verificacion"] == {"coincide": True}
+    assert resultado["message"] == "hola"
+
+    resultado = escritura.resultado_creacion(doc_guardado, [615578, 615589])
+    assert resultado["ok"] is False and resultado["count"] == 1
+    assert "[615589]" in resultado["verificacion"]["detalle"]  # entero, no '615589'
+    assert "no dejo ningun aviso" in resultado["verificacion"]["detalle"]
+
+
+def test_resultado_creacion_explica_el_aviso_de_revit(doc_guardado):
+    import utils
+
+    utils.ULTIMOS_AVISOS = [{"texto": "Rectangular opening doesn't cut its host.", "elementos": [615589]}]
+    resultado = escritura.resultado_creacion(doc_guardado, [615589])
+    assert resultado["ok"] is False
+    assert "Rectangular opening doesn't cut its host. (elementos 615589)" in resultado["verificacion"]["detalle"]
+    utils.ULTIMOS_AVISOS = []
+
+
+def test_failure_swallower_registra_avisos_y_revierte_solo_con_errores():
+    import utils
+
+    utils.ULTIMOS_AVISOS = []
+    utils.ULTIMOS_ERRORES = []
+    pre = utils._FailureSwallower()
+    accesor = DB.FailuresAccessorFalso([
+        DB.FailureMessageFalso("Opening partially cuts its host.", DB.FailureSeverity.Warning, [7]),
+        DB.FailureMessageFalso("Opening partially cuts its host.", DB.FailureSeverity.Warning, [7]),
+    ])
+    assert pre.PreprocessFailures(accesor) == DB.FailureProcessingResult.Continue
+    assert accesor.avisos_borrados is True
+    assert utils.ULTIMOS_AVISOS == [{"texto": "Opening partially cuts its host.", "elementos": [7]}]
+    assert utils.ULTIMOS_ERRORES == []
+
+    accesor = DB.FailuresAccessorFalso([
+        DB.FailureMessageFalso("Aviso", DB.FailureSeverity.Warning, []),
+        DB.FailureMessageFalso("Can't cut instance out of Wall.", DB.FailureSeverity.Error, [8]),
+    ])
+    assert pre.PreprocessFailures(accesor) == DB.FailureProcessingResult.ProceedWithRollBack
+    assert utils.ULTIMOS_ERRORES == ["Can't cut instance out of Wall."]
+    assert {"texto": "Aviso", "elementos": []} in utils.ULTIMOS_AVISOS
+    utils.ULTIMOS_AVISOS = []
+    utils.ULTIMOS_ERRORES = []
+
+
+def test_ejecutar_devuelve_avisos_revit_y_los_vacia_entre_peticiones(doc_guardado):
+    DB.Transaction.fallos = [DB.FailureMessageFalso("Elements do not intersect.", DB.FailureSeverity.Warning, [5])]
+
+    def cuerpo(contexto):
+        with escritura.transaccion(doc_guardado, "Con aviso"):
+            pass
+        return {"message": "hecho"}
+
+    try:
+        respuesta = escritura.ejecutar(doc_guardado, "/x/", {}, cuerpo)
+        assert respuesta.status == 200
+        assert respuesta.data["ok"] is True
+        assert respuesta.data["avisos_revit"] == [{"texto": "Elements do not intersect.", "elementos": [5]}]
+        assert DB.Transaction.creadas[-1].estado == DB.TransactionStatus.Committed
+    finally:
+        DB.Transaction.fallos = []
+
+    respuesta = escritura.ejecutar(doc_guardado, "/x/", {}, cuerpo)
+    assert "avisos_revit" not in respuesta.data
+
+
+def test_ubicacion_mm():
+    class ConCurva(object):
+        Location = DB.LocationCurve(DB.Line(DB.XYZ(0, 0, 1), DB.XYZ(3.048, 0, 1)))
+
+    class ConPunto(object):
+        Location = DB.LocationPoint(DB.XYZ(1, 2, 3), rotacion=1.5707963267948966)
+
+    class SinNada(object):
+        Location = None
+
+    curva = escritura.ubicacion_mm(ConCurva())
+    assert curva["tipo"] == "curva" and curva["curva"] == "Line"
+    assert curva["start"] == {"x": 0.0, "y": 0.0, "z": 304.8}
+    assert curva["end"]["x"] == pytest.approx(929.0, abs=0.1)
+    assert curva["longitud_mm"] == pytest.approx(929.0, abs=0.1)
+    punto = escritura.ubicacion_mm(ConPunto())
+    assert punto["tipo"] == "punto" and punto["point"]["x"] == 304.8
+    assert punto["rotation_deg"] == 90.0
+    assert escritura.ubicacion_mm(SinNada()) is None
+    assert escritura.ubicacion_mm(object()) is None

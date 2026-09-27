@@ -18,7 +18,10 @@ from escritura import (
     ejecutar, transaccion, simulacion, EscrituraRechazada, comprobar_alcance,
     describir_elemento,
 )
-from parameters import valor_parametro, convertir_valor, coincide_valor, nombres_parametros
+from parameters import (
+    valor_parametro, convertir_valor, coincide_valor, nombres_parametros, resolver_parametro,
+    nombre_definicion, NOTA_NOMBRES,
+)
 from pyrevit import routes, revit, DB
 import logging
 
@@ -206,10 +209,11 @@ def register_tipos_routes(api):
                 if tipo is None:
                     raise EscrituraRechazada("Element {} has no type".format(element_id), 400)
 
-            param = tipo.LookupParameter(parameter_name)
+            param, _ = resolver_parametro(doc, tipo, parameter_name, incluir_tipo=False)
             if param is None:
                 raise EscrituraRechazada(
-                    "Type parameter '{}' not found on type {}".format(parameter_name, etiqueta_tipo(tipo)),
+                    "Type parameter '{}' not found on type {}. {}".format(
+                        parameter_name, etiqueta_tipo(tipo), NOTA_NOMBRES),
                     404,
                     {"available_parameters": nombres_parametros(tipo)},
                 )
@@ -244,6 +248,7 @@ def register_tipos_routes(api):
                 "type": etiqueta_tipo(tipo),
                 "family": nombre_familia(tipo),
                 "parameter_name": parameter_name,
+                "parameter_name_revit": nombre_definicion(param),
                 "antes": antes,
                 "despues": despues,
                 "afecta_ejemplares": ejemplares,

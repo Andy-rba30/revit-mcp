@@ -11,7 +11,7 @@ editing.py (modify_element) y tipos.py (set_type_parameter).
 
 from utils import get_element_name, get_element_id_value, make_element_id
 from seguridad import requiere_token
-from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, bbox_mm, nombre_nivel, MM_TO_FEET
+from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, bbox_mm, nombre_nivel, ubicacion_mm, MM_TO_FEET
 from pyrevit import routes, revit, DB
 import math
 import traceback
@@ -152,6 +152,46 @@ def factor_a_interno(param):
     return None
 
 
+def unidad_contrato(param):
+    """Unidad del contrato de un parametro Double: 'mm', 'mm2', 'mm3' o 'grados';
+    None si Revit no lo declara como longitud, area, volumen o angulo."""
+    try:
+        spec = param.Definition.GetDataType()
+        tipos = DB.SpecTypeId
+        if spec == tipos.Length:
+            return "mm"
+        if spec == tipos.Area:
+            return "mm2"
+        if spec == tipos.Volume:
+            return "mm3"
+        if spec == tipos.Angle:
+            return "grados"
+    except Exception:
+        return None
+    return None
+
+
+def valor_en_contrato(param):
+    """(valor numerico en las unidades del contrato, unidad) de un parametro
+    Double o Integer; (None, None) si no tiene valor o no es numerico.
+
+    `valor_parametro` devuelve lo que Revit muestra ("3.00" en un proyecto en
+    metros); esto devuelve 3000.0 y "mm", que es lo que el agente envio."""
+    try:
+        if param.StorageType == DB.StorageType.Double:
+            bruto = valor_bruto(param)
+            if bruto is None:
+                return None, None
+            factor = factor_a_interno(param)
+            valor = float(bruto) / factor if factor else float(bruto)
+            return round(valor, 4), unidad_contrato(param)
+        if param.StorageType == DB.StorageType.Integer:
+            return valor_bruto(param), None
+    except Exception:
+        pass
+    return None, None
+
+
 def convertir_valor(param, value):
     """Convierte `value` al tipo que espera el parametro. Lanza ValueError.
 
@@ -211,6 +251,7 @@ def contexto_elemento(doc, elem):
     host_id y pinned de un elemento (None cuando no aplica)."""
     contexto = {
         "bbox_mm": bbox_mm(elem),
+        "location_mm": ubicacion_mm(elem),
         "level": nombre_nivel(doc, elem),
         "workset": None,
         "phase_created": None,
@@ -254,20 +295,123 @@ def contexto_elemento(doc, elem):
     return contexto
 
 
-def buscar_parametro(doc, elem, parameter_name, incluir_tipo=True):
-    """Parametro de ejemplar (o de tipo si incluir_tipo) por nombre; None si no."""
-    param = elem.LookupParameter(parameter_name)
-    if param or not incluir_tipo:
-        return param
+# Nombres ingleses habituales -> BuiltInParameter, para que un agente pueda pedir
+# "Comments" o "Unconnected Height" aunque Revit este en espanol ("Comentarios",
+# "Altura desconectada"). LookupParameter solo entiende el nombre en el idioma
+# de Revit; el BuiltInParameter es el mismo en todos. Los nombres que no existan
+# en la version de Revit se ignoran (getattr).
+ALIAS_BUILTIN = {
+    "comments": ("ALL_MODEL_INSTANCE_COMMENTS",),
+    "type comments": ("ALL_MODEL_TYPE_COMMENTS",),
+    "mark": ("ALL_MODEL_MARK",),
+    "type mark": ("ALL_MODEL_TYPE_MARK",),
+    "description": ("ALL_MODEL_DESCRIPTION",),
+    "unconnected height": ("WALL_USER_HEIGHT_PARAM",),
+    "base offset": ("WALL_BASE_OFFSET", "FAMILY_BASE_LEVEL_OFFSET_PARAM"),
+    "top offset": ("WALL_TOP_OFFSET", "FAMILY_TOP_LEVEL_OFFSET_PARAM"),
+    "base constraint": ("WALL_BASE_CONSTRAINT", "FAMILY_BASE_LEVEL_PARAM"),
+    "top constraint": ("WALL_HEIGHT_TYPE", "FAMILY_TOP_LEVEL_PARAM"),
+    "level": ("FAMILY_LEVEL_PARAM", "LEVEL_PARAM", "SCHEDULE_LEVEL_PARAM"),
+    "elevation": ("LEVEL_ELEV", "INSTANCE_ELEVATION_PARAM"),
+    "sill height": ("INSTANCE_SILL_HEIGHT_PARAM",),
+    "head height": ("INSTANCE_HEAD_HEIGHT_PARAM",),
+    "phase created": ("PHASE_CREATED",),
+    "phase demolished": ("PHASE_DEMOLISHED",),
+    "workset": ("ELEM_PARTITION_PARAM",),
+    "room bounding": ("WALL_ATTR_ROOM_BOUND",),
+    "structural": ("WALL_STRUCTURAL_SIGNIFICANT",),
+    "name": ("DATUM_TEXT", "VIEW_NAME", "ROOM_NAME"),
+    "number": ("ROOM_NUMBER",),
+    "department": ("ROOM_DEPARTMENT",),
+    "occupancy": ("ROOM_OCCUPANCY",),
+    "length": ("CURVE_ELEM_LENGTH",),
+    "area": ("HOST_AREA_COMPUTED", "ROOM_AREA"),
+    "volume": ("HOST_VOLUME_COMPUTED", "ROOM_VOLUME"),
+}
+
+NOTA_NOMBRES = (
+    "Parameter names are the ones Revit shows in its language (e.g. 'Comentarios' on a "
+    "Spanish Revit); English built-in names such as Comments, Mark, Description or "
+    "Unconnected Height and BuiltInParameter names such as ALL_MODEL_MARK are accepted "
+    "as aliases (get_element_properties lists each parameter's `builtin` name)."
+)
+
+
+def _parametro_builtin(elem, nombre):
+    """Parametro por nombre de BuiltInParameter (ALL_MODEL_MARK) o alias ingles
+    (Comments, Mark, Unconnected Height...); None si el elemento no lo tiene."""
+    if not nombre:
+        return None
+    limpio = nombre.strip()
+    candidatos = []
+    if "_" in limpio and limpio.upper() == limpio:
+        candidatos.append(limpio)
+    candidatos.extend(ALIAS_BUILTIN.get(limpio.lower(), ()))
+    for candidato in candidatos:
+        bip = getattr(DB.BuiltInParameter, candidato, None)
+        if bip is None:
+            continue
+        try:
+            param = elem.get_Parameter(bip)
+        except Exception:
+            param = None
+        if param:
+            return param
+    return None
+
+
+def resolver_parametro(doc, elem, parameter_name, incluir_tipo=True):
+    """(parametro, es_de_tipo) por nombre en el idioma de Revit, nombre de
+    BuiltInParameter o alias ingles; primero en el ejemplar y, si incluir_tipo,
+    en su tipo. (None, False) si no existe."""
+    param = elem.LookupParameter(parameter_name) or _parametro_builtin(elem, parameter_name)
+    if param:
+        return param, False
+    if not incluir_tipo:
+        return None, False
     try:
         type_id = elem.GetTypeId()
         if type_id and type_id != DB.ElementId.InvalidElementId:
             elem_type = doc.GetElement(type_id)
             if elem_type:
-                return elem_type.LookupParameter(parameter_name)
+                param = elem_type.LookupParameter(parameter_name) or _parametro_builtin(elem_type, parameter_name)
+                if param:
+                    return param, True
     except Exception:
         pass
-    return None
+    return None, False
+
+
+def buscar_parametro(doc, elem, parameter_name, incluir_tipo=True):
+    """Parametro de ejemplar (o de tipo si incluir_tipo) por nombre; None si no."""
+    return resolver_parametro(doc, elem, parameter_name, incluir_tipo)[0]
+
+
+def nombre_definicion(param):
+    """Nombre del parametro tal como lo muestra Revit (Definition.Name), o None."""
+    try:
+        return _safe_str(param.Definition.Name)
+    except Exception:
+        return None
+
+
+def nombre_builtin(param):
+    """Nombre del BuiltInParameter del parametro (ALL_MODEL_MARK...), o None si
+    es compartido/de proyecto o la API no lo expone."""
+    try:
+        bip = param.Definition.BuiltInParameter
+    except Exception:
+        return None
+    if bip is None:
+        return None
+    try:
+        invalido = getattr(DB.BuiltInParameter, "INVALID", None)
+        if invalido is not None and bip == invalido:
+            return None
+        texto = str(bip)
+    except Exception:
+        return None
+    return texto if texto and texto != "INVALID" else None
 
 
 def nombres_parametros(elem, maximo=30):
@@ -335,7 +479,7 @@ def register_parameter_routes(api):
                         continue
                     seen_names.add(param_name)
 
-                    parameters.append({
+                    entrada = {
                         "name": param_name,
                         "value": _safe_str(_get_param_value_display(param, doc)),
                         "storage_type": str(param.StorageType),
@@ -343,7 +487,11 @@ def register_parameter_routes(api):
                         "group": _safe_str(_get_param_group_name(param)),
                         "is_instance": True,
                         "is_type_parameter": False,
-                    })
+                    }
+                    builtin = nombre_builtin(param)
+                    if builtin:
+                        entrada["builtin"] = builtin
+                    parameters.append(entrada)
                 except Exception:
                     continue
 
@@ -360,7 +508,7 @@ def register_parameter_routes(api):
                                     continue
                                 seen_names.add(param_name)
 
-                                parameters.append({
+                                entrada = {
                                     "name": param_name,
                                     "value": _safe_str(_get_param_value_display(param, doc)),
                                     "storage_type": str(param.StorageType),
@@ -368,7 +516,11 @@ def register_parameter_routes(api):
                                     "group": _safe_str(_get_param_group_name(param)),
                                     "is_instance": False,
                                     "is_type_parameter": True,
-                                })
+                                }
+                                builtin = nombre_builtin(param)
+                                if builtin:
+                                    entrada["builtin"] = builtin
+                                parameters.append(entrada)
                             except Exception:
                                 continue
             except Exception:
@@ -426,55 +578,71 @@ def register_parameter_routes(api):
             if not elem:
                 raise EscrituraRechazada("Element {} not found".format(element_id), 404)
 
-            param = buscar_parametro(doc, elem, parameter_name)
+            param, es_de_tipo = resolver_parametro(doc, elem, parameter_name)
             if not param:
                 raise EscrituraRechazada(
-                    "Parameter '{}' not found on element {}".format(parameter_name, element_id),
+                    "Parameter '{}' not found on element {}. {}".format(parameter_name, element_id, NOTA_NOMBRES),
                     404,
                     {"available_parameters": nombres_parametros(elem)},
                 )
+            nombre_revit = nombre_definicion(param)
             if param.IsReadOnly:
                 raise EscrituraRechazada(
-                    "Parameter '{}' is read-only and cannot be modified.".format(parameter_name), 400
+                    "Parameter '{}' ({}) is read-only and cannot be modified.".format(parameter_name, nombre_revit), 400
                 )
-            es_de_tipo = elem.LookupParameter(parameter_name) is None
             try:
                 convertido = convertir_valor(param, value)
             except ValueError as error:
                 raise EscrituraRechazada(str(error), 400)
 
             antes = valor_parametro(param, doc)
+            antes_valor, unidad = valor_en_contrato(param)
             if ctx["simular"]:
-                return simulacion(
-                    [{
-                        "accion": "set_parameter",
-                        "element_id": int(element_id),
-                        "parameter_name": parameter_name,
-                        "is_type_parameter": es_de_tipo,
-                        "storage_type": str(param.StorageType),
-                        "antes": antes,
-                        "despues": _texto(convertido) if not isinstance(convertido, _cadena) else convertido,
-                    }]
-                )
+                haria = {
+                    "accion": "set_parameter",
+                    "element_id": int(element_id),
+                    "parameter_name": parameter_name,
+                    "parameter_name_revit": nombre_revit,
+                    "is_type_parameter": es_de_tipo,
+                    "storage_type": str(param.StorageType),
+                    "antes": antes,
+                    "despues": value,
+                }
+                if param.StorageType == DB.StorageType.Double:
+                    # Lo que se guardara en Revit (pies, pies2, pies3 o radianes)
+                    haria["valor_interno_revit"] = convertido
+                    if unidad:
+                        haria["unidad"] = unidad
+                return simulacion([haria])
 
             with transaccion(doc, "Parametro {} de {}".format(parameter_name, element_id)):
                 aceptado = param.Set(convertido)
 
             despues = valor_parametro(param, doc)
+            despues_valor, _ = valor_en_contrato(param)
             coincide = coincide_valor(param, value)
+            en_unidades = u" ({} {})".format(despues_valor, unidad) if unidad and despues_valor is not None else u""
             resultado = {
                 "element_id": int(element_id),
                 "parameter_name": parameter_name,
+                "parameter_name_revit": nombre_revit,
                 "is_type_parameter": es_de_tipo,
                 "antes": antes,
                 "despues": despues,
                 "old_value": antes,
                 "new_value": despues,
                 "ok": bool(coincide),
-                "message": "Set '{}' from '{}' to '{}' on element {}".format(
-                    parameter_name, antes, despues, element_id
+                "message": u"Set '{}' from '{}' to '{}'{} on element {}".format(
+                    parameter_name, antes, despues, en_unidades, element_id
                 ),
             }
+            if antes_valor is not None or despues_valor is not None:
+                # Valor numerico en las unidades del contrato (mm...), ademas del
+                # texto que muestra Revit en las unidades del proyecto ("3.00" m).
+                resultado["antes_valor"] = antes_valor
+                resultado["despues_valor"] = despues_valor
+                if unidad:
+                    resultado["unidad"] = unidad
             if coincide:
                 resultado["verificacion"] = {"coincide": True}
             else:

@@ -8,7 +8,12 @@ compartido para que se creen copias en backups\\) y el puente MCP en marcha
 (python main.py --combined, o --streamable-http, en 8000).
 
 Uso:
-    python pruebas\\probar_revit.py [--element-id ID] [--parameter Comments]
+    python pruebas\\probar_revit.py [--element-id ID] [--parameter NOMBRE]
+
+Las pruebas 6 y 7 usan el parámetro de comentarios en el idioma de Revit
+("Comments", "Comentarios"...: el que tenga `builtin`
+ALL_MODEL_INSTANCE_COMMENTS en get_element_properties) o, si no lo hay, el
+primer parámetro de texto editable del elemento; --parameter lo fuerza.
 
 Cada prueba imprime nombre, código de estado y cuerpo tal cual llega.
 Termina con código de salida 0 si todas dan el resultado esperado.
@@ -95,24 +100,49 @@ def _json(respuesta):
         return {}
 
 
-def elegir_elemento(cliente, token, element_id, parameter_name):
-    """Devuelve (element_id, parameter_name) de un elemento con parámetro editable."""
+NOMBRES_COMENTARIOS = ("Comments", "Comentarios", "Commentaires", "Kommentare", "Commenti", "Comentários")
+
+
+def elegir_elemento(cliente, token, element_id):
+    """Id del elemento para las pruebas 6 y 7 (el dado, el primer muro o el primer nivel)."""
     if element_id is not None:
-        return element_id, parameter_name
+        return element_id
     r = cliente.post(REVIT + "/find_elements/", json={"category": "OST_Walls", "max": 1, "token": token})
     ids = _json(r).get("ids") or []
     if not ids:
         r = cliente.post(REVIT + "/find_elements/", json={"category": "OST_Levels", "max": 1, "token": token})
         ids = _json(r).get("ids") or []
-    if not ids:
-        return None, parameter_name
-    return ids[0], parameter_name
+    return ids[0] if ids else None
+
+
+def elegir_parametro(propiedades, preferido=None):
+    """Nombre (tal como lo muestra Revit) de un parámetro de texto editable del elemento.
+
+    Revit localiza los nombres ("Comments" es "Comentarios" en español), así que se
+    busca por `builtin` ALL_MODEL_INSTANCE_COMMENTS, luego por los nombres conocidos
+    y, si no, el primer texto de ejemplar editable.
+    """
+    parametros = propiedades.get("parameters", [])
+    nombres = [p.get("name") for p in parametros]
+    if preferido:
+        return preferido
+    for p in parametros:
+        if p.get("builtin") == "ALL_MODEL_INSTANCE_COMMENTS" and not p.get("read_only"):
+            return p.get("name")
+    for candidato in NOMBRES_COMENTARIOS:
+        if candidato in nombres:
+            return candidato
+    for p in parametros:
+        if p.get("storage_type") == "String" and not p.get("read_only") and p.get("is_instance"):
+            return p.get("name")
+    return "Comments"
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--element-id", type=int, default=None, help="elemento para las pruebas 6 y 7 (por defecto, el primer muro)")
-    parser.add_argument("--parameter", default="Comments", help="parámetro de texto editable (por defecto Comments)")
+    parser.add_argument("--parameter", default=None,
+                        help="parámetro de texto editable (por defecto, los comentarios en el idioma de Revit)")
     args = parser.parse_args()
 
     resultados = []
@@ -199,12 +229,16 @@ def main():
         "   fallidas: {}  lentas: {}".format(fallidas or "ninguna", lentas or "ninguna")))
 
     # 6 y 7. set_parameter simulado y real
-    element_id, parametro = elegir_elemento(cliente, token, args.element_id, args.parameter)
+    element_id = elegir_elemento(cliente, token, args.element_id)
     if element_id is None:
         resultados.append(resultado_manual("6/7. set_parameter", False, "   No hay muros ni niveles en el modelo; usa --element-id"))
     else:
         r = cliente.get(REVIT + "/element_properties/{}".format(element_id), params={"token": token})
         propiedades = _json(r)
+        parametro = elegir_parametro(propiedades, args.parameter)
+        print("=" * 70)
+        print("6/7. Elemento {} ({}); parámetro de texto elegido: {!r}".format(
+            element_id, propiedades.get("category", "?"), parametro))
         valor_original = ""
         for p in propiedades.get("parameters", []):
             if p.get("name") == parametro:

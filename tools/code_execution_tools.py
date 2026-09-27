@@ -24,6 +24,10 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
         - doc: The active Revit document
         - DB: Revit API Database namespace
         - revit: pyRevit module
+        - System, clr: .NET namespaces
+        - make_element_id(id): DB.ElementId for any Revit version (in Revit 2027
+          DB.ElementId(int) raises "Multiple targets could match")
+        - get_element_id_value(element_or_id): plain int id
         - print: Function to output text (returned in response)
 
         Use this when the existing MCP tools cannot accomplish what you need.

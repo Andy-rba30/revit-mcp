@@ -37,7 +37,9 @@ persona.
 7. Ejecuta la herramienta real (`simular=false`).
 8. Comprueba la respuesta: `ok`, `verificacion.coincide`, `antes`/`despues`
    o `creados`/`eliminados`. Si `ok` es `false`, informa del `detalle` y
-   **no reintentes por tu cuenta**: pregunta al usuario.
+   **no reintentes por tu cuenta**: pregunta al usuario. Si la respuesta trae
+   `avisos_revit`, son los avisos que Revit emitió (y resolvió solo) al
+   confirmar: repítelos al usuario tal cual.
 9. Si se crearon elementos, llama a `list_warnings` y comenta las
    advertencias nuevas.
 
@@ -66,7 +68,22 @@ memoria) y `ms`. El registro completo está en `mcp_log.jsonl` junto al `.rvt`
   volúmenes en mm³, ángulos en grados), también `set_parameter`,
   `modify_element` y `set_type_parameter` para parámetros de longitud, área,
   volumen o ángulo. Los CSV de Civil 3D para `create_toposolid` se asumen en
-  metros salvo `units`.
+  metros salvo `units`. `antes`/`despues` vienen como los muestra Revit (en
+  las unidades del proyecto: "3.00" m); `antes_valor`/`despues_valor` con
+  `unidad` traen el número en las unidades del contrato (3000, mm).
+- Nombres de parámetros: Revit los muestra en su idioma (`Comentarios`,
+  `Altura desconectada`). `set_parameter`, `modify_element` y
+  `set_type_parameter` aceptan ese nombre, el del `BuiltInParameter`
+  (`ALL_MODEL_INSTANCE_COMMENTS`, lo lista `get_element_properties` como
+  `builtin`) o los alias ingleses habituales (`Comments`, `Mark`,
+  `Unconnected Height`...); la respuesta dice en `parameter_name_revit` cuál
+  se usó.
+- Coordenadas: siempre absolutas del modelo, en mm, en el mismo marco que
+  `bbox_mm` y `location_mm` de `get_element_properties`. La `z` **no** es un
+  desfase respecto al nivel ni a la base del elemento. Para `create_opening`
+  en un muro lee `location_mm` del muro (`start`/`end`), da las dos esquinas
+  sobre esa línea y con `z` entre `bbox_mm.min.z` y `bbox_mm.max.z`; el
+  servidor rechaza con 400 lo que no cortaría el muro.
 - `set_project_location` rechaza mover un punto base o de replanteo anclado o
   recortado salvo `forzar=true`; `acquire_from_link_id` va siempre solo.
 - `purge_unused` solo purga con el PerformanceAdviser; si Revit no lo ofrece,
@@ -113,7 +130,7 @@ memoria) y `ms`. El registro completo está en `mcp_log.jsonl` junto al `.rvt`
 
 | Mensaje | Causa | Acción |
 |---|---|---|
-| `Multiple targets could match` | Revit 2027: `DB.ElementId(int)` es ambiguo | Usa `DB.ElementId(System.Int64(id))` (en `execute_revit_code` ya tienes `System`). |
+| `Multiple targets could match` | Revit 2027: `DB.ElementId(int)` es ambiguo | Usa `make_element_id(id)` (ya está en el espacio de nombres de `execute_revit_code`, sin importar nada) o `DB.ElementId(System.Int64(id))`. |
 | `Transaction error` / `Starting a transaction from an external application running outside of API context is not allowed` | Se abrió una transacción dentro del código | El manejador ya abre una: no anides `DB.Transaction`. |
 | `open_transaction: true` | Quedó una transacción abierta que no se pudo cerrar | Pide al usuario que la revise en Revit antes de seguir; no ejecutes nada más. |
 | `409` "Hay una transacción abierta de otra operación" | Revit está en medio de otra edición (`doc.IsModifiable`) | Espera a que el usuario termine y repite. |
@@ -126,4 +143,5 @@ memoria) y `ms`. El registro completo está en `mcp_log.jsonl` junto al `.rvt`
 | `400` "deletes a collection" | `doc.Delete(<colección>)` en el código | Usa `delete_elements` con ids listados. |
 | `"Revit no está abierto o el conector no ha iniciado"` | No existe el archivo del token | Abre Revit con la extensión cargada. |
 | `"Revit no respondió en N s"` | Tiempo de espera agotado (30 s lectura, 120 s escritura, 600 s operaciones largas) | La operación puede seguir en curso: comprueba con `read_log` / `get_revit_status` antes de repetir. |
-| `ok: false` con `verificacion.coincide: false` | El valor releído no coincide con lo pedido | No reintentes; muestra `detalle` al usuario. |
+| `ok: false` con `verificacion.coincide: false` | El valor releído no coincide con lo pedido, o el elemento creado ya no existe tras confirmar | No reintentes; muestra `detalle` (incluye los avisos de Revit) al usuario. |
+| `400` "does not overlap the wall" / "away from the wall's plane" (`create_opening`) | Esquinas fuera del muro: `z` no es absoluta o los puntos no están sobre la línea de ubicación | Lee `location_mm` y `bbox_mm` del muro con `get_element_properties` y repite con esquinas sobre esa línea y `z` absoluta. |

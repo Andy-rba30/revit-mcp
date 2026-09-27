@@ -75,11 +75,15 @@ XYZ.Zero = XYZ(0, 0, 0)
 
 class BuiltInParameter(object):
     """Atributos de ejemplo; getattr sobre nombres desconocidos falla como en Revit."""
+    INVALID = _Enum("INVALID")
     FAMILY_LEVEL_PARAM = _Enum("FAMILY_LEVEL_PARAM")
     LEVEL_PARAM = _Enum("LEVEL_PARAM")
     SCHEDULE_LEVEL_PARAM = _Enum("SCHEDULE_LEVEL_PARAM")
     FAMILY_BASE_LEVEL_PARAM = _Enum("FAMILY_BASE_LEVEL_PARAM")
     ELEM_PARTITION_PARAM = _Enum("ELEM_PARTITION_PARAM")
+    ALL_MODEL_INSTANCE_COMMENTS = _Enum("ALL_MODEL_INSTANCE_COMMENTS")
+    ALL_MODEL_MARK = _Enum("ALL_MODEL_MARK")
+    WALL_USER_HEIGHT_PARAM = _Enum("WALL_USER_HEIGHT_PARAM")
 
 
 class BuiltInCategory(object):
@@ -100,11 +104,52 @@ class _Opciones(object):
         self.pre = pre
 
 
+class FailureMessageFalso(object):
+    """Mensaje de fallo de Revit simulado (FailureMessageAccessor)."""
+
+    def __init__(self, texto, severidad=None, elementos=()):
+        self.texto = texto
+        self.severidad = severidad or FailureSeverity.Warning
+        self.elementos = [ElementId(e) for e in elementos]
+
+    def GetSeverity(self):
+        return self.severidad
+
+    def GetDescriptionText(self):
+        return self.texto
+
+    def GetFailingElementIds(self):
+        return list(self.elementos)
+
+
+class FailuresAccessorFalso(object):
+    """Lo minimo de FailuresAccessor que usa utils._FailureSwallower."""
+
+    def __init__(self, mensajes):
+        self.mensajes = list(mensajes)
+        self.avisos_borrados = False
+
+    def GetFailureMessages(self):
+        return list(self.mensajes)
+
+    def DeleteAllWarnings(self):
+        self.avisos_borrados = True
+        self.mensajes = [m for m in self.mensajes if m.GetSeverity() != FailureSeverity.Warning]
+
+
 class Transaction(object):
-    """Registra Start/Commit/RollBack. `resultado_commit` permite simular un fallo."""
+    """Registra Start/Commit/RollBack. `resultado_commit` permite simular un fallo.
+
+    `fallos` (lista de FailureMessageFalso) simula lo que Revit comunica al
+    preprocesador de fallos al confirmar: Commit se lo pasa al preprocesador
+    registrado con SetFailuresPreprocessor y, si este pide revertir, el estado
+    final es RolledBack. `al_confirmar` (callable) simula lo que Revit hace al
+    regenerar (por ejemplo, borrar un hueco que no corta su muro)."""
 
     creadas = []
     resultado_commit = TransactionStatus.Committed
+    fallos = []
+    al_confirmar = None
 
     def __init__(self, doc, nombre):
         self.doc = doc
@@ -127,6 +172,13 @@ class Transaction(object):
     def Commit(self):
         self.terminada = True
         self.estado = Transaction.resultado_commit
+        preprocesador = getattr(self.opciones, "pre", None)
+        if Transaction.fallos and preprocesador is not None:
+            accesor = FailuresAccessorFalso(Transaction.fallos)
+            if preprocesador.PreprocessFailures(accesor) == FailureProcessingResult.ProceedWithRollBack:
+                self.estado = TransactionStatus.RolledBack
+        if self.estado == TransactionStatus.Committed and Transaction.al_confirmar is not None:
+            Transaction.al_confirmar(self)
         if self.doc is not None and hasattr(self.doc, "IsModifiable"):
             self.doc.IsModifiable = False
         return self.estado
@@ -198,9 +250,66 @@ class FilteredElementCollector(object):
 
 
 class Line(object):
+    """Linea acotada con lo que usa estructural._situar_en_muro."""
+
+    def __init__(self, a=None, b=None):
+        self.a = a or XYZ(0, 0, 0)
+        self.b = b or XYZ(0, 0, 0)
+
     @staticmethod
     def CreateBound(a, b):
-        return Line()
+        return Line(a, b)
+
+    def GetEndPoint(self, indice):
+        return self.a if indice == 0 else self.b
+
+    @property
+    def Length(self):
+        return self.a.DistanceTo(self.b)
+
+
+class CurveArray(object):
+    def __init__(self):
+        self.curvas = []
+
+    def Append(self, curva):
+        self.curvas.append(curva)
+
+
+class BoundingBoxXYZ(object):
+    def __init__(self, minimo, maximo):
+        self.Min = minimo
+        self.Max = maximo
+
+
+class LocationCurve(object):
+    def __init__(self, curva):
+        self.Curve = curva
+
+
+class LocationPoint(object):
+    def __init__(self, punto, rotacion=0.0):
+        self.Point = punto
+        self.Rotation = rotacion
+
+
+class Wall(Element):
+    pass
+
+
+class Floor(Element):
+    pass
+
+
+class RoofBase(Element):
+    pass
+
+
+class SpecTypeId(object):
+    Length = _Enum("Length")
+    Area = _Enum("Area")
+    Volume = _Enum("Volume")
+    Angle = _Enum("Angle")
 
 
 class StorageType(object):

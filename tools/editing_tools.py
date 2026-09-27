@@ -50,7 +50,10 @@ def register_editing_tools(mcp, revit_get, revit_post, revit_image=None):
             element_id: Revit element ID to modify
             parameters: Dictionary of parameter name to new value pairs
                 (lengths in mm, areas in mm², volumes in mm³, angles in degrees)
-                e.g., {"Mark": "EW-01", "Comments": "Updated via MCP"}
+                e.g., {"Mark": "EW-01", "Comments": "Updated via MCP"}. Names as
+                Revit shows them in its language, BuiltInParameter names or the
+                English aliases accepted by set_parameter; each change reports
+                `parameter_revit`, the name Revit used.
             simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """

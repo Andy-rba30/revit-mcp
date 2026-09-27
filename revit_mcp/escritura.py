@@ -39,6 +39,7 @@ import datetime
 import io
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -562,6 +563,52 @@ def bbox_mm(elem, vista=None):
     return {"min": punto_mm(bb.Min), "max": punto_mm(bb.Max)}
 
 
+def ubicacion_mm(elem):
+    """elem.Location en mm: {"tipo": "curva", "start", "end", "longitud_mm",
+    "curva"} para muros, vigas y lineas; {"tipo": "punto", "point",
+    "rotation_deg"} para ejemplares de familia; None si no tiene ubicacion.
+
+    Es lo que un agente necesita para dar puntos SOBRE un muro (huecos, zapatas
+    corridas) sin recurrir a execute_code."""
+    try:
+        ubicacion = elem.Location
+    except Exception:
+        return None
+    if ubicacion is None:
+        return None
+    try:
+        curva = ubicacion.Curve
+    except Exception:
+        curva = None
+    if curva is not None:
+        datos = {
+            "tipo": "curva",
+            "start": punto_mm(curva.GetEndPoint(0)),
+            "end": punto_mm(curva.GetEndPoint(1)),
+        }
+        try:
+            datos["longitud_mm"] = round(curva.Length * FEET_TO_MM, 1)
+        except Exception:
+            pass
+        try:
+            datos["curva"] = type(curva).__name__
+        except Exception:
+            pass
+        return datos
+    try:
+        punto = ubicacion.Point
+    except Exception:
+        punto = None
+    if punto is None:
+        return None
+    datos = {"tipo": "punto", "point": punto_mm(punto)}
+    try:
+        datos["rotation_deg"] = round(math.degrees(ubicacion.Rotation), 3)
+    except Exception:
+        pass
+    return datos
+
+
 def nombre_categoria(elem):
     try:
         if elem.Category:
@@ -615,7 +662,14 @@ def nombre_nivel(doc, elem):
 
 
 def describir_elemento(doc, elem_o_id):
-    """{"id", "categoria", "tipo", "nivel", "bbox_mm"} o None si ya no existe."""
+    """{"id", "categoria", "tipo", "nivel", "bbox_mm"} de un Element, un ElementId
+    o un id entero; None si el elemento ya no existe.
+
+    Con un id entero es la comprobacion "sigue existiendo tras el commit" de
+    todas las rutas de creacion (verificar_creados): antes de 0.2.2 fallaba
+    siempre con enteros (get_element_id_value no los aceptaba) y toda creacion
+    se informaba como "no se encontraron los elementos ['id']" con ok=false,
+    aunque el elemento existiera."""
     elem = elem_o_id
     if elem is None:
         return None
@@ -655,15 +709,38 @@ def verificar_creados(doc, ids):
     return creados, faltan
 
 
+def avisos_revit():
+    """Avisos que Revit emitio en las transacciones de la peticion en curso
+    ([{"texto", "elementos"}], los recoge utils._FailureSwallower)."""
+    return list(getattr(_utils, "ULTIMOS_AVISOS", []) or [])
+
+
+def texto_avisos(avisos):
+    """'texto (elementos 1, 2); texto2' para mensajes."""
+    partes = []
+    for aviso in avisos or []:
+        texto = _texto(aviso.get("texto", u"?")) if isinstance(aviso, dict) else _texto(aviso)
+        elementos = aviso.get("elementos") if isinstance(aviso, dict) else None
+        if elementos:
+            texto += u" (elementos {})".format(u", ".join(_texto(e) for e in elementos))
+        partes.append(texto)
+    return u"; ".join(partes)
+
+
 def resultado_creacion(doc, ids, errores=None, extra=None):
     """Respuesta estandar de creacion: {"creados": [...], "count", "ok", ...}."""
     creados, faltan = verificar_creados(doc, ids)
     resultado = {"creados": creados, "count": len(creados), "ok": not faltan}
     if faltan:
-        resultado["verificacion"] = {
-            "coincide": False,
-            "detalle": u"Tras el commit no se encontraron los elementos {}".format(faltan),
-        }
+        detalle = u"Tras el commit no se encontraron los elementos {}".format(faltan)
+        avisos = avisos_revit()
+        if avisos:
+            detalle += (u". Revit los creo y los elimino al confirmar la transaccion; "
+                        u"avisos de Revit: {}".format(texto_avisos(avisos)))
+        else:
+            detalle += (u". La transaccion se confirmo y Revit no dejo ningun aviso: "
+                        u"el elemento se elimino al regenerar el modelo.")
+        resultado["verificacion"] = {"coincide": False, "detalle": detalle}
     else:
         resultado["verificacion"] = {"coincide": True}
     if errores:
@@ -760,6 +837,9 @@ def ejecutar(doc, ruta, data, cuerpo):
     def _ms():
         return int((time.time() - inicio) * 1000)
 
+    # Avisos de Revit de la peticion anterior: se vacian para que `avisos_revit`
+    # solo traiga los de esta.
+    _utils.ULTIMOS_AVISOS = []
     try:
         if not simulado:
             contexto.update(preparar(doc, ruta))
@@ -776,6 +856,8 @@ def ejecutar(doc, ruta, data, cuerpo):
         respuesta = {"error": _texto(error), "traceback": traza}
         if contexto.get("copia"):
             respuesta["copia"] = contexto["copia"]
+        if avisos_revit():
+            respuesta["avisos_revit"] = avisos_revit()
         return routes.make_response(data=respuesta, status=500)
 
     ms = _ms()
@@ -796,6 +878,9 @@ def ejecutar(doc, ruta, data, cuerpo):
     ok = bool(resultado.get("ok", True)) and not resultado.get("error")
     resultado["ok"] = ok
     resultado["ms"] = ms
+    if avisos_revit() and "avisos_revit" not in resultado:
+        # Lo que Revit aviso al confirmar (y resolvio solo): el agente debe leerlo.
+        resultado["avisos_revit"] = avisos_revit()
     if simulado:
         resultado.setdefault("simulado", True)
     else:

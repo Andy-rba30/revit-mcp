@@ -7,7 +7,9 @@ Pilares estructurales, cimentaciones y huecos.
   POST /create_foundation/  foundations[] {point, level, type_name} (zapata aislada)
                                           {wall_id | curve, type_name} (zapata corrida, WallFoundation)
                                           {boundary, level, type_name} (losa de cimentacion)
-  POST /create_opening/     host_id*, points[] (mm) -> doc.Create.NewOpening en muro, suelo o cubierta
+  POST /create_opening/     host_id*, points[] (mm, z absoluto) -> doc.Create.NewOpening en muro,
+                            suelo o cubierta; en muro el rectangulo se comprueba antes contra
+                            la geometria del muro (plano, longitud, altura)
 
 Todas pasan por escritura.ejecutar (copia, log, simular, IA:, creados).
 """
@@ -88,6 +90,144 @@ def _muro_bajo_curva(doc, start, end):
     if mejor is not None and mejor_dist is not None and mejor_dist * 304.8 <= 100.0:
         return mejor
     return None
+
+
+TOLERANCIA_PLANO_MM = 10.0  # margen, ademas del espesor, para aceptar esquinas fuera del plano del muro
+
+
+def _geometria_muro(muro):
+    """Curva de ubicacion, longitud, cotas minima y maxima y espesor del muro (pies), o None."""
+    try:
+        curva = muro.Location.Curve
+    except Exception:
+        return None
+    if curva is None:
+        return None
+    geometria = {"curva": curva, "longitud": None, "z_min": None, "z_max": None, "espesor": None}
+    try:
+        geometria["longitud"] = float(curva.Length)
+    except Exception:
+        pass
+    try:
+        bb = muro.get_BoundingBox(None)
+        if bb is not None:
+            geometria["z_min"], geometria["z_max"] = float(bb.Min.Z), float(bb.Max.Z)
+    except Exception:
+        pass
+    try:
+        geometria["espesor"] = float(muro.Width)
+    except Exception:
+        pass
+    return geometria
+
+
+def _situar_en_muro(geometria, punto):
+    """(distancia a lo largo del muro desde su punto inicial, distancia horizontal
+    al plano del muro), en pies. Muros rectos: proyeccion sobre la linea de
+    ubicacion; curvos: Curve.Project."""
+    curva = geometria["curva"]
+    p0 = curva.GetEndPoint(0)
+    p1 = curva.GetEndPoint(1)
+    dx, dy = p1.X - p0.X, p1.Y - p0.Y
+    cuerda = math.sqrt(dx * dx + dy * dy)
+    if isinstance(curva, DB.Line) and cuerda > 1e-9:
+        ux, uy = dx / cuerda, dy / cuerda
+        vx, vy = punto.X - p0.X, punto.Y - p0.Y
+        return vx * ux + vy * uy, abs(vx * uy - vy * ux)
+    proyeccion = curva.Project(DB.XYZ(punto.X, punto.Y, p0.Z))
+    longitud = geometria["longitud"] or cuerda
+    return curva.ComputeNormalizedParameter(proyeccion.Parameter) * longitud, float(proyeccion.Distance)
+
+
+def _mm(pies):
+    return round(pies * 304.8, 1)
+
+
+def _comprobar_hueco_en_muro(muro, esquina_a, esquina_b):
+    """Situa el rectangulo (esquina_a, esquina_b) respecto al muro y rechaza con
+    400 lo que Revit crearia y borraria en silencio: esquinas fuera del plano del
+    muro, rectangulo degenerado, o fuera de la longitud o de la altura del muro.
+    Devuelve {"muro": {...}, "hueco": {...}} en mm (None si el muro no tiene curva)."""
+    geometria = _geometria_muro(muro)
+    if geometria is None:
+        return None
+    a_lo_largo_a, fuera_a = _situar_en_muro(geometria, esquina_a)
+    a_lo_largo_b, fuera_b = _situar_en_muro(geometria, esquina_b)
+    fuera = max(fuera_a, fuera_b)
+    desde, hasta = min(a_lo_largo_a, a_lo_largo_b), max(a_lo_largo_a, a_lo_largo_b)
+    z_desde, z_hasta = min(esquina_a.Z, esquina_b.Z), max(esquina_a.Z, esquina_b.Z)
+    longitud, z_min, z_max, espesor = (geometria["longitud"], geometria["z_min"],
+                                       geometria["z_max"], geometria["espesor"])
+    curva = geometria["curva"]
+    muro_mm = {
+        "inicio_mm": punto_a_mm(curva.GetEndPoint(0)),
+        "fin_mm": punto_a_mm(curva.GetEndPoint(1)),
+        "longitud_mm": _mm(longitud) if longitud is not None else None,
+        "z_min_mm": _mm(z_min) if z_min is not None else None,
+        "z_max_mm": _mm(z_max) if z_max is not None else None,
+        "espesor_mm": _mm(espesor) if espesor is not None else None,
+    }
+    hueco_mm = {
+        "desde_mm": _mm(desde), "hasta_mm": _mm(hasta),
+        "z_desde_mm": _mm(z_desde), "z_hasta_mm": _mm(z_hasta),
+        "fuera_del_plano_mm": _mm(fuera),
+    }
+    situacion = {"muro": muro_mm, "hueco": hueco_mm}
+
+    tolerancia = (espesor if espesor is not None else 500.0 * MM_TO_FEET) + TOLERANCIA_PLANO_MM * MM_TO_FEET
+    if fuera > tolerancia:
+        raise EscrituraRechazada(
+            "The opening corners are {} mm away from the wall's plane (wall thickness {} mm). Give "
+            "both corners on the wall's location line: get_element_properties(host_id) -> location_mm "
+            "(start/end) and interpolate along it.".format(
+                _mm(fuera), muro_mm["espesor_mm"] if muro_mm["espesor_mm"] is not None else "?"),
+            400, {"en_muro": situacion},
+        )
+    if hasta - desde < 1.0 * MM_TO_FEET or z_hasta - z_desde < 1.0 * MM_TO_FEET:
+        raise EscrituraRechazada(
+            "The two corners must differ both along the wall and in z (they are opposite corners "
+            "of the rectangle): along {}..{} mm, z {}..{} mm.".format(
+                hueco_mm["desde_mm"], hueco_mm["hasta_mm"], hueco_mm["z_desde_mm"], hueco_mm["z_hasta_mm"]),
+            400, {"en_muro": situacion},
+        )
+    if longitud is not None and (hasta <= 0.0 or desde >= longitud):
+        raise EscrituraRechazada(
+            "The opening lies outside the wall along its length: it runs from {} to {} mm measured "
+            "from the wall's start point {}, but the wall is {} mm long. Revit would create the "
+            "opening and delete it at commit ('Rectangular opening doesn't cut its host').".format(
+                hueco_mm["desde_mm"], hueco_mm["hasta_mm"], muro_mm["inicio_mm"], muro_mm["longitud_mm"]),
+            400, {"en_muro": situacion},
+        )
+    if z_min is not None and z_max is not None and (z_hasta <= z_min or z_desde >= z_max):
+        raise EscrituraRechazada(
+            "The opening z range {}..{} mm does not overlap the wall, which spans z {}..{} mm. z is the "
+            "ABSOLUTE model elevation in mm (the same frame as bbox_mm), not an offset from the wall "
+            "base: for an opening from 900 to 2100 mm above the base use z {} and z {}. Revit would "
+            "create the opening and delete it at commit ('Rectangular opening doesn't cut its host').".format(
+                hueco_mm["z_desde_mm"], hueco_mm["z_hasta_mm"], muro_mm["z_min_mm"], muro_mm["z_max_mm"],
+                _mm(z_min + 900.0 * MM_TO_FEET), _mm(z_min + 2100.0 * MM_TO_FEET)),
+            400, {"en_muro": situacion},
+        )
+    sobresale = []
+    if longitud is not None and (desde < 0.0 or hasta > longitud):
+        sobresale.append("length")
+    if z_min is not None and z_max is not None and (z_desde < z_min or z_hasta > z_max):
+        sobresale.append("height")
+    if sobresale:
+        hueco_mm["sobresale"] = sobresale
+        hueco_mm["nota"] = ("The opening extends beyond the wall's {}; Revit clips it to the wall or "
+                            "warns 'Opening partially cuts its host'.".format(" and ".join(sobresale)))
+    return situacion
+
+
+def _rectangulo_mm(hueco):
+    """Esquinas (mm) del rectangulo tal como lo registra Revit (Opening.BoundaryRect), o None."""
+    try:
+        if not hueco.IsRectBoundary:
+            return None
+        return [punto_a_mm(p) for p in hueco.BoundaryRect]
+    except Exception:
+        return None
 
 
 def register_estructural_routes(api):
@@ -317,7 +457,13 @@ def register_estructural_routes(api):
     @api.route("/create_opening/", methods=["POST"])
     @requiere_token
     def create_opening(doc, request):
-        """Hueco en muro (2 puntos) o en suelo/cubierta/techo (poligono). Acepta `simular`."""
+        """Hueco en muro (2 esquinas) o en suelo/cubierta/techo (poligono). Acepta `simular`.
+
+        En muros las esquinas se situan respecto a la geometria del muro ANTES de
+        crear nada: NewOpening acepta cualquier rectangulo y, si no corta el muro,
+        Revit lo borra al confirmar con un aviso ("Rectangular opening doesn't cut
+        its host"), sin error y con la transaccion confirmada.
+        """
 
         def cuerpo(ctx):
             data = ctx["data"]
@@ -343,20 +489,22 @@ def register_estructural_routes(api):
                         host_id, get_element_name(host.Category) if host.Category else type(host).__name__),
                     400,
                 )
+            situacion = None
             if es_muro:
                 # Dos esquinas opuestas del hueco, en el plano del muro, tal como llegan:
                 # recombinarlas como (min, min, min)/(max, max, max) saca los puntos del plano
                 # en cualquier muro oblicuo y NewOpening los rechaza.
                 if len(puntos) != 2:
                     raise EscrituraRechazada(
-                        "A wall opening takes exactly 2 opposite corners on the wall face; got {}".format(len(puntos)), 400
+                        "A wall opening takes exactly 2 opposite corners on the wall's plane; got {}".format(len(puntos)), 400
                     )
                 esquina_a, esquina_b = puntos[0], puntos[1]
                 if esquina_a.DistanceTo(esquina_b) < 0.001:
                     raise EscrituraRechazada("The two corners of the opening must be different", 400)
+                situacion = _comprobar_hueco_en_muro(host, esquina_a, esquina_b)
                 descripcion = {"accion": "crear", "element_type": "wall_opening",
                                "host_id": int(host_id), "corner_a_mm": punto_a_mm(esquina_a),
-                               "corner_b_mm": punto_a_mm(esquina_b)}
+                               "corner_b_mm": punto_a_mm(esquina_b), "en_muro": situacion}
             else:
                 if len(puntos) < 3:
                     raise EscrituraRechazada("A floor/roof opening needs at least 3 points", 400)
@@ -369,9 +517,13 @@ def register_estructural_routes(api):
             if ctx["simular"]:
                 return simulacion([descripcion])
 
+            rectangulo = None
             with transaccion(doc, "Crear hueco en {}".format(host_id)):
                 if es_muro:
                     hueco = doc.Create.NewOpening(host, esquina_a, esquina_b)
+                    # Rectangulo tal como lo ha registrado Revit, leido ANTES de confirmar:
+                    # si Revit borra el hueco al regenerar, es lo unico que queda para explicarlo.
+                    rectangulo = _rectangulo_mm(hueco)
                 else:
                     curvas = DB.CurveArray()
                     for i in range(len(puntos)):
@@ -382,7 +534,21 @@ def register_estructural_routes(api):
             resultado = resultado_creacion(doc, [hueco_id])
             resultado["opening_id"] = hueco_id
             resultado["host"] = describir_elemento(doc, host)
-            resultado["message"] = "Created opening {} in host {}".format(hueco_id, host_id)
+            if es_muro:
+                resultado["en_muro"] = situacion
+                if resultado["ok"]:
+                    try:
+                        rectangulo = _rectangulo_mm(doc.GetElement(make_element_id(hueco_id))) or rectangulo
+                    except Exception:
+                        pass
+                resultado["rectangulo_revit_mm"] = rectangulo
+            if resultado["ok"]:
+                resultado["message"] = "Created opening {} in host {}".format(hueco_id, host_id)
+            else:
+                resultado["message"] = (
+                    "Opening {} was created in host {} but Revit removed it when committing the "
+                    "transaction; see verificacion.detalle and avisos_revit".format(hueco_id, host_id)
+                )
             return resultado
 
         return ejecutar(doc, "/create_opening/", request, cuerpo)

@@ -10,27 +10,68 @@ logger = logging.getLogger(__name__)
 # transaccion (los rellena _FailureSwallower; los lee escritura.transaccion).
 ULTIMOS_ERRORES = []
 
+# Avisos (severidad Warning) que Revit emitio al confirmar las transacciones de
+# la peticion en curso: [{"texto", "elementos"}]. Se acumulan porque Revit puede
+# llamar varias veces al preprocesador; escritura.ejecutar los vacia al empezar
+# cada peticion y los devuelve como `avisos_revit`. Son la unica pista de por
+# que un elemento recien creado desaparece al confirmar: Revit resuelve avisos
+# como "Rectangular opening doesn't cut its host" borrando el elemento, sin
+# error y con la transaccion confirmada.
+ULTIMOS_AVISOS = []
+
+
+def _describir_fallo(f):
+    """{"texto", "elementos"} de un FailureMessageAccessor; nunca lanza."""
+    try:
+        texto = sanitize_string(f.GetDescriptionText())
+    except Exception:
+        texto = "?"
+    elementos = []
+    try:
+        for eid in f.GetFailingElementIds():
+            try:
+                elementos.append(get_element_id_value(eid))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return {"texto": texto, "elementos": elementos}
+
+
+def _es_error(f):
+    try:
+        severidad = f.GetSeverity()
+    except Exception:
+        return False
+    if severidad == DB.FailureSeverity.Error:
+        return True
+    corrupcion = getattr(DB.FailureSeverity, "DocumentCorruption", None)
+    return corrupcion is not None and severidad == corrupcion
+
 
 class _FailureSwallower(DB.IFailuresPreprocessor):
     """Resolve Revit failures during a transaction without ever showing a modal
-    dialog. Warnings are deleted (the operation proceeds); if any error-severity
-    failure is present, the transaction is rolled back. Either way the headless
-    Routes server keeps running instead of hanging on a dialog."""
+    dialog. Warnings are recorded in ULTIMOS_AVISOS and then deleted (the
+    operation proceeds); if any error-severity failure is present, the
+    transaction is rolled back. Either way the headless Routes server keeps
+    running instead of hanging on a dialog."""
 
     def PreprocessFailures(self, failuresAccessor):
         global ULTIMOS_ERRORES
         try:
+            # Record every message BEFORE deleting the warnings: once deleted
+            # their text is gone and a vanished element can't be explained.
+            errores = []
+            for f in failuresAccessor.GetFailureMessages():
+                fallo = _describir_fallo(f)
+                if _es_error(f):
+                    errores.append(fallo["texto"])
+                elif fallo not in ULTIMOS_AVISOS:
+                    ULTIMOS_AVISOS.append(fallo)
             # Delete all warnings so they don't block (operation continues).
             failuresAccessor.DeleteAllWarnings()
             # If any genuine errors remain, roll back rather than go modal. The
             # description is kept so the caller can say WHY Revit refused.
-            errores = []
-            for f in failuresAccessor.GetFailureMessages():
-                if f.GetSeverity() == DB.FailureSeverity.Error:
-                    try:
-                        errores.append(sanitize_string(f.GetDescriptionText()))
-                    except Exception:
-                        errores.append("error")
             if errores:
                 ULTIMOS_ERRORES = errores
                 return DB.FailureProcessingResult.ProceedWithRollBack
@@ -93,16 +134,26 @@ def get_element_name(element):
     return sanitize_string(name)
 
 
+try:
+    _ENTEROS = (int, long)  # IronPython 2.7
+except NameError:  # pragma: no cover - CPython 3 en las pruebas
+    _ENTEROS = (int,)
+
+
 def get_element_id_value(element_or_id):
     """
-    Extract an integer element ID from an Element or ElementId.
-    Accepts both a full Revit Element and a raw ElementId (duck typing).
+    Extract an integer element ID from an Element, an ElementId or a plain int.
+    Accepts a full Revit Element, a raw ElementId (duck typing) or an int/long
+    that already is the id (returned as is): the write layer stores ids as
+    ints and verifies them afterwards through this function.
     Compatible with Revit 2024, 2025, 2026, and 2027.
     Returns a plain Python int for JSON serialization.
     Raises ValueError if the ID cannot be extracted or input is None.
     """
     if element_or_id is None:
         raise ValueError("Cannot extract ElementId from None")
+    if isinstance(element_or_id, _ENTEROS) and not isinstance(element_or_id, bool):
+        return int(element_or_id)
     try:
         eid = element_or_id.Id if hasattr(element_or_id, "Id") else element_or_id
     except Exception:

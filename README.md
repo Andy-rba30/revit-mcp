@@ -1,6 +1,6 @@
 # Revit MCP Server
 
-MCP server for Autodesk Revit 2024/2025/2026/2027 via pyRevit — **68 tools** for building design, structure, coordinates, editing, analysis, clash detection, MEP, interop, documentation and model persistence, with a safe-write layer (backups, action log, dry-run `simular`, verification and `IA:` undo entries). Version **0.2.1**.
+MCP server for Autodesk Revit 2024/2025/2026/2027 via pyRevit — **68 tools** for building design, structure, coordinates, editing, analysis, clash detection, MEP, interop, documentation and model persistence, with a safe-write layer (backups, action log, dry-run `simular`, verification and `IA:` undo entries). Version **0.2.2**.
 
 Works with any MCP client: Claude Desktop, Claude Code, Cursor, Windsurf, Copilot, or any other MCP-compatible application.
 
@@ -188,7 +188,7 @@ of the last save) and `ms`. See [Seguridad de escritura](#seguridad-de-escritura
 | `create_structural_framing` | Create structural beams and framing |
 | `create_structural_column` | Create structural columns between levels (`StructuralType.Column`) |
 | `create_foundation` | Isolated footings, wall foundations (`WallFoundation`) and foundation slabs |
-| `create_opening` | Openings in walls (2 corners) or floors/roofs/ceilings (polygon) |
+| `create_opening` | Openings in walls (2 corners on the wall's location line, absolute z; checked against the wall before creating) or floors/roofs/ceilings (polygon) |
 | `create_toposolid` | Toposolid (Revit 2024+) from points in mm or a Civil 3D CSV (P,N,E,Z / X,Y,Z) |
 | `create_sheet` | Create new drawing sheets |
 | `create_schedule` | Create schedules with custom fields |
@@ -233,7 +233,7 @@ of the last save) and `ms`. See [Seguridad de escritura](#seguridad-de-escritura
 |------|-------------|
 | `delete_elements` | Delete elements (verifies `eliminados`/`en_cascada`; >200 needs `forzar`) |
 | `modify_element` | Modify element parameter values (`antes`/`despues`) |
-| `set_parameter` | Set a single instance (or type) parameter on an element |
+| `set_parameter` | Set a single instance (or type) parameter on an element (localized name, BuiltInParameter name or English alias; numeric values also returned in mm) |
 | `set_type_parameter` | Set a type parameter (reports affected instances) |
 | `change_element_type` | Change the type of elements (`ChangeTypeId`) |
 | `transform_elements` | Move, copy, rotate, or mirror elements (>200 needs `forzar`) |
@@ -296,6 +296,9 @@ Las 40 herramientas de escritura pasan por `revit_mcp/escritura.py`
   categoría, tipo, nivel, bbox), `antes`/`despues` o
   `eliminados`/`en_cascada`. Si no coincide con lo pedido, `ok: false` con
   `verificacion.detalle`; nunca se reintenta solo.
+- **Avisos de Revit.** Los avisos que Revit emite al confirmar se resuelven
+  solos (nunca un diálogo) y se devuelven en `avisos_revit`; si Revit borró
+  un elemento recién creado, `verificacion.detalle` cita el aviso.
 - **Deshacer.** Todas las transacciones se llaman `IA: <acción>`, así se
   distinguen en el historial de Revit.
 - **Límites.** Más de 200 elementos por llamada exige `forzar=true`

@@ -69,13 +69,26 @@ def register_structural_tools(mcp, revit_get, revit_post, revit_image=None):
         """Create an opening (hueco) in a wall, floor, roof or ceiling with
         doc.Create.NewOpening.
 
+        Wall openings: give EXACTLY 2 opposite corners of the rectangle, in
+        model coordinates (mm), on the wall's location line — take `start`/`end`
+        from get_element_properties(host_id) → location_mm and interpolate
+        along it. `z` is the ABSOLUTE elevation in mm (the same frame as
+        bbox_mm), NOT an offset from the wall base: a wall on a level at
+        +2925 mm needs z 3825..5025 for an opening 900..2100 mm above its base.
+        Corners off the wall's plane, or a rectangle outside the wall's length
+        or height, are rejected with 400 before touching the model (Revit would
+        otherwise create the opening and delete it at commit with the warning
+        "Rectangular opening doesn't cut its host"). The response includes
+        `en_muro` (where the rectangle sits along the wall and in z, in mm) and
+        `rectangulo_revit_mm` (the rectangle Revit registered).
+
         Args:
             host_id: Id of the host wall/floor/roof/ceiling
             points: In a wall: 2 opposite corners of the rectangular opening
-                {"x","y","z"} in mm (more points are reduced to their bounding
-                corners). In a floor/roof/ceiling: 3+ points of the closed
+                {"x","y","z"} in mm, absolute model coordinates on the wall's
+                plane. In a floor/roof/ceiling: 3+ points of the closed
                 polygon of the opening, in mm.
-            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
+            simular: If true, only validate (including the wall geometry check) and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"host_id": host_id, "points": points, "simular": simular}

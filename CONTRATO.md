@@ -57,6 +57,7 @@ Las garantías son las mismas para las 40 herramientas de escritura:
 | **`simular`** | Parámetro booleano (por defecto `false`) en **todas** las rutas de escritura. Con `true` el manejador valida todo (elementos, tipos, niveles, unidades convertidas) y responde `{"simulado": true, "haria": [...]}` sin abrir transacción ni hacer copia. La llamada queda en el log con `"simulado": true`. |
 | **Transacción `IA:`** | `transaccion(doc, nombre)` abre `DB.Transaction(doc, "IA: <acción>")` con `suppress_warnings`, hace `Commit` al salir y `RollBack` ante excepción. Si Revit revierte por un fallo de validación, la ruta responde `500` en vez de un éxito falso. Todas las transacciones del conector se llaman `IA: ...` (`IA: Crear muros/vigas`, `IA: Borrar elementos`, `IA: Parametro Mark de 1234`...), así el usuario distingue en el historial de deshacer lo que hizo la IA. `execute_code` usa un `TransactionGroup` con el mismo prefijo. |
 | **Verificación** | Cada manejador vuelve a leer lo que cambió: creación → `"creados": [{"id", "categoria", "tipo", "nivel", "bbox_mm"}]`; parámetros → `"antes"` / `"despues"`; borrado → `"eliminados"` / `"en_cascada"`. La respuesta lleva `"ok"` y `"verificacion": {"coincide": bool, "detalle"}`. Si lo releído no coincide con lo pedido, `ok=false` con explicación y **nunca** se reintenta solo. |
+| **Avisos de Revit** | El preprocesador de fallos borra los avisos (para que Revit no abra diálogos) pero antes los guarda; toda ruta de escritura devuelve `"avisos_revit": [{"texto", "elementos"}]` si Revit avisó de algo al confirmar. Los errores de Revit revierten la transacción y responden `500` con el motivo. Si un elemento creado ya no existe tras el commit, `verificacion.detalle` cita esos avisos (Revit resuelve avisos como `Rectangular opening doesn't cut its host` borrando el elemento, con la transacción confirmada). |
 | **Límite de alcance** | `delete_elements`, `transform_elements`, `change_type` y `set_workset` rechazan (`400`, con `limite` y `cantidad`) más de 200 elementos por llamada salvo `forzar=true`. `execute_code` exige `description` (`400` si falta) y rechaza código con `doc.Delete(<colección>)` salvo `forzar=true`. |
 | **Respuesta** | Éxito: `200` con los datos, `ok`, `ms`, `copia` (o `simulado`/`haria`). Error controlado: `400`/`404`/`409` con `{"error", ...detalles}`. Excepción: `500` con `error`, `traceback` y `copia` si ya se había hecho. |
 
@@ -95,7 +96,7 @@ Tiempos de espera del puente: 30 s lectura; 120 s escritura (`create_*`,
 | GET | `/room_data/` | — | Habitaciones con nivel, área y parámetros |
 | GET | `/selected_elements/` | — | Elementos seleccionados en Revit |
 | GET | `/list_levels/` | — | Niveles con elevación |
-| GET | `/element_properties/<element_id>` | `element_id` en la ruta | Propiedades y parámetros (`is_type_parameter` por parámetro) más `bbox_mm`, `level`, `workset`, `phase_created`, `phase_demolished`, `design_option`, `host_id`, `pinned`, `type_id` |
+| GET | `/element_properties/<element_id>` | `element_id` en la ruta | Propiedades y parámetros (`is_type_parameter` y, en los integrados, `builtin` = nombre del `BuiltInParameter`, igual en todos los idiomas) más `bbox_mm`, `location_mm` (`start`/`end`/`longitud_mm` de la línea de ubicación o `point`/`rotation_deg`), `level`, `workset`, `phase_created`, `phase_demolished`, `design_option`, `host_id`, `pinned`, `type_id` |
 | GET | `/warnings/` | `max` (100) | `warnings[]`: `descripcion`, `severidad`, `element_ids[]`; `total`, `truncated` |
 | GET | `/worksets/` | — | `is_workshared`, `worksets[]`: `id`, `nombre`, `propietario`, `editable`, `abierto`, `activo` |
 | GET | `/phases_options/` | — | `phases[]` (`id`, `nombre`, `orden`) y `design_options[]` (`id`, `nombre`, `es_principal`, `conjunto`, `activa`) |
@@ -137,7 +138,7 @@ Tiempos de espera del puente: 30 s lectura; 120 s escritura (`create_*`,
 | POST | `/create_framing/` | `elements`: vigas (puntos mm, tipo, nivel), `simular` | `creados[]` |
 | POST | `/create_column/` | `columns[]`: `point` (mm), `base_level`*, `top_level`, `top_offset`, `type_name`, `rotation`, `simular` | `creados[]` con `top_level` y `point_mm` |
 | POST | `/create_foundation/` | `foundations[]`: `point`+`level`+`type_name` (zapata aislada) / `wall_id` o `curve`+`type_name` (`WallFoundation`) / `boundary`+`level`+`type_name` (losa), `simular` | `creados[]` |
-| POST | `/create_opening/` | `host_id`*, `points[]` (mm; en muro exactamente 2 esquinas opuestas sobre la cara del muro, se usan tal cual; polígono en suelo/cubierta), `simular` | `creados[]`, `host` |
+| POST | `/create_opening/` | `host_id`*, `points[]` (mm absolutos; en muro exactamente 2 esquinas opuestas sobre la línea de ubicación del muro, con `z` absoluta como `bbox_mm`; polígono en suelo/cubierta), `simular` | `creados[]`, `host`, `en_muro` (posición del rectángulo a lo largo del muro y en z, en mm) y `rectangulo_revit_mm`. `400` si las esquinas están fuera del plano del muro, el rectángulo es degenerado o queda fuera de su longitud o altura (Revit lo crearía y lo borraría al confirmar) |
 | POST | `/create_toposolid/` | `points[]` (mm) o `csv_path` (P,N,E,Z / X,Y,Z; metros salvo `units`), `level_name`*, `type_name`, `boundary`, `simular` | `creados[]`, `source` (formato detectado, extensión) |
 | POST | `/create_room/` | `level_name`, `location`, `name`, `number`, `simular` | `creados[]`, `area` |
 | POST | `/create_room_separation/` | `lines`, `view_name`, `level_name`, `simular` | `creados[]`, `line_ids` |
@@ -151,8 +152,8 @@ Tiempos de espera del puente: 30 s lectura; 120 s escritura (`create_*`,
 | Método | Ruta | Parámetros | Respuesta |
 |--------|------|------------|-----------|
 | POST | `/modify_element/` | `element_id`, `parameters` (dict nombre → valor; longitudes en mm, áreas mm², volúmenes mm³, ángulos en grados), `simular` | `antes`/`despues` por parámetro, `failed[]` |
-| POST | `/set_parameter/` | `element_id`, `parameter_name`, `value` (longitudes en mm, áreas mm², volúmenes mm³, ángulos en grados; el resto tal cual), `simular` | `antes`/`despues`, `is_type_parameter` |
-| POST | `/set_type_parameter/` | `type_id` o `element_id`, `parameter_name`, `value` (mismas unidades que `set_parameter`), `simular` | `antes`/`despues`, `afecta_ejemplares` |
+| POST | `/set_parameter/` | `element_id`, `parameter_name` (nombre en el idioma de Revit, nombre de `BuiltInParameter` o alias inglés: `Comments`, `Mark`, `Description`, `Unconnected Height`, `Base Offset`, `Level`, `Phase Created`...), `value` (longitudes en mm, áreas mm², volúmenes mm³, ángulos en grados; el resto tal cual), `simular` | `antes`/`despues` (como los muestra Revit), `antes_valor`/`despues_valor` + `unidad` en los numéricos, `parameter_name_revit`, `is_type_parameter` |
+| POST | `/set_type_parameter/` | `type_id` o `element_id`, `parameter_name` (mismos nombres y alias que `set_parameter`), `value` (mismas unidades), `simular` | `antes`/`despues`, `parameter_name_revit`, `afecta_ejemplares` |
 | POST | `/change_type/` | `element_ids`, `type_name` (o `type_id`), `simular`, `forzar` | `antes`/`despues` (tipo) por elemento |
 | POST | `/delete_elements/` | `element_ids`, `simular`, `forzar` | `eliminados[]`, `en_cascada[]`, `antes[]` (descripción previa) |
 | POST | `/transform_elements/` | `element_ids`, `operation` (move/rotate/mirror/copy), `vector`, `axis_point`, `angle`, `mirror_plane`, `simular`, `forzar` | `antes`/`despues` (bbox), `creados[]` en copy |
@@ -283,7 +284,7 @@ cd <carpeta del repositorio>
 En otra consola:
 
 ```bat
-python pruebas\probar_revit.py [--element-id ID] [--parameter Comments]
+python pruebas\probar_revit.py [--element-id ID] [--parameter NOMBRE]
 ```
 
 El script ejecuta y muestra literalmente (nombre, código de estado y cuerpo):

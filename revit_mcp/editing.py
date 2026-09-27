@@ -14,7 +14,10 @@ from escritura import (
     ejecutar, transaccion, simulacion, EscrituraRechazada, comprobar_alcance,
     describir_elemento, verificar_eliminados,
 )
-from parameters import valor_parametro, asignar_parametro, coincide_valor
+from parameters import (
+    valor_parametro, asignar_parametro, coincide_valor, resolver_parametro, nombre_definicion,
+    nombres_parametros, NOTA_NOMBRES,
+)
 from pyrevit import routes, revit, DB
 import traceback
 import logging
@@ -109,19 +112,13 @@ def register_editing_routes(api):
             planes = []
             failed = []
             for param_name, new_value in parameters.items():
-                param = elem.LookupParameter(param_name)
+                # Nombre en el idioma de Revit, BuiltInParameter o alias ingles (Comments, Mark...)
+                param, _ = resolver_parametro(doc, elem, param_name, incluir_tipo=False)
                 if not param:
-                    available = []
-                    for p in elem.Parameters:
-                        try:
-                            available.append(p.Definition.Name)
-                        except Exception:
-                            continue
-                    available.sort()
                     failed.append({
                         "parameter": param_name,
-                        "reason": "not found",
-                        "available_parameters": available[:20],
+                        "reason": "not found. {}".format(NOTA_NOMBRES),
+                        "available_parameters": nombres_parametros(elem, 20),
                     })
                     continue
                 if param.IsReadOnly:
@@ -129,6 +126,7 @@ def register_editing_routes(api):
                     continue
                 planes.append({
                     "parameter": param_name,
+                    "parameter_revit": nombre_definicion(param),
                     "param": param,
                     "new_value": new_value,
                     "antes": valor_parametro(param, doc),
@@ -170,6 +168,7 @@ def register_editing_routes(api):
                 coincide = coincide_valor(plan["param"], plan["new_value"])
                 changes.append({
                     "parameter": plan["parameter"],
+                    "parameter_revit": plan["parameter_revit"],
                     "old_value": plan["antes"],
                     "new_value": valor_despues,
                     "status": "set" if coincide else "mismatch",
