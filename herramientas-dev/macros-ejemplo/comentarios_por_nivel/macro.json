@@ -1,0 +1,13 @@
+{
+  "name": "comentarios_por_nivel",
+  "description": "Rellena el parámetro Comentarios (o el que se indique) con el nombre del nivel en todos los elementos de una categoría. No toca los que ya tienen texto salvo overwrite.",
+  "version": "1.0",
+  "args": {
+    "category": {"type": "str", "required": true, "description": "BuiltInCategory, p. ej. \"OST_Walls\" (nunca el nombre visible)"},
+    "parameter": {"type": "str", "required": false, "default": "Comments", "description": "Parámetro de texto a rellenar (nombre visible, alias inglés o BuiltInParameter)"},
+    "overwrite": {"type": "bool", "required": false, "default": false, "description": "Sobrescribir los comentarios que ya tienen texto"},
+    "level": {"type": "level", "required": false, "default": null, "description": "Solo los elementos de este nivel (nombre exacto)"}
+  },
+  "writes": true,
+  "timeout_s": 120
+}
