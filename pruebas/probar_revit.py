@@ -8,7 +8,7 @@ compartido para que se creen copias en backups\\) y el puente MCP en marcha
 (python main.py --combined, o --streamable-http, en 8000).
 
 Uso:
-    python pruebas\\probar_revit.py [--element-id ID] [--parameter Comments]
+    python pruebas\\probar_revit.py [--element-id ID] [--parameter Comments] [--fase 2a]
 
 Cada prueba imprime nombre, código de estado y cuerpo tal cual llega.
 Termina con código de salida 0 si todas dan el resultado esperado.
@@ -27,6 +27,16 @@ Pruebas:
    9  el nombre de la última entrada de deshacer empieza por "IA:"
       (se lee con doc.GetUndoName() vía execute_code; si esa API no existe en
       la versión de Revit, se pide comprobación manual y se da por verificada)
+
+Con --fase 2a se añaden (0.3.0), sin depender de nombres visibles en inglés:
+  2a.1  describe_element de un muro devuelve parameters, bbox_mm y hosted_elements
+  2a.2  query_elements con op=contains sobre Mark pagina bien (marcas temporales
+        en dos muros, page_size=1, páginas disjuntas; después se restauran)
+  2a.3  snapshot_model antes y después de crear un nivel, y diff_snapshots lista
+        exactamente ese nivel (el nivel se borra al final)
+  2a.4  create_grid_and_levels(simular=true) no crea nada (recuento de rejillas
+        y niveles igual antes y después; sin copia; entrada simulada en el log)
+Las fases 2b y 2c se añadirán con sus entregas.
 """
 import argparse
 import json
@@ -113,6 +123,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--element-id", type=int, default=None, help="elemento para las pruebas 6 y 7 (por defecto, el primer muro)")
     parser.add_argument("--parameter", default="Comments", help="parámetro de texto editable (por defecto Comments)")
+    parser.add_argument("--fase", choices=["2a", "2b", "2c"], default=None,
+                        help="añade las pruebas de esa entrega de la fase 2 (2a: navegación y macros)")
     args = parser.parse_args()
 
     resultados = []
@@ -295,9 +307,161 @@ def main():
         resultados.append(resultado_manual("9. Última entrada de deshacer", False,
                                            "   estado {} salida {!r}".format(r.status_code, salida)))
 
+    if args.fase == "2a":
+        pruebas_2a(cliente, token, resultados)
+    elif args.fase:
+        print("=" * 70)
+        print("Fase {}: sin pruebas todavía (entrega pendiente)".format(args.fase))
+
     print("=" * 70)
     print("Resultado: {}/{} pruebas correctas".format(sum(resultados), len(resultados)))
     return 0 if all(resultados) else 1
+
+
+# ---------------------------------------------------------------------------
+# Fase 2a (0.3.0): navegación profunda y macros de proyecto
+# ---------------------------------------------------------------------------
+def _post(cliente, ruta, token, cuerpo):
+    datos = dict(cuerpo)
+    datos["token"] = token
+    return cliente.post(REVIT + ruta, json=datos)
+
+
+def _ids_query(cliente, token, categoria):
+    r = _post(cliente, "/query/", token, {"category": categoria, "page_size": 500, "ids_only": True})
+    datos = _json(r)
+    return set(datos.get("ids") or []), datos.get("total_matched")
+
+
+def pruebas_2a(cliente, token, resultados):
+    marca_tiempo = int(time.time())
+
+    # 2a.1 describe_element de un muro: parameters, bbox_mm y hosted_elements
+    r = _post(cliente, "/find_elements/", token, {"category": "OST_Walls", "max": 2})
+    muros = _json(r).get("ids") or []
+    if not muros:
+        resultados.append(resultado_manual("2a.1 describe_element", False, "   No hay muros en el modelo"))
+    else:
+        r = _post(cliente, "/describe/", token, {"element_id": muros[0], "depth": 1})
+        ok = mostrar("2a.1 POST /describe/ del muro {}".format(muros[0]), 200, r, cuerpo_max=2500)
+        datos = _json(r)
+        if ok:
+            parametros = datos.get("parameters") or {}
+            ok = (isinstance(parametros.get("instance"), list) and len(parametros["instance"]) > 0
+                  and "bbox_mm" in datos and isinstance(datos.get("hosted_elements"), list))
+            if not ok:
+                print("   (se esperaban parameters.instance no vacío, bbox_mm y hosted_elements)")
+            else:
+                print("   parámetros de ejemplar: {}, de tipo: {}, alojados: {}, unidos: {}, referencias en la vista activa: {}".format(
+                    len(parametros["instance"]), len(parametros.get("type") or []), len(datos["hosted_elements"]),
+                    len(datos.get("joined_elements") or []), len(datos.get("referenced_by") or [])))
+        resultados.append(ok)
+
+    # 2a.2 query_elements con op=contains sobre Mark pagina bien
+    if len(muros) < 2:
+        resultados.append(resultado_manual("2a.2 query_elements", False, "   Hacen falta al menos 2 muros"))
+    else:
+        originales = {}
+        for indice, muro in enumerate(muros[:2]):
+            r = _post(cliente, "/set_parameter/", token, {"element_id": muro, "parameter_name": "Mark", "value": "MCP-2A-{}".format(indice + 1)})
+            originales[muro] = (_json(r).get("antes") or "")
+        vistos = []
+        pagina = 1
+        ok = True
+        total = None
+        while True:
+            r = _post(cliente, "/query/", token, {
+                "category": "OST_Walls", "filters": [{"parameter": "Mark", "op": "contains", "value": "MCP-2A"}],
+                "page_size": 1, "page": pagina, "sort_by": "id"})
+            if pagina == 1:
+                ok = mostrar("2a.2 POST /query/ Mark contains MCP-2A (page_size=1)", 200, r)
+            datos = _json(r)
+            if r.status_code != 200:
+                ok = False
+                break
+            total = datos.get("total_matched")
+            ids = datos.get("ids") or []
+            if len(ids) > 1 or any(i in vistos for i in ids):
+                ok = False
+                print("   (página {} repite ids o devuelve más de uno: {})".format(pagina, ids))
+                break
+            vistos.extend(ids)
+            if not datos.get("truncated") or pagina >= 10:
+                break
+            pagina += 1
+        if ok:
+            ok = total is not None and total >= 2 and len(vistos) == total and datos.get("pages") == total
+            print("   total_matched={} páginas={} ids={} [{}]".format(total, datos.get("pages"), vistos, "OK" if ok else "FALLO"))
+        for muro, original in originales.items():
+            _post(cliente, "/set_parameter/", token, {"element_id": muro, "parameter_name": "Mark", "value": original})
+        resultados.append(ok)
+
+    # 2a.3 snapshot antes/después de crear un nivel; diff lista exactamente ese nivel
+    nombre_nivel = "MCP 2A nivel {}".format(marca_tiempo)
+    r = _post(cliente, "/snapshot/", token, {"name": "prueba2a_antes", "overwrite": True})
+    ok = mostrar("2a.3a POST /snapshot/ antes", 200, r, cuerpo_max=600)
+    ruta_antes = _json(r).get("ruta")
+    nivel_id = None
+    ruta_despues = None
+    if ok:
+        r = _post(cliente, "/create_level/", token, {"levels": [{"name": nombre_nivel, "elevation": 123456}]})
+        ok = mostrar("2a.3b POST /create_level/ {}".format(nombre_nivel), 200, r, cuerpo_max=600)
+        creados = _json(r).get("creados") or []
+        nivel_id = creados[0]["id"] if creados else None
+        ok = ok and nivel_id is not None
+    if ok:
+        r = _post(cliente, "/snapshot/", token, {"name": "prueba2a_despues", "overwrite": True})
+        ok = mostrar("2a.3c POST /snapshot/ después", 200, r, cuerpo_max=600)
+        ruta_despues = _json(r).get("ruta")
+    if ok:
+        r = _post(cliente, "/diff_snapshots/", token, {"a": "prueba2a_antes", "b": "prueba2a_despues"})
+        ok = mostrar("2a.3d POST /diff_snapshots/", 200, r, cuerpo_max=1500)
+        datos = _json(r)
+        if ok:
+            anadidos = [e.get("id") for e in (datos.get("added") or [])]
+            ok = anadidos == [nivel_id] and datos.get("removed") == []
+            if not ok:
+                print("   (se esperaba added=[{}] y removed=[]; added={} removed={})".format(nivel_id, anadidos, datos.get("removed")))
+            if datos.get("modified"):
+                print("   aviso: {} elementos modificados al crear el nivel: {}".format(
+                    len(datos["modified"]), [m.get("id") for m in datos["modified"]][:10]))
+    resultados.append(ok)
+    if nivel_id is not None:
+        r = _post(cliente, "/delete_elements/", token, {"element_ids": [nivel_id]})
+        print("   limpieza: nivel {} borrado -> {}".format(nivel_id, r.status_code))
+    for ruta in (ruta_antes, ruta_despues):
+        try:
+            if ruta and os.path.isfile(ruta):
+                os.remove(ruta)
+        except OSError as error:
+            print("   no se pudo borrar {}: {}".format(ruta, error))
+
+    # 2a.4 create_grid_and_levels(simular=true) no crea nada
+    rejillas_antes, _ = _ids_query(cliente, token, "OST_Grids")
+    niveles_antes = len(_json(cliente.get(REVIT + "/list_levels/", params={"token": token})).get("levels") or [])
+    r = _post(cliente, "/grid_levels/", token, {
+        "x_spacings_mm": [6000, 6000], "y_spacings_mm": [5000], "x_names": "MCP2A-1", "y_names": "MCPY1",
+        "levels": [{"name": "MCP 2A sim {}".format(marca_tiempo), "elevation_mm": 99000}], "simular": True})
+    ok = mostrar("2a.4 POST /grid_levels/ simular=true", 200, r, cuerpo_max=2000)
+    datos = _json(r)
+    if ok:
+        plan = datos.get("plan") or {}
+        ok = (datos.get("simulado") is True and "copia" not in datos and "haria" in datos
+              and (plan.get("counts") or {}).get("total") == 6)
+        if not ok:
+            print("   (se esperaba simulado=true, haria, plan.counts.total=6 y sin copia)")
+    if ok:
+        rejillas_despues, _ = _ids_query(cliente, token, "OST_Grids")
+        niveles_despues = len(_json(cliente.get(REVIT + "/list_levels/", params={"token": token})).get("levels") or [])
+        ok = rejillas_despues == rejillas_antes and niveles_despues == niveles_antes
+        print("   rejillas {} -> {}, niveles {} -> {} [{}]".format(
+            len(rejillas_antes), len(rejillas_despues), niveles_antes, niveles_despues, "OK" if ok else "FALLO"))
+    if ok:
+        entradas = _json(cliente.get(REVIT + "/log/", params={"token": token, "last_n": "3"})).get("entradas", [])
+        ultima = next((e for e in reversed(entradas) if e.get("ruta") == "/grid_levels/"), None)
+        ok = ultima is not None and ultima.get("simulado") is True
+        print("   log: {}".format("entrada simulada encontrada" if ok else "NO hay entrada simulada de /grid_levels/"))
+    resultados.append(ok)
 
 
 if __name__ == "__main__":

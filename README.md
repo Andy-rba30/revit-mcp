@@ -1,6 +1,6 @@
 # Revit MCP Server
 
-MCP server for Autodesk Revit 2024/2025/2026/2027 via pyRevit — **68 tools** for building design, structure, coordinates, editing, analysis, clash detection, MEP, interop, documentation and model persistence, with a safe-write layer (backups, action log, dry-run `simular`, verification and `IA:` undo entries). Version **0.2.2**.
+MCP server for Autodesk Revit 2024/2025/2026/2027 via pyRevit — **78 tools** for building design, structure, coordinates, editing, analysis, clash detection, MEP, interop, documentation, model persistence, deep navigation (element relations, parameter queries, schedules, snapshots) and project macros (grids + levels, sheet sets, Civil 3D import), with a safe-write layer (backups, action log, dry-run `simular`, verification and `IA:` undo entries). Version **0.3.0**.
 
 Works with any MCP client: Claude Desktop, Claude Code, Cursor, Windsurf, Copilot, or any other MCP-compatible application.
 
@@ -121,9 +121,15 @@ real `set_parameter` returning `antes`/`despues` plus a log line and a backup,
 `400` for `execute_code` without `description`, and the last undo entry named
 `IA: ...`. Details in [CONTRATO.md](CONTRATO.md).
 
+`python pruebas\probar_revit.py --fase 2a` adds the four 0.3.0 checks
+(describe_element, paginated query_elements, snapshot/diff around a new level
+and a simulated create_grid_and_levels); expected `13/13`.
+
 Without Revit, `uv run pytest` runs the CPython tests in `tests/` (JSON
 formatting, simulated transactions, log rotation, write routes against a fake
-`pyrevit`, CSV reader and the IronPython 2.7 compatibility guard).
+`pyrevit`, CSV reader, the IronPython 2.7 compatibility guard and, since
+0.3.0, end-to-end tests of every navigation, snapshot and macro route
+against the fake model in `tests/fakes/modelo_falso.py`).
 
 ## Connecting Your AI Client
 
@@ -170,7 +176,7 @@ mcp dev main.py
 
 Then open `http://127.0.0.1:6274` in your browser.
 
-## Supported Tools (68)
+## Supported Tools (78)
 
 Every write tool accepts `simular` (dry run: validates and returns `haria`
 without touching the model) and returns `ok`, `verificacion`, `copia` (backup
@@ -211,7 +217,7 @@ of the last save) and `ms`. See [Seguridad de escritura](#seguridad-de-escritura
 | `list_families` | Family types filtered by `contains`, `category` and `limit` |
 | `list_family_categories` | Get all family categories |
 | `list_element_types` | Types of a category with main type parameters and instance counts |
-| `find_elements` | Search by category, name, type, level and parameter value (ids + summary) |
+| `find_elements` | Search by category, name, type, level and parameter value (ids + summary); since 0.3.0 an alias of `query_elements` with the same fields |
 | `get_element_properties` | Parameters plus bbox, level, workset, phase, design option, host |
 | `get_element_geometry` | Bounding box in mm, location curves or solids (volume, area) |
 | `get_revit_view` | Export a view as an image |
@@ -220,12 +226,32 @@ of the last save) and `ms`. See [Seguridad de escritura](#seguridad-de-escritura
 | `get_current_view_elements` | Get elements in current view |
 | `get_selected_elements` | Get currently selected elements |
 | `list_category_parameters` | List parameters for a category |
-| `list_warnings` | Model warnings with severity and element ids |
+| `list_warnings` | Model warnings with severity and element ids; `group_by="description"` groups them by failure type with a suggestion each (chosen by `FailureDefinitionId`, language independent) |
 | `list_worksets` | Worksets: id, name, owner, editable, open |
 | `list_phases_and_options` | Phases and design options |
 | `list_links` | RVT/IFC links and CAD imports with path, loaded status and position |
 | `get_project_location` | Project base point, survey point, true north, shared coordinates |
 | `read_log` | Last entries of `mcp_log.jsonl` |
+
+### Navigate (7, 0.3.0, read-only)
+
+| Tool | Description |
+|------|-------------|
+| `describe_element` | Everything about one element: instance/type parameters (value in mm/mm²/mm³/deg, `builtin` name, shared guid), hosted, joined and dependent elements, dimensions/tags referencing it in the active view, bbox and geometry |
+| `dependency_graph` | Nodes and edges (`hosts`, `joins`, `depends`) around an element, breadth-first, max 500 nodes |
+| `query_elements` | Paginated query (max 500 per page) by category, family, type, level, view, workset, phase, bounding box and `filters` (`=`, `!=`, `>`, `<`, `>=`, `<=`, `contains`, `starts`, `empty`, `not_empty`, `exists`); native `ElementParameterFilter` for BuiltInParameter/shared parameters |
+| `schedule_to_json` | Headers and rows of a schedule as Revit shows them (`GetTableData` / `GetCellText`) |
+| `get_view_extents` | Crop box, view range, scale, level, discipline, template, section box and sheet of a view |
+| `snapshot_model` | Save `<rvt folder>\snapshots\<name>.json` with id, UniqueId, category, type, level, bbox and parameter hash/values per element (no transaction) |
+| `diff_snapshots` | Added / removed / modified elements (with the parameters that changed) between two snapshots, or a snapshot and the live model |
+
+### Project macros (3, 0.3.0)
+
+| Tool | Description |
+|------|-------------|
+| `create_grid_and_levels` | Full grid with sequential names (1, 2, 3 / A, B, C) and levels in one transaction; `plan` with `simular` |
+| `create_sheet_set` | Sheets with views placed (`Viewport.CanAddViewToSheet` before `Viewport.Create`); views already on a sheet are reported and skipped |
+| `import_from_civil` | LandXML surface or CSV (P,N,E,Z) → toposolid; DWG → link in the level's plan and, optionally, acquire shared coordinates (409 unless `forzar` when the project already has them) |
 
 ### Modify (16)
 
@@ -276,7 +302,7 @@ of the last save) and `ms`. See [Seguridad de escritura](#seguridad-de-escritura
 
 ## Seguridad de escritura
 
-Las 40 herramientas de escritura pasan por `revit_mcp/escritura.py`
+Las 43 herramientas de escritura pasan por `revit_mcp/escritura.py`
 (detalle en [CONTRATO.md](CONTRATO.md#escritura-segura)):
 
 - **Comprobación previa.** `409` si Revit tiene una transacción abierta de
@@ -300,7 +326,7 @@ Las 40 herramientas de escritura pasan por `revit_mcp/escritura.py`
   distinguen en el historial de Revit.
 - **Límites.** Más de 200 elementos por llamada exige `forzar=true`
   (`delete_elements`, `transform_elements`, `change_element_type`,
-  `set_workset`). `execute_revit_code` exige `description` y rechaza
+  `set_workset` y las macros de 0.3.0 sobre el total que crean). `execute_revit_code` exige `description` y rechaza
   `doc.Delete(<colección>)` salvo `forzar`.
 - **Instrucciones al agente.** `INSTRUCCIONES_AGENTE.md` se envía como
   `instructions` del servidor: precedencia de herramientas, flujo obligatorio
@@ -357,7 +383,7 @@ This server supports Revit 2024, 2025, 2026, and 2027 through centralized helper
 
 No configuration needed — version detection is automatic via try/except at runtime.
 
-> **Revit 2027 note:** Revit 2027 runs on **.NET 10** (vs .NET 8 in 2025/2026). This MCP server is pyRevit-based, so .NET compatibility is handled by pyRevit itself — ensure you run a **pyRevit build with Revit 2027 support**. None of the 68 tools use APIs removed in 2027 (AXM/FormIt import, `Mechanical.Zone` members, legacy rebar creation, or the dropped `EnergyDataSettings` properties). `create_toposolid` needs Revit 2024+ (`DB.Toposolid`).
+> **Revit 2027 note:** Revit 2027 runs on **.NET 10** (vs .NET 8 in 2025/2026). This MCP server is pyRevit-based, so .NET compatibility is handled by pyRevit itself — ensure you run a **pyRevit build with Revit 2027 support**. None of the 78 tools use APIs removed in 2027 (AXM/FormIt import, `Mechanical.Zone` members, legacy rebar creation, or the dropped `EnergyDataSettings` properties). `create_toposolid` and `import_from_civil` (LandXML/CSV) need Revit 2024+ (`DB.Toposolid`). The API members added in 0.3.0 that are still pending a check inside Revit are listed in `herramientas-dev/miembros_por_verificar_revit.md`.
 
 ## Unit Handling
 

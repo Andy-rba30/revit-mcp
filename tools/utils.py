@@ -10,7 +10,11 @@ TIMEOUT_LECTURA = 30.0      # consultas: status, listados, propiedades...
 TIMEOUT_ESCRITURA = 120.0   # create_*, transform_elements, color_splash y demas cambios
 TIMEOUT_LARGO = 600.0       # export_ifc, export_document, check_clashes,
                             # get_material_quantities, link_file, load_family,
-                            # save_document, execute_revit_code
+                            # save_document, execute_revit_code, create_toposolid,
+                            # purge_unused, create_backup y, desde 0.3.0,
+                            # snapshot_model, diff_snapshots e import_from_civil.
+                            # No es un sustituto de un limite de elementos: cada
+                            # macro aplica comprobar_alcance (200 salvo forzar).
 
 
 def _texto_estado(response):
