@@ -55,3 +55,14 @@ con muro y puerta alojada, y lectura de puntos por `execute_code` correctos. Fal
 Pendiente en Revit: repetir `probar_revit.py` (se esperan 9/9) y `create_opening` con z dentro del muro. Los
 huecos 615578 y 615589 de la prueba anterior probablemente sí se crearon: revisar el modelo o deshacerlos
 (entradas `IA: Crear hueco en 165465`).
+
+## Validación en Revit de la 0.2.2 (2026-09-27)
+
+`probar_revit.py` 9/9. `create_opening` dentro del muro: `ok:true`, hueco 615549 verificado; fuera del muro: 400
+con las cotas reales del muro. Parámetros por nombre inglés y `BuiltInParameter`: `parameter_label` correcto.
+`available_parameters` sin repetidos. Tildes correctas en `list_levels` y `element_types`. Helpers de
+`execute_code` correctos. Los huecos 615578 y 615589 no existían (el modelo se reabrió sin guardar).
+
+| # | Dónde | Qué fallaba | Qué se hizo |
+|---|---|---|---|
+| 20 | `parameters.py` `set_parameter` con `simular` | En un Double, `despues` mostraba el valor interno en pies (`9.84251968504` para 3000 mm) | `despues` en las unidades en que se recibió (`3000 mm`) |

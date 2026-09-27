@@ -212,3 +212,22 @@ def test_execute_code_trae_helpers_de_ids():
     assert espacio["buscar_parametro"] is buscar_por_nombre
     pistas = code_execution._pistas("ImportError", "No module named utils")
     assert any("make_element_id" in p for p in pistas)
+
+
+def test_simular_double_muestra_mm_no_pies():
+    import parameters
+
+    class Spec(object):
+        pass
+
+    longitud = Spec()
+    DB.SpecTypeId = type("SpecTypeId", (), {"Length": longitud, "Area": Spec(), "Volume": Spec(), "Angle": Spec()})
+    try:
+        param = Parametro(u"Altura desconectada", None)
+        param.StorageType = DB.StorageType.Double
+        param.Definition.GetDataType = lambda: longitud
+        convertido = parameters.convertir_valor(param, 3000)
+        assert abs(convertido - 3000 / 304.8) < 1e-9
+        assert parameters.despues_simulado(param, 3000, convertido) == u"3000 mm"
+    finally:
+        del DB.SpecTypeId

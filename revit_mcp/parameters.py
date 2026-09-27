@@ -138,6 +138,29 @@ def factor_a_interno(param):
     return None
 
 
+def unidad_contrato(param):
+    """"mm", "mm2", "mm3" o "deg" si el Double se recibe en esas unidades; None si no."""
+    try:
+        spec = param.Definition.GetDataType()
+        tipos = DB.SpecTypeId
+        for nombre, unidad in (("Length", "mm"), ("Area", "mm2"), ("Volume", "mm3"), ("Angle", "deg")):
+            if spec == getattr(tipos, nombre):
+                return unidad
+    except Exception:
+        return None
+    return None
+
+
+def despues_simulado(param, value, convertido):
+    """Valor que tendria el parametro, para `simular`: en las unidades en que se
+    recibio ("3000 mm"), no en las internas de Revit (pies o radianes)."""
+    if param.StorageType == DB.StorageType.Double:
+        unidad = unidad_contrato(param)
+        texto = _texto(value).strip()
+        return u"{} {}".format(texto, unidad) if unidad else texto
+    return _texto(convertido) if not isinstance(convertido, _cadena) else convertido
+
+
 def convertir_valor(param, value):
     """Convierte `value` al tipo que espera el parametro. Lanza ValueError.
 
@@ -448,7 +471,7 @@ def register_parameter_routes(api):
                         "is_type_parameter": es_de_tipo,
                         "storage_type": str(param.StorageType),
                         "antes": antes,
-                        "despues": _texto(convertido) if not isinstance(convertido, _cadena) else convertido,
+                        "despues": despues_simulado(param, value, convertido),
                     }]
                 )
 
