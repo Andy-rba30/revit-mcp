@@ -21,6 +21,7 @@ por un nombre ingles fijo.
 """
 
 from utils import (
+    elevacion_interna, elevacion_mostrada,
     get_element_name, get_element_id_value, make_element_id, xyz_desde_mm, punto_a_mm,
     elementos_por_nombre, mapa_niveles, buscar_vista, MM_TO_FEET, FEET_TO_MM,
 )
@@ -575,7 +576,8 @@ def register_macros_routes(api):
                     elem = doc.GetElement(make_element_id(creado["id"]))
                     creado["name"] = get_element_name(elem)
                     if creado["id"] in ids_levels:
-                        creado["elevation_mm"] = round(elem.Elevation * FEET_TO_MM, 1)
+                        creado["elevation_mm"] = round(elevacion_interna(elem) * FEET_TO_MM, 1)
+                        creado["elevation_shown_mm"] = round(elevacion_mostrada(elem) * FEET_TO_MM, 1)
                         levels.append(creado)
                     else:
                         grids.append(creado)

@@ -9,7 +9,7 @@ from pyrevit.revit.db import ProjectInfo as RevitProjectInfo
 import pyrevit.revit.db.query as q
 import logging
 
-from utils import normalize_string, get_element_name, buscar_por_nombre
+from utils import normalize_string, get_element_name, buscar_por_nombre, elevacion_interna, elevacion_mostrada
 from seguridad import requiere_token
 from escritura import ruta_documento, es_compartido, _fecha_archivo
 from coordenadas import resumen_para_model_info
@@ -163,6 +163,9 @@ def register_model_info_routes(api):
                             {
                                 "name": normalize_string(level_name),
                                 "elevation": round(elevation, 2),
+                                # 0.3.2: en mm, respecto al origen interno (marco de las XYZ) y la mostrada por Revit
+                                "elevation_mm": round(elevacion_interna(level) * 304.8, 1),
+                                "elevation_shown_mm": round(elevacion_mostrada(level) * 304.8, 1),
                             }
                         )
                     except:

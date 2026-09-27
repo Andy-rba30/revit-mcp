@@ -493,3 +493,16 @@ def test_tool_create_grid_and_levels_acepta_prefijo_o_lista():
     for clave in ("x_names", "y_names"):
         argumentos = typing.get_args(pistas[clave])
         assert str in argumentos and list[str] in argumentos, (clave, pistas[clave])
+
+
+def test_grid_levels_elevation_mm_es_interna_y_shown_la_de_revit(api, doc, monkeypatch):
+    """0.3.2: en Revit, elevation_mm salia 117450 para un nivel pedido a 99000 porque se leia Level.Elevation
+    (mostrada segun la Base de elevacion) en vez de ProjectElevation (origen interno, el marco de Level.Create)."""
+    monkeypatch.setattr(DB.Level, "desfase_base", 18450.0 * mf.MM_TO_FEET)
+    r = _post(api, "/grid_levels/", doc, {"levels": [{"name": u"MCP validacion", "elevation_mm": 99000}]})
+    assert r.status == 200, r.data
+    nivel = r.data["levels"][0]
+    assert nivel["elevation_mm"] == 99000.0 and nivel["elevation_shown_mm"] == 117450.0
+    r = _post(api, "/create_level/", doc, {"levels": [{"name": u"Otro", "elevation": 1000}]})
+    assert r.status == 200 and r.data["creados"][0]["elevation_mm"] == 1000.0
+    assert r.data["creados"][0]["elevation_shown_mm"] == 19450.0

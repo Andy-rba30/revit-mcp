@@ -9,6 +9,7 @@ Todas las rutas pasan por escritura.ejecutar: copia de seguridad, log,
 """
 
 from utils import (
+    elevacion_interna, elevacion_mostrada,
     get_element_name, get_element_id_value, make_element_id, xyz_desde_mm, punto_a_mm,
     elementos_por_nombre, mapa_niveles, nivel_mas_bajo, MM_TO_FEET,
 )
@@ -414,7 +415,9 @@ def register_building_routes(api):
             for creado in resultado["creados"]:
                 try:
                     nivel = doc.GetElement(make_element_id(creado["id"]))
-                    creado["elevation_mm"] = round(nivel.Elevation / MM_TO_FEET, 1)
+                    # elevation_mm: origen interno (el marco de la peticion); elevation_shown_mm: la que muestra Revit
+                    creado["elevation_mm"] = round(elevacion_interna(nivel) / MM_TO_FEET, 1)
+                    creado["elevation_shown_mm"] = round(elevacion_mostrada(nivel) / MM_TO_FEET, 1)
                     creado["name"] = get_element_name(nivel)
                 except Exception:
                     pass

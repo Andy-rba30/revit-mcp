@@ -7,6 +7,7 @@ Las tres rutas pasan por escritura.ejecutar (copia, log, simular, IA:).
 """
 
 from utils import (
+    elevacion_interna, elevacion_mostrada,
     buscar_por_nombre,
     get_element_name, get_element_id_value, make_element_id, xyz_desde_mm, punto_a_mm,
     elementos_por_nombre, mapa_niveles, coleccion_niveles, MM_TO_FEET,
@@ -72,7 +73,7 @@ def _nivel(doc, data, start):
     niveles = list(coleccion_niveles(doc))
     if not niveles:
         raise EscrituraRechazada("No levels found in the project", 400)
-    return min(niveles, key=lambda lv: abs(lv.Elevation - start.Z))
+    return min(niveles, key=lambda lv: abs(elevacion_interna(lv) - start.Z))
 
 
 def _fijar_medida(elem, nombre, valor_mm):

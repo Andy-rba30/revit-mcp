@@ -119,3 +119,13 @@ Y debajo:
 - Sin probar: DWG en `import_from_civil` (no había archivo) y `create_sheet_set` con una vista ya colocada.
 - 9 tipos de advertencia salieron con `failure: null`; sus GUID están ahora en `navegacion.SUGERENCIAS_POR_GUID`.
 - Rendimiento a vigilar: el snapshot bloquea Revit 8 s en un modelo de 2746 elementos.
+
+### Segunda pasada (0.3.1, mismo Revit)
+
+- `create_grid_and_levels` con `x_names="V1"`: simulado y real correctos (6 elementos, 115 ms), borrados después.
+- El nivel pedido a `elevation_mm: 99000` se devolvió con `elevation_mm: 117450`: la ruta leía `Level.Elevation`
+  (elevación mostrada, según la Base de elevación del tipo de nivel) en vez de `Level.ProjectElevation` (origen
+  interno, el marco de `Level.Create` y de las XYZ). Corregido en 0.3.2 en todos los usos (`utils.elevacion_interna`):
+  niveles, pilares, zapatas, vigas y MEP; las respuestas traen `elevation_mm` (interno) y `elevation_shown_mm`.
+- `list_warnings` seguía con 9 `failure: null` porque el agente reinició el puente pero no recargó pyRevit: la tabla
+  de GUID vive en `revit_mcp/`, que corre dentro de Revit. Pendiente de repetir tras recargar.
