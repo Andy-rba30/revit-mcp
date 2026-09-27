@@ -33,6 +33,7 @@ def register_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func
     from .location_tools import register_location_tools
     from .maintenance_tools import register_maintenance_tools
     from .navigation_tools import register_navigation_tools
+    from .macro_tools import register_macro_tools
 
     # Register tools from each module
     register_status_tools(mcp_server, revit_get_func)
@@ -65,3 +66,4 @@ def register_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func
     register_location_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func)
     register_maintenance_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func)
     register_navigation_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func)
+    register_macro_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func)

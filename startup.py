@@ -254,6 +254,10 @@ def register_routes():
 
         register_instantaneas_routes(api)
 
+        from revit_mcp.macros import register_macros_routes
+
+        register_macros_routes(api)
+
         logger.info("All MCP routes registered successfully")
 
     except Exception as e:

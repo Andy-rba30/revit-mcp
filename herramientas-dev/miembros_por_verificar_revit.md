@@ -69,3 +69,22 @@ Estados: `verificado` (ejecutado en Revit 2027 en español, 0.2.2), `no existe`,
 | módulo | `hashlib.md5` (biblioteca de IronPython 2.7; reserva `zlib.crc32`) | IronPython 2.7 | `/snapshot/` (hash de parámetros) | por verificar |
 | expresión | `int(BuiltInCategory)` comparado con `get_element_id_value(Category.Id)` | 2011 | `/snapshot/` (niveles y rejillas por defecto) | por verificar (`placement._necesita_muro` ya usa `int(bic)`) |
 | método | `FilteredElementCollector(doc).WhereElementIsNotElementType()` sin más filtros (recorrido completo) | 2011 | `/snapshot/` por defecto, `/query/` sin criterios nativos | verificado (`/model_statistics/`) |
+
+## Entrega 2a (0.3.0): Bloque D, macros de proyecto
+
+| Tipo | Miembro | Versión mínima | Ruta que lo usa | Estado |
+|---|---|---|---|---|
+| método | `Grid.Create(Document, Line)` + `Grid.Name` (rechaza nombres repetidos) | 2011 | `/grid_levels/` (`structure.crear_rejilla`), `/create_grid/` | por verificar |
+| método | `Level.Create(Document, double)` + `Level.Name` | 2011 | `/grid_levels/` (`building.crear_nivel`), `/create_level/` | por verificar |
+| método | `ViewSheet.Create(Document, ElementId cajetín)`, `ViewSheet.SheetNumber`, `View.Name` | 2013 | `/sheet_set/` (`documentation.crear_plano`), `/create_sheet/` | por verificar |
+| método | `Viewport.CanAddViewToSheet(Document, ElementId, ElementId)` y `Viewport.Create(Document, ElementId, ElementId, XYZ)` | 2014 | `/sheet_set/` | por verificar |
+| propiedad | `Viewport.ViewId`, `Viewport.SheetId` | 2014 | `/sheet_set/` (vistas ya colocadas) | por verificar |
+| método | `ScheduleSheetInstance.Create(Document, ElementId, ElementId, XYZ)`, `ScheduleSheetInstance.ScheduleId`, `.OwnerViewId` | 2014 | `/sheet_set/` (tablas) | por verificar |
+| método | `Element.get_BoundingBox(ViewSheet)` del cajetín para centrar la vista | 2011 | `/sheet_set/` (`position_mm` omitido) | por verificar |
+| método | `Document.Link(string, DWGImportOptions, View, out ElementId)` | 2011 | `/import_civil/` (`interop.vincular_cad`), `/link_file/` | por verificar |
+| propiedad | `DWGImportOptions.Placement` = `ImportPlacement.Origin` / `Centered` / `Shared` / `Site` | 2011 | `/import_civil/` (`placement`), `/link_file/` | por verificar |
+| método | `Document.AcquireCoordinates(ElementId)` sobre un `ImportInstance` (DWG vinculado) | 2018 | `/import_civil/` (`use_shared_coordinates`) | por verificar (el caso RVT ya estaba pendiente) |
+| propiedad | `ProjectLocation.GetProjectPosition(XYZ)` → `EastWest`, `NorthSouth`, `Elevation`, `Angle` | 2011 | `/import_civil/` (409 si ya hay coordenadas compartidas) | por verificar |
+| método | `ElementTransformUtils.MoveElement` sobre un `ImportInstance` | 2012 | `/import_civil/` (`origin_offset_mm` con DWG) | por verificar |
+| propiedad | `ViewPlan.GenLevel` para elegir la planta del nivel | 2011 | `/import_civil/` (vista de colocación) | por verificar |
+| formato | LandXML: `<Units><Metric linearUnit>` y `<P>` en orden norte-este-cota (Y X Z) | LandXML 1.2 | `/import_civil/` (`macros.leer_landxml`) | por verificar con un archivo real de Civil 3D |

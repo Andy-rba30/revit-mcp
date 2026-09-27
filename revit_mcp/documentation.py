@@ -20,6 +20,51 @@ import os
 logger = logging.getLogger(__name__)
 
 
+def cajetines(doc):
+    """FamilySymbol de cajetin (OST_TitleBlocks) cargados en el proyecto."""
+    return list(
+        DB.FilteredElementCollector(doc)
+        .OfCategory(DB.BuiltInCategory.OST_TitleBlocks)
+        .OfClass(DB.FamilySymbol)
+        .ToElements()
+    )
+
+
+def elegir_cajetin(doc, title_block_name=None):
+    """Cajetin por nombre de tipo (o el primero). Lanza EscrituraRechazada(404).
+
+    Lo reutiliza macros.create_sheet_set."""
+    title_blocks = cajetines(doc)
+    if not title_blocks:
+        raise EscrituraRechazada(
+            "No title block families found — load a title block family into the project", 404
+        )
+    if title_block_name:
+        for tb in title_blocks:
+            try:
+                if get_element_name(tb) == title_block_name:
+                    return tb
+            except Exception:
+                continue
+        raise EscrituraRechazada("Title block '{}' not found".format(title_block_name), 404)
+    return title_blocks[0]
+
+
+def crear_plano(doc, title_block, sheet_number=None, sheet_name=None):
+    """DB.ViewSheet.Create con el cajetin (activandolo si hace falta), numero y nombre.
+
+    Lo reutiliza macros.create_sheet_set."""
+    if not title_block.IsActive:
+        title_block.Activate()
+        doc.Regenerate()
+    new_sheet = DB.ViewSheet.Create(doc, title_block.Id)
+    if sheet_number:
+        new_sheet.SheetNumber = sheet_number
+    if sheet_name:
+        new_sheet.Name = sheet_name
+    return new_sheet
+
+
 def register_documentation_routes(api):
     """Register all documentation routes with the API"""
 
@@ -34,29 +79,7 @@ def register_documentation_routes(api):
             sheet_name = data.get("sheet_name", "Unnamed Sheet")
             title_block_name = data.get("title_block_name")
 
-            title_blocks = (
-                DB.FilteredElementCollector(doc)
-                .OfCategory(DB.BuiltInCategory.OST_TitleBlocks)
-                .OfClass(DB.FamilySymbol)
-                .ToElements()
-            )
-            if not title_blocks or len(title_blocks) == 0:
-                raise EscrituraRechazada(
-                    "No title block families found — load a title block family into the project", 404
-                )
-            target_tb = None
-            if title_block_name:
-                for tb in title_blocks:
-                    try:
-                        if get_element_name(tb) == title_block_name:
-                            target_tb = tb
-                            break
-                    except Exception:
-                        continue
-                if target_tb is None:
-                    raise EscrituraRechazada("Title block '{}' not found".format(title_block_name), 404)
-            if target_tb is None:
-                target_tb = title_blocks[0]
+            target_tb = elegir_cajetin(doc, title_block_name)
 
             if sheet_number:
                 for sheet in DB.FilteredElementCollector(doc).OfClass(DB.ViewSheet).ToElements():
@@ -78,14 +101,7 @@ def register_documentation_routes(api):
                 }])
 
             with transaccion(doc, "Crear plano {}".format(sheet_number or sheet_name)):
-                if not target_tb.IsActive:
-                    target_tb.Activate()
-                    doc.Regenerate()
-                new_sheet = DB.ViewSheet.Create(doc, target_tb.Id)
-                if sheet_number:
-                    new_sheet.SheetNumber = sheet_number
-                if sheet_name:
-                    new_sheet.Name = sheet_name
+                new_sheet = crear_plano(doc, target_tb, sheet_number, sheet_name)
                 sheet_id = get_element_id_value(new_sheet)
 
             resultado = resultado_creacion(doc, [sheet_id])

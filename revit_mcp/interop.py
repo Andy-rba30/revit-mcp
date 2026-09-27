@@ -21,6 +21,45 @@ logger = logging.getLogger(__name__)
 
 MM_TO_FEET = 1.0 / 304.8
 
+# Colocacion de un CAD vinculado: nombre pedido -> miembro de DB.ImportPlacement
+PLACEMENTS = {"origin": "Origin", "center": "Centered", "centered": "Centered", "shared": "Shared", "site": "Site"}
+
+
+def opciones_cad(file_ext, placement="origin"):
+    """Opciones de importacion segun la extension; DWG/DXF/DGN con la colocacion pedida."""
+    if file_ext in (".sat", ".3dm"):
+        return DB.SATImportOptions()
+    if file_ext == ".skp":
+        return DB.SKPImportOptions()
+    options = DB.DWGImportOptions()
+    nombre = PLACEMENTS.get((placement or "origin").lower(), "Origin")
+    try:
+        options.Placement = getattr(DB.ImportPlacement, nombre)
+    except Exception:
+        options.Placement = DB.ImportPlacement.Origin
+    return options
+
+
+def vincular_cad(doc, file_path, mode, view, placement="origin"):
+    """doc.Link (mode "link") o doc.Import de un CAD en la vista dada.
+
+    Debe llamarse dentro de una transaccion. Devuelve el id (int) del
+    ImportInstance o None si Revit no lo devolvio. Lo reutiliza
+    macros.import_from_civil."""
+    file_ext = os.path.splitext(file_path)[1].lower()
+    options = opciones_cad(file_ext, placement)
+    idref = clr.Reference[DB.ElementId]()
+    if mode == "link":
+        doc.Link(file_path, options, view, idref)
+    else:
+        doc.Import(file_path, options, view, idref)
+    try:
+        if idref.Value and idref.Value != DB.ElementId.InvalidElementId:
+            return get_element_id_value(idref.Value)
+    except Exception:
+        pass
+    return None
+
 
 def register_interop_routes(api):
     """Register all interop routes with the API"""
@@ -178,24 +217,7 @@ def register_interop_routes(api):
                         if link_instance:
                             result_id = get_element_id_value(link_instance)
                 else:
-                    active_view = doc.ActiveView
-                    if file_ext == ".sat" or file_ext == ".3dm":
-                        options = DB.SATImportOptions()
-                    elif file_ext == ".skp":
-                        options = DB.SKPImportOptions()
-                    else:
-                        options = DB.DWGImportOptions()
-                        options.Placement = DB.ImportPlacement.Origin
-                    idref = clr.Reference[DB.ElementId]()
-                    if mode == "link":
-                        doc.Link(file_path, options, active_view, idref)
-                    else:
-                        doc.Import(file_path, options, active_view, idref)
-                    try:
-                        if idref.Value and idref.Value != DB.ElementId.InvalidElementId:
-                            result_id = get_element_id_value(idref.Value)
-                    except Exception:
-                        result_id = None
+                    result_id = vincular_cad(doc, file_path, mode, doc.ActiveView)
 
             resultado = resultado_creacion(doc, [result_id] if result_id is not None else [])
             resultado.update({
