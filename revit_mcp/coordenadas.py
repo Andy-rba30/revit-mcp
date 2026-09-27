@@ -10,7 +10,7 @@ Unidades: las posiciones se devuelven en milimetros y los angulos en grados.
 
 from utils import get_element_name, get_element_id_value, make_element_id, punto_a_mm, xyz_desde_mm, FEET_TO_MM
 from seguridad import requiere_token
-from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada
+from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, es_forzado
 from pyrevit import routes, revit, DB
 import math
 import traceback
@@ -215,6 +215,35 @@ def register_coordenadas_routes(api):
                     raise EscrituraRechazada("acquire_from_link_id {} is not a Revit link instance".format(link_id), 404)
                 acciones.append({"accion": "adquirir_coordenadas", "link_id": int(link_id),
                                  "link": get_element_name(vinculo)})
+
+            if link_id is not None and (base_mm is not None or survey_mm is not None or norte is not None):
+                raise EscrituraRechazada(
+                    "acquire_from_link_id overwrites the base point, survey point and true north: "
+                    "send it alone, without the other arguments", 400
+                )
+            if not es_forzado(data):
+                for etiqueta, punto in (("project base point", punto_base), ("survey point", punto_rec)):
+                    if punto is None:
+                        continue
+                    fijado = recortado = False
+                    try:
+                        fijado = bool(punto.Pinned)
+                    except Exception:
+                        pass
+                    try:
+                        recortado = bool(punto.Clipped)
+                    except Exception:
+                        pass
+                    if fijado or recortado:
+                        raise EscrituraRechazada(
+                            "The {} is {}: moving it {}. Unpin/unclip it in Revit first or pass forzar=true.".format(
+                                etiqueta,
+                                "pinned" if fijado and not recortado else "clipped" if recortado and not fijado else "pinned and clipped",
+                                "fails in Revit" if fijado and not recortado else "changes the shared coordinate system of the whole model",
+                            ),
+                            409,
+                            {"pinned": fijado, "clipped": recortado},
+                        )
 
             antes = ubicacion_proyecto(doc)
             if ctx["simular"]:

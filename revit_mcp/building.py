@@ -13,7 +13,7 @@ from utils import (
     elementos_por_nombre, mapa_niveles, nivel_mas_bajo, MM_TO_FEET,
 )
 from seguridad import requiere_token
-from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, resultado_creacion
+from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, resultado_creacion, comprobar_alcance
 from pyrevit import routes, revit, DB
 from System.Collections.Generic import List
 import logging
@@ -113,6 +113,7 @@ def register_building_routes(api):
                 raise EscrituraRechazada(
                     "No elements provided — pass an array of element definitions", 400
                 )
+            comprobar_alcance(data, len(elements), "elementos a crear")
 
             level_map = mapa_niveles(doc)
             if not level_map:
@@ -234,6 +235,7 @@ def register_building_routes(api):
                 raise EscrituraRechazada(
                     "No elements provided — pass an array of element definitions", 400
                 )
+            comprobar_alcance(data, len(elements), "elementos a crear")
 
             level_map = mapa_niveles(doc)
             if not level_map:
@@ -356,6 +358,7 @@ def register_building_routes(api):
                 raise EscrituraRechazada(
                     "No levels provided — pass an array of level definitions", 400
                 )
+            comprobar_alcance(data, len(levels), "niveles a crear")
 
             existentes = mapa_niveles(doc)
             planes = []
@@ -371,7 +374,7 @@ def register_building_routes(api):
                     planes.append({
                         "idx": idx,
                         "elevation_mm": float(elevation_mm),
-                        "name": str(name) if name else None,
+                        "name": name if name else None,
                     })
                 except ValueError as lv_err:
                     errors.append(str(lv_err))

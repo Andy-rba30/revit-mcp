@@ -11,7 +11,7 @@ backups\\ y la accion en mcp_log.jsonl. Acepta `simular`.
 
 from pyrevit import routes, revit, DB
 from seguridad import requiere_token
-from escritura import ejecutar, simulacion, EscrituraRechazada, ruta_documento, _fecha_archivo
+from escritura import ejecutar, simulacion, EscrituraRechazada, ruta_documento, _fecha_archivo, es_compartido
 import os
 import logging
 
@@ -53,6 +53,24 @@ def register_document_routes(api):
             file_path = data.get("file_path")
             overwrite = bool(data.get("overwrite", True))
             path_on_disk = ruta_documento(doc)
+
+            # "Guardar como" sobre la misma ruta es un guardado normal (Revit rechaza
+            # SaveAs sobre el archivo que tiene abierto).
+            if file_path and path_on_disk:
+                try:
+                    if os.path.normcase(os.path.abspath(file_path)) == os.path.normcase(os.path.abspath(path_on_disk)):
+                        file_path = None
+                except Exception:
+                    pass
+
+            if file_path and es_compartido(doc):
+                # SaveAs en un modelo de trabajo compartido exige WorksharingSaveAsSettings y
+                # crea o desliga un central: se deja para hacerlo a mano en Revit.
+                raise EscrituraRechazada(
+                    "Workshared model: 'Save As' from the MCP is not supported (it would create a new "
+                    "central or detach the model). Save in place without file_path, or do it in Revit.",
+                    400,
+                )
 
             if file_path:
                 operacion = "save_as"

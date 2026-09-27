@@ -60,7 +60,7 @@ def register_model_info_routes(api):
 
     @api.route("/model_info/", methods=["GET"])
     @requiere_token
-    def get_model_info():
+    def get_model_info(doc):
         """
         Get comprehensive information about the current Revit model
 
@@ -73,7 +73,10 @@ def register_model_info_routes(api):
         - Link status
         """
         try:
-            doc = revit.doc
+            # `doc` en la firma hace que pyRevit ejecute la ruta en el contexto de la API
+            # (hilo principal de Revit); sin el, corria en el hilo HTTP.
+            if doc is None:
+                doc = revit.doc
             if not doc:
                 return routes.make_response(
                     data={"error": "No active Revit document"}, status=503

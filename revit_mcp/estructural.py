@@ -17,7 +17,7 @@ from utils import (
     mapa_niveles, buscar_tipo_por_nombre, etiqueta_tipo, MM_TO_FEET,
 )
 from seguridad import requiere_token
-from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, resultado_creacion, describir_elemento
+from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, resultado_creacion, describir_elemento, comprobar_alcance
 from pyrevit import routes, revit, DB
 from System.Collections.Generic import List
 import math
@@ -103,6 +103,7 @@ def register_estructural_routes(api):
             columns = data.get("columns", [])
             if not columns:
                 raise EscrituraRechazada("columns is required and must not be empty", 400)
+            comprobar_alcance(data, len(columns), "pilares a crear")
             simbolos = _simbolos(doc, DB.BuiltInCategory.OST_StructuralColumns)
             if not simbolos:
                 raise EscrituraRechazada(
@@ -200,6 +201,7 @@ def register_estructural_routes(api):
             foundations = data.get("foundations", [])
             if not foundations:
                 raise EscrituraRechazada("foundations is required and must not be empty", 400)
+            comprobar_alcance(data, len(foundations), "cimentaciones a crear")
             level_map = mapa_niveles(doc)
             zapatas = _simbolos(doc, DB.BuiltInCategory.OST_StructuralFoundation)
             corridas = []
@@ -342,12 +344,14 @@ def register_estructural_routes(api):
                     400,
                 )
             if es_muro:
-                xs = [p.X for p in puntos]
-                ys = [p.Y for p in puntos]
-                zs = [p.Z for p in puntos]
-                # Dos esquinas opuestas del rectangulo del hueco (en el plano del muro)
-                esquina_a = DB.XYZ(min(xs), min(ys), min(zs))
-                esquina_b = DB.XYZ(max(xs), max(ys), max(zs))
+                # Dos esquinas opuestas del hueco, en el plano del muro, tal como llegan:
+                # recombinarlas como (min, min, min)/(max, max, max) saca los puntos del plano
+                # en cualquier muro oblicuo y NewOpening los rechaza.
+                if len(puntos) != 2:
+                    raise EscrituraRechazada(
+                        "A wall opening takes exactly 2 opposite corners on the wall face; got {}".format(len(puntos)), 400
+                    )
+                esquina_a, esquina_b = puntos[0], puntos[1]
                 if esquina_a.DistanceTo(esquina_b) < 0.001:
                     raise EscrituraRechazada("The two corners of the opening must be different", 400)
                 descripcion = {"accion": "crear", "element_type": "wall_opening",

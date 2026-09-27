@@ -137,7 +137,7 @@ Tiempos de espera del puente: 30 s lectura; 120 s escritura (`create_*`,
 | POST | `/create_framing/` | `elements`: vigas (puntos mm, tipo, nivel), `simular` | `creados[]` |
 | POST | `/create_column/` | `columns[]`: `point` (mm), `base_level`*, `top_level`, `top_offset`, `type_name`, `rotation`, `simular` | `creados[]` con `top_level` y `point_mm` |
 | POST | `/create_foundation/` | `foundations[]`: `point`+`level`+`type_name` (zapata aislada) / `wall_id` o `curve`+`type_name` (`WallFoundation`) / `boundary`+`level`+`type_name` (losa), `simular` | `creados[]` |
-| POST | `/create_opening/` | `host_id`*, `points[]` (mm; 2 esquinas en muro, polígono en suelo/cubierta), `simular` | `creados[]`, `host` |
+| POST | `/create_opening/` | `host_id`*, `points[]` (mm; en muro exactamente 2 esquinas opuestas sobre la cara del muro, se usan tal cual; polígono en suelo/cubierta), `simular` | `creados[]`, `host` |
 | POST | `/create_toposolid/` | `points[]` (mm) o `csv_path` (P,N,E,Z / X,Y,Z; metros salvo `units`), `level_name`*, `type_name`, `boundary`, `simular` | `creados[]`, `source` (formato detectado, extensión) |
 | POST | `/create_room/` | `level_name`, `location`, `name`, `number`, `simular` | `creados[]`, `area` |
 | POST | `/create_room_separation/` | `lines`, `view_name`, `level_name`, `simular` | `creados[]`, `line_ids` |
@@ -150,15 +150,15 @@ Tiempos de espera del puente: 30 s lectura; 120 s escritura (`create_*`,
 
 | Método | Ruta | Parámetros | Respuesta |
 |--------|------|------------|-----------|
-| POST | `/modify_element/` | `element_id`, `parameters` (dict nombre → valor), `simular` | `antes`/`despues` por parámetro, `failed[]` |
-| POST | `/set_parameter/` | `element_id`, `parameter_name`, `value`, `simular` | `antes`/`despues`, `is_type_parameter` |
-| POST | `/set_type_parameter/` | `type_id` o `element_id`, `parameter_name`, `value`, `simular` | `antes`/`despues`, `afecta_ejemplares` |
+| POST | `/modify_element/` | `element_id`, `parameters` (dict nombre → valor; longitudes en mm, áreas mm², volúmenes mm³, ángulos en grados), `simular` | `antes`/`despues` por parámetro, `failed[]` |
+| POST | `/set_parameter/` | `element_id`, `parameter_name`, `value` (longitudes en mm, áreas mm², volúmenes mm³, ángulos en grados; el resto tal cual), `simular` | `antes`/`despues`, `is_type_parameter` |
+| POST | `/set_type_parameter/` | `type_id` o `element_id`, `parameter_name`, `value` (mismas unidades que `set_parameter`), `simular` | `antes`/`despues`, `afecta_ejemplares` |
 | POST | `/change_type/` | `element_ids`, `type_name` (o `type_id`), `simular`, `forzar` | `antes`/`despues` (tipo) por elemento |
 | POST | `/delete_elements/` | `element_ids`, `simular`, `forzar` | `eliminados[]`, `en_cascada[]`, `antes[]` (descripción previa) |
 | POST | `/transform_elements/` | `element_ids`, `operation` (move/rotate/mirror/copy), `vector`, `axis_point`, `angle`, `mirror_plane`, `simular`, `forzar` | `antes`/`despues` (bbox), `creados[]` en copy |
 | POST | `/set_workset/` | `element_ids`, `workset_name`, `simular`, `forzar` | `antes`/`despues` (subproyecto) |
 | POST | `/join_geometry/` | `element_id_a`, `element_id_b`, `unjoin`, `simular` | `antes`/`despues` (`joined`) |
-| POST | `/set_project_location/` | `base_point_mm`, `survey_point_mm`, `true_north_deg`, `acquire_from_link_id`, `simular` | `antes`/`despues` (ubicación completa) |
+| POST | `/set_project_location/` | `base_point_mm`, `survey_point_mm`, `true_north_deg`, `acquire_from_link_id` (solo, sin los otros), `forzar`, `simular` | `antes`/`despues` (ubicación completa). `409` si el punto está anclado o recortado y no se pasa `forzar=true` (mover un punto recortado cambia las coordenadas compartidas de todo el modelo) |
 | POST | `/color_splash/` | `category_name`, `parameter_name`, `use_gradient`, `custom_colors`, `simular` | Elementos coloreados, `verificacion` (muestra) |
 | POST | `/clear_colors/` | `category_name`, `simular` | Colores restablecidos |
 | POST | `/list_category_parameters/` | `category_name` | Parámetros de la categoría (lectura) |
@@ -184,7 +184,7 @@ Tiempos de espera del puente: 30 s lectura; 120 s escritura (`create_*`,
 | POST | `/export_ifc/` | `file_path`, `ifc_version`, `export_base_quantities`, `view_name` | Ruta del IFC (transacción `IA: Exportar IFC`) |
 | POST | `/link_file/` | `file_path`, `mode`, `position`, `simular` | `creados[]` (vínculo o importación) |
 | POST | `/save_document/` | `file_path`, `overwrite`, `simular` | `antes`/`despues` del archivo (fecha, tamaño); sin transacción; la copia previa refleja el guardado anterior |
-| POST | `/purge_unused/` | `max_rounds` (3), `simular` | `candidatos[]`, `eliminados[]`, `rounds`; con `simular` solo lista |
+| POST | `/purge_unused/` | `max_rounds` (3), `forzar`, `simular` | `candidatos[]`, `eliminados[]`, `rounds`; con `simular` solo lista. Solo purga con el PerformanceAdviser; si no está disponible responde `409` y la lista de reserva (tipos sin ejemplares) es solo informativa. Más de 200 tipos exige `forzar=true`. Una transacción `IA:` por ronda |
 | POST | `/backup/` | `suffix`, `simular` | `copia` forzada (`backups\<nombre>_<marca>_<suffix>.rvt`); `400` en modelos compartidos o sin guardar |
 
 ### Ejecución de código

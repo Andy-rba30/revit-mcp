@@ -58,7 +58,8 @@ def register_type_tools(mcp, revit_get, revit_post, revit_image=None):
 
         Args:
             parameter_name: Type parameter name (e.g. "Width", "b", "Fire Rating")
-            value: New value as a string (converted to the parameter's storage type)
+            value: New value as a string (converted to the parameter's storage type;
+                lengths in mm, areas in mm², volumes in mm³, angles in degrees)
             type_id: Element type id
             element_id: Any instance of the type (alternative to type_id)
             simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model

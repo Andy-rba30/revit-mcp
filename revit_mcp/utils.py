@@ -6,6 +6,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# Descripciones de los ultimos fallos de severidad Error que hicieron revertir una
+# transaccion (los rellena _FailureSwallower; los lee escritura.transaccion).
+ULTIMOS_ERRORES = []
+
+
 class _FailureSwallower(DB.IFailuresPreprocessor):
     """Resolve Revit failures during a transaction without ever showing a modal
     dialog. Warnings are deleted (the operation proceeds); if any error-severity
@@ -13,13 +18,22 @@ class _FailureSwallower(DB.IFailuresPreprocessor):
     Routes server keeps running instead of hanging on a dialog."""
 
     def PreprocessFailures(self, failuresAccessor):
+        global ULTIMOS_ERRORES
         try:
             # Delete all warnings so they don't block (operation continues).
             failuresAccessor.DeleteAllWarnings()
-            # If any genuine errors remain, roll back rather than go modal.
+            # If any genuine errors remain, roll back rather than go modal. The
+            # description is kept so the caller can say WHY Revit refused.
+            errores = []
             for f in failuresAccessor.GetFailureMessages():
                 if f.GetSeverity() == DB.FailureSeverity.Error:
-                    return DB.FailureProcessingResult.ProceedWithRollBack
+                    try:
+                        errores.append(sanitize_string(f.GetDescriptionText()))
+                    except Exception:
+                        errores.append("error")
+            if errores:
+                ULTIMOS_ERRORES = errores
+                return DB.FailureProcessingResult.ProceedWithRollBack
         except Exception:
             pass
         return DB.FailureProcessingResult.Continue
@@ -186,14 +200,42 @@ def punto_a_mm(xyz):
     }
 
 
+def nombre_crudo(element):
+    """Nombre del elemento sin pasar a ASCII (unicode), o None."""
+    try:
+        name = element.Name
+    except AttributeError:
+        try:
+            name = DB.Element.Name.__get__(element)
+        except Exception:
+            return None
+    except Exception:
+        return None
+    if name is None:
+        return None
+    try:
+        return unicode(name)  # IronPython 2.7
+    except NameError:  # pragma: no cover - CPython 3 en las pruebas
+        return str(name)
+    except Exception:
+        return None
+
+
 def elementos_por_nombre(elementos):
-    """{nombre: elemento} ignorando los que no tienen nombre legible."""
+    """{nombre: elemento} ignorando los que no tienen nombre legible.
+
+    Se registra el nombre real (unicode) y tambien su version ASCII, para que
+    un nivel "Sotano" o un tipo "Muro basico" con acentos se encuentre tanto
+    con el nombre exacto como con el que devuelven los listados."""
     mapa = {}
     for elemento in elementos:
         try:
             mapa[get_element_name(elemento)] = elemento
         except Exception:
             continue
+        crudo = nombre_crudo(elemento)
+        if crudo:
+            mapa[crudo] = elemento
     return mapa
 
 

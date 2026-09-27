@@ -56,6 +56,11 @@ def register_editing_routes(api):
             cascada = []
             with transaccion(doc, "Borrar elementos"):
                 for elem_id, _ in objetivos:
+                    # Un borrado anterior de esta misma lista puede haber arrastrado a este
+                    # (muro y su puerta, nivel y lo alojado): Delete sobre un id que ya no
+                    # existe lanza ArgumentException y revertiria toda la transaccion.
+                    if doc.GetElement(elem_id) is None:
+                        continue
                     # doc.Delete returns all deleted IDs (including cascaded)
                     result = doc.Delete(elem_id)
                     if result:

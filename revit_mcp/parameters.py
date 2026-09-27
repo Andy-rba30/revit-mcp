@@ -11,8 +11,9 @@ editing.py (modify_element) y tipos.py (set_type_parameter).
 
 from utils import get_element_name, get_element_id_value, make_element_id
 from seguridad import requiere_token
-from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, bbox_mm, nombre_nivel
+from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, bbox_mm, nombre_nivel, MM_TO_FEET
 from pyrevit import routes, revit, DB
+import math
 import traceback
 import logging
 
@@ -126,8 +127,36 @@ def valor_bruto(param):
     return None
 
 
+def factor_a_interno(param):
+    """Factor que pasa el valor recibido a las unidades internas de Revit segun el
+    tipo de dato del parametro: longitudes en mm -> pies, areas en mm2 -> pies2,
+    volumenes en mm3 -> pies3, angulos en grados -> radianes. None si el
+    parametro no es de esos tipos (o la API no expone GetDataType), y entonces el
+    valor se guarda tal cual."""
+    try:
+        spec = param.Definition.GetDataType()
+    except Exception:
+        return None
+    try:
+        tipos = DB.SpecTypeId
+        if spec == tipos.Length:
+            return MM_TO_FEET
+        if spec == tipos.Area:
+            return MM_TO_FEET * MM_TO_FEET
+        if spec == tipos.Volume:
+            return MM_TO_FEET * MM_TO_FEET * MM_TO_FEET
+        if spec == tipos.Angle:
+            return math.pi / 180.0
+    except Exception:
+        return None
+    return None
+
+
 def convertir_valor(param, value):
-    """Convierte `value` al tipo que espera el parametro. Lanza ValueError."""
+    """Convierte `value` al tipo que espera el parametro. Lanza ValueError.
+
+    Los Double se reciben en las unidades del contrato (mm, mm2, mm3, grados) y
+    se convierten a las internas de Revit con factor_a_interno."""
     try:
         if param.StorageType == DB.StorageType.String:
             return _texto(value) if not isinstance(value, _cadena) else value
@@ -140,7 +169,9 @@ def convertir_valor(param, value):
                     return 0
             return int(float(value))
         if param.StorageType == DB.StorageType.Double:
-            return float(value)
+            numero = float(value)
+            factor = factor_a_interno(param)
+            return numero * factor if factor else numero
         if param.StorageType == DB.StorageType.ElementId:
             return make_element_id(value)
     except (TypeError, ValueError) as error:

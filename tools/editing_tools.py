@@ -49,6 +49,7 @@ def register_editing_tools(mcp, revit_get, revit_post, revit_image=None):
         Args:
             element_id: Revit element ID to modify
             parameters: Dictionary of parameter name to new value pairs
+                (lengths in mm, areas in mm², volumes in mm³, angles in degrees)
                 e.g., {"Mark": "EW-01", "Comments": "Updated via MCP"}
             simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging

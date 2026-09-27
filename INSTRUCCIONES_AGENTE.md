@@ -62,9 +62,15 @@ memoria) y `ms`. El registro completo está en `mcp_log.jsonl` junto al `.rvt`
   persona. No hay copia de seguridad local: se confía en las del central.
 - **No guardes el documento** (`save_document`) sin que el usuario lo pida
   expresamente, y **nunca sincronices con central** desde el MCP.
-- Unidades: todas las herramientas reciben **milímetros** (los ángulos en
-  grados). Los CSV de Civil 3D para `create_toposolid` se asumen en metros
-  salvo `units`.
+- Unidades: todas las herramientas reciben **milímetros** (áreas en mm²,
+  volúmenes en mm³, ángulos en grados), también `set_parameter`,
+  `modify_element` y `set_type_parameter` para parámetros de longitud, área,
+  volumen o ángulo. Los CSV de Civil 3D para `create_toposolid` se asumen en
+  metros salvo `units`.
+- `set_project_location` rechaza mover un punto base o de replanteo anclado o
+  recortado salvo `forzar=true`; `acquire_from_link_id` va siempre solo.
+- `purge_unused` solo purga con el PerformanceAdviser; si Revit no lo ofrece,
+  responde 409 y la lista es solo para revisarla.
 - Revisa `list_warnings` después de crear elementos y `list_links` /
   `get_project_location` antes de cambiar coordenadas.
 - Con `purge_unused` ejecuta siempre `simular=true` primero y muestra la

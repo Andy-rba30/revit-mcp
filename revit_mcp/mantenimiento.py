@@ -14,7 +14,7 @@ from utils import get_element_name, get_element_id_value, make_element_id, nombr
 from seguridad import requiere_token
 from escritura import (
     ejecutar, transaccion, simulacion, EscrituraRechazada, crear_copia, registrar,
-    es_simulacion, ruta_documento, es_compartido, datos_peticion,
+    es_simulacion, ruta_documento, es_compartido, datos_peticion, comprobar_alcance,
 )
 from pyrevit import routes, revit, DB
 from System.Collections.Generic import List
@@ -126,14 +126,29 @@ def register_mantenimiento_routes(api):
             if not ids:
                 return {"ok": True, "eliminados": [], "count": 0, "rounds": 0, "metodo": metodo,
                         "message": "Nothing to purge"}
+            if metodo != "PerformanceAdviser":
+                # La reserva "FamilySymbol sin FamilyInstance" no distingue tipos de etiqueta,
+                # perfiles de barandillas ni familias anidadas: borrarlos arrastra las etiquetas
+                # y barandillas que los usan. Solo sirve para listar candidatos.
+                raise EscrituraRechazada(
+                    "PerformanceAdviser is not available in this Revit, and the fallback list "
+                    "(family types without instances) is not safe to delete automatically: "
+                    "it includes tag types, railing profiles and nested families. Use simular=true "
+                    "to review the list and purge from Revit (Manage > Purge Unused).",
+                    409,
+                    {"metodo": metodo, "count": len(ids)},
+                )
+            comprobar_alcance(data, len(ids), "tipos a purgar")
 
             eliminados = []
             rondas = 0
-            with transaccion(doc, "Purgar sin uso"):
-                pendientes = ids
-                while pendientes and rondas < max_rounds:
-                    rondas += 1
-                    borrados_ronda = 0
+            pendientes = ids
+            while pendientes and rondas < max_rounds:
+                rondas += 1
+                borrados_ronda = 0
+                # Una transaccion por ronda: ExecuteRules del PerformanceAdviser se llama
+                # entre rondas, fuera de la transaccion.
+                with transaccion(doc, "Purgar sin uso (ronda {})".format(rondas)):
                     for identificador in sorted(pendientes):
                         elem_id = make_element_id(identificador)
                         if doc.GetElement(elem_id) is None:
@@ -145,16 +160,14 @@ def register_mantenimiento_routes(api):
                             borrados_ronda += 1
                         except Exception as error:
                             logger.debug("No se pudo purgar %s: %s", identificador, str(error))
-                    if borrados_ronda == 0:
-                        break
-                    if metodo == "PerformanceAdviser":
-                        doc.Regenerate()
-                        pendientes = _ids_sin_uso_adviser(doc) or set()
-                    else:
-                        pendientes = _ids_simbolos_sin_uso(doc)
+                if borrados_ronda == 0:
+                    break
+                pendientes = _ids_sin_uso_adviser(doc)
+                if pendientes is None:
+                    break
 
             eliminados = sorted(set(eliminados))
-            restantes = _ids_sin_uso_adviser(doc) if metodo == "PerformanceAdviser" else _ids_simbolos_sin_uso(doc)
+            restantes = _ids_sin_uso_adviser(doc)
             return {
                 "ok": True,
                 "metodo": metodo,

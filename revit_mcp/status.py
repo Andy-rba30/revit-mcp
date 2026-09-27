@@ -15,7 +15,7 @@ def register_status_routes(api):
     
     @api.route('/status/', methods=["GET"])
     @requiere_token
-    def revit_status():
+    def revit_status(doc):
         """
         Health check endpoint that verifies Revit context availability
         
@@ -24,8 +24,10 @@ def register_status_routes(api):
         """
         try:
             from pyrevit import revit
-            
-            doc = revit.doc
+
+            # `doc` en la firma: pyRevit ejecuta la ruta en el contexto de la API
+            if doc is None:
+                doc = revit.doc
             if doc:
                 return routes.make_response(data={
                     "status": "active",

@@ -48,6 +48,7 @@ import traceback
 from pyrevit import routes, DB
 
 from utils import suppress_warnings, get_element_id_value, make_element_id, get_element_name
+import utils as _utils
 
 logger = logging.getLogger(__name__)
 
@@ -299,7 +300,7 @@ def crear_copia(doc, sufijo=None, forzar=False):
             if edad.days == 0 and edad.seconds < MINUTOS_ENTRE_COPIAS * 60:
                 return {
                     "ruta": ruta,
-                    "refleja_guardado_de": _fecha_archivo(origen),
+                    "refleja_guardado_de": _fecha_archivo(ruta),
                     "reutilizada": True,
                     "nota": NOTA_COPIA,
                 }
@@ -510,6 +511,7 @@ class transaccion(object):
         self.t = DB.Transaction(self.doc, self.nombre)
         self.t.Start()
         suppress_warnings(self.t)
+        _utils.ULTIMOS_ERRORES = []
         return self.t
 
     def __exit__(self, tipo, valor, traza):
@@ -523,10 +525,13 @@ class transaccion(object):
         if self._activa():
             self.estado = self.t.Commit()
             if not _confirmada(self.estado):
+                motivos = list(getattr(_utils, "ULTIMOS_ERRORES", []) or [])
                 raise TransaccionRevertida(
                     u"Revit revirtio la transaccion '{}' (estado {}); el modelo no "
-                    u"cambio. Suele deberse a un error de validacion de Revit.".format(
-                        self.nombre, self.estado
+                    u"cambio. {}".format(
+                        self.nombre, self.estado,
+                        u"Revit: " + u"; ".join(_texto(m) for m in motivos) if motivos
+                        else u"Suele deberse a un error de validacion de Revit.",
                     )
                 )
         return False

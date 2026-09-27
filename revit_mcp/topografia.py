@@ -87,7 +87,7 @@ def leer_csv_puntos(ruta, unidades="m"):
     puntos = []
     avisos = []
     for numero, linea in enumerate(lineas[inicio:], inicio + 1):
-        celdas = [c.strip().strip('"') for c in linea.split(sep)]
+        celdas = [c.strip().strip('"') for c in (linea.split() if sep == " " else linea.split(sep))]
         valores = {}
         for clave, celda in zip(columnas, celdas):
             if clave in ("x", "y", "z", "n", "e"):
