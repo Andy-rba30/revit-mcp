@@ -9,7 +9,7 @@ from pyrevit.revit.db import ProjectInfo as RevitProjectInfo
 import pyrevit.revit.db.query as q
 import logging
 
-from utils import normalize_string, get_element_name
+from utils import normalize_string, get_element_name, buscar_por_nombre
 from seguridad import requiere_token
 from escritura import ruta_documento, es_compartido, _fecha_archivo
 from coordenadas import resumen_para_model_info
@@ -204,7 +204,7 @@ def register_model_info_routes(api):
                 for room in rooms_collector:
                     try:
                         # Get room name safely
-                        name_param = room.LookupParameter("Name")
+                        name_param = buscar_por_nombre(room, "Name")
                         room_name = (
                             name_param.AsString()
                             if name_param and name_param.HasValue
@@ -212,7 +212,7 @@ def register_model_info_routes(api):
                         )
 
                         # Get room number safely
-                        number_param = room.LookupParameter("Number")
+                        number_param = buscar_por_nombre(room, "Number")
                         room_number = (
                             number_param.AsString()
                             if number_param and number_param.HasValue

@@ -14,7 +14,7 @@ Todas pasan por escritura.ejecutar (copia, log, simular, IA:, creados).
 
 from utils import (
     get_element_name, get_element_id_value, make_element_id, xyz_desde_mm, punto_a_mm,
-    mapa_niveles, buscar_tipo_por_nombre, etiqueta_tipo, MM_TO_FEET,
+    mapa_niveles, buscar_tipo_por_nombre, etiqueta_tipo, MM_TO_FEET, FEET_TO_MM,
 )
 from seguridad import requiere_token
 from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, resultado_creacion, describir_elemento, comprobar_alcance
@@ -314,6 +314,30 @@ def register_estructural_routes(api):
 
         return ejecutar(doc, "/create_foundation/", request, cuerpo)
 
+    def _comprobar_altura_en_muro(muro, esquina_a, esquina_b):
+        """400 si el hueco queda entero por encima o por debajo del muro.
+
+        La z de las esquinas es absoluta (el mismo marco que bbox_mm), no un
+        desfase desde el nivel del muro: NewOpening acepta un rectangulo fuera
+        del muro y crea un hueco que no corta nada."""
+        try:
+            caja = muro.get_BoundingBox(None)
+        except Exception:
+            caja = None
+        if caja is None:
+            return
+        abajo = min(esquina_a.Z, esquina_b.Z)
+        arriba = max(esquina_a.Z, esquina_b.Z)
+        tolerancia = 0.001
+        if arriba <= caja.Min.Z + tolerancia or abajo >= caja.Max.Z - tolerancia:
+            raise EscrituraRechazada(
+                "The opening (z {} to {} mm) does not overlap the wall, which goes from z {} to {} mm. "
+                "z is an absolute elevation (same frame as bbox_mm), not an offset from the wall's level.".format(
+                    round(abajo * FEET_TO_MM, 1), round(arriba * FEET_TO_MM, 1),
+                    round(caja.Min.Z * FEET_TO_MM, 1), round(caja.Max.Z * FEET_TO_MM, 1)),
+                400,
+            )
+
     @api.route("/create_opening/", methods=["POST"])
     @requiere_token
     def create_opening(doc, request):
@@ -354,6 +378,7 @@ def register_estructural_routes(api):
                 esquina_a, esquina_b = puntos[0], puntos[1]
                 if esquina_a.DistanceTo(esquina_b) < 0.001:
                     raise EscrituraRechazada("The two corners of the opening must be different", 400)
+                _comprobar_altura_en_muro(host, esquina_a, esquina_b)
                 descripcion = {"accion": "crear", "element_type": "wall_opening",
                                "host_id": int(host_id), "corner_a_mm": punto_a_mm(esquina_a),
                                "corner_b_mm": punto_a_mm(esquina_b)}
@@ -382,7 +407,11 @@ def register_estructural_routes(api):
             resultado = resultado_creacion(doc, [hueco_id])
             resultado["opening_id"] = hueco_id
             resultado["host"] = describir_elemento(doc, host)
-            resultado["message"] = "Created opening {} in host {}".format(hueco_id, host_id)
+            if resultado["ok"]:
+                resultado["message"] = "Created opening {} in host {}".format(hueco_id, host_id)
+            else:
+                resultado["message"] = "Revit returned opening {} in host {} but it does not exist after the commit".format(
+                    hueco_id, host_id)
             return resultado
 
         return ejecutar(doc, "/create_opening/", request, cuerpo)

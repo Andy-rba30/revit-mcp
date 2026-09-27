@@ -113,7 +113,9 @@ memoria) y `ms`. El registro completo está en `mcp_log.jsonl` junto al `.rvt`
 
 | Mensaje | Causa | Acción |
 |---|---|---|
-| `Multiple targets could match` | Revit 2027: `DB.ElementId(int)` es ambiguo | Usa `DB.ElementId(System.Int64(id))` (en `execute_revit_code` ya tienes `System`). |
+| `Multiple targets could match` | Revit 2027: `DB.ElementId(int)` es ambiguo | En `execute_revit_code` usa `make_element_id(id)` (ya definido) o `DB.ElementId(System.Int64(id))`. |
+| `ImportError: No module named utils` | Se intentó importar un módulo del servidor desde `execute_revit_code` | No importes nada del servidor: `make_element_id`, `get_element_id_value` y `buscar_parametro(elem, nombre)` ya están definidos. |
+| `Parameter '...' not found` en un Revit que no está en inglés | El nombre visible depende del idioma (`Comments` = `Comentarios`) | Usa el nombre de `available_parameters`; los comunes (`Comments`, `Mark`, `Unconnected Height`...) y los nombres `BuiltInParameter` (`ALL_MODEL_INSTANCE_COMMENTS`) también valen. |
 | `Transaction error` / `Starting a transaction from an external application running outside of API context is not allowed` | Se abrió una transacción dentro del código | El manejador ya abre una: no anides `DB.Transaction`. |
 | `open_transaction: true` | Quedó una transacción abierta que no se pudo cerrar | Pide al usuario que la revise en Revit antes de seguir; no ejecutes nada más. |
 | `409` "Hay una transacción abierta de otra operación" | Revit está en medio de otra edición (`doc.IsModifiable`) | Espera a que el usuario termine y repite. |

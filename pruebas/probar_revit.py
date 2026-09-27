@@ -203,20 +203,18 @@ def main():
     if element_id is None:
         resultados.append(resultado_manual("6/7. set_parameter", False, "   No hay muros ni niveles en el modelo; usa --element-id"))
     else:
-        r = cliente.get(REVIT + "/element_properties/{}".format(element_id), params={"token": token})
-        propiedades = _json(r)
-        valor_original = ""
-        for p in propiedades.get("parameters", []):
-            if p.get("name") == parametro:
-                valor_original = p.get("value", "")
-                break
         nuevo_valor = "MCP prueba {}".format(int(time.time()))
 
+        # El valor original y el nombre visible del parámetro ("Comentarios" en
+        # un Revit en español cuando se pide "Comments") salen de la simulación.
         r = cliente.post(REVIT + "/set_parameter/", json={
             "element_id": element_id, "parameter_name": parametro, "value": nuevo_valor,
             "simular": True, "token": token})
         ok = mostrar("6. POST /set_parameter/ simular=true (elemento {})".format(element_id), 200, r)
         datos = _json(r)
+        haria = (datos.get("haria") or [{}])[0]
+        valor_original = haria.get("antes") or ""
+        etiqueta = haria.get("parameter_label") or parametro
         if ok:
             ok = datos.get("simulado") is True and "haria" in datos and "copia" not in datos
             if not ok:
@@ -225,8 +223,8 @@ def main():
             r = cliente.get(REVIT + "/element_properties/{}".format(element_id), params={"token": token})
             actual = ""
             for p in _json(r).get("parameters", []):
-                if p.get("name") == parametro:
-                    actual = p.get("value", "")
+                if p.get("name") == etiqueta:
+                    actual = p.get("value", "") or ""
             ok = actual == valor_original
             if not ok:
                 print("   (el valor cambió con simular=true: {!r} -> {!r})".format(valor_original, actual))
@@ -238,7 +236,7 @@ def main():
         ok = mostrar("7. POST /set_parameter/ real (elemento {})".format(element_id), 200, r)
         datos = _json(r)
         if ok:
-            ok = (datos.get("ok") is True and datos.get("antes") == valor_original
+            ok = (datos.get("ok") is True and (datos.get("antes") or "") == valor_original
                   and datos.get("despues") == nuevo_valor)
             if not ok:
                 print("   (se esperaba ok=true, antes={!r}, despues={!r})".format(valor_original, nuevo_valor))

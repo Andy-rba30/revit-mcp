@@ -10,6 +10,7 @@ Ambas pasan por escritura.ejecutar (copia, log, simular, IA:, verificacion).
 """
 
 from utils import (
+    buscar_por_nombre,
     get_element_name, get_element_id_value, make_element_id, buscar_tipo_por_nombre,
     etiqueta_tipo, nombre_familia,
 )
@@ -206,7 +207,7 @@ def register_tipos_routes(api):
                 if tipo is None:
                     raise EscrituraRechazada("Element {} has no type".format(element_id), 400)
 
-            param = tipo.LookupParameter(parameter_name)
+            param = buscar_por_nombre(tipo, parameter_name)
             if param is None:
                 raise EscrituraRechazada(
                     "Type parameter '{}' not found on type {}".format(parameter_name, etiqueta_tipo(tipo)),

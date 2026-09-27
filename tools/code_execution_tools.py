@@ -24,7 +24,16 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
         - doc: The active Revit document
         - DB: Revit API Database namespace
         - revit: pyRevit module
+        - clr, System: pre-imported
+        - make_element_id(id): DB.ElementId from an int, valid in every Revit
+          version (in Revit 2027 a bare DB.ElementId(123) fails with
+          "Multiple targets could match")
+        - get_element_id_value(elem_or_id): the int id of an element or ElementId
+        - buscar_parametro(elem, name): parameter by the name Revit shows in its
+          language, its English name ("Comments") or its BuiltInParameter name
+          ("ALL_MODEL_INSTANCE_COMMENTS"); None if not found
         - print: Function to output text (returned in response)
+        Do not import the server modules (`from utils import ...` fails).
 
         Use this when the existing MCP tools cannot accomplish what you need.
 

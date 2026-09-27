@@ -50,7 +50,10 @@ def register_parameter_tools(mcp, revit_get, revit_post, revit_image=None):
 
         Args:
             element_id: Target element ID
-            parameter_name: Name of the parameter to set (e.g., "Comments", "Mark")
+            parameter_name: Name of the parameter to set, as Revit shows it in its
+                language ("Comentarios" in a Spanish Revit). Common English names
+                ("Comments", "Mark", "Unconnected Height") and BuiltInParameter
+                names ("ALL_MODEL_INSTANCE_COMMENTS") also work in any language.
             value: New value as a string — automatically converted to the correct type.
                 Lengths in mm, areas in mm², volumes in mm³, angles in degrees
                 (the server converts to Revit's internal feet/radians)

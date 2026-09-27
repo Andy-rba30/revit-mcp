@@ -15,7 +15,7 @@ Rutas de solo lectura anadidas en la version 0.2.0:
 Ninguna abre transaccion ni modifica el modelo.
 """
 
-from utils import get_element_name, get_element_id_value, make_element_id, punto_a_mm, FEET_TO_MM
+from utils import get_element_name, get_element_id_value, make_element_id, punto_a_mm, FEET_TO_MM, buscar_por_nombre
 from seguridad import requiere_token
 from escritura import describir_elemento, bbox_mm, nombre_nivel, nombre_categoria, nombre_tipo, leer_log, datos_peticion, EscrituraRechazada
 from parameters import valor_parametro
@@ -168,7 +168,7 @@ def _ruta_referencia(tipo):
 def _parametro_texto(elem, nombres):
     for nombre in nombres:
         try:
-            p = elem.LookupParameter(nombre)
+            p = buscar_por_nombre(elem, nombre)
             if p and p.HasValue:
                 return _texto_seguro(p.AsString() or p.AsValueString() or u"")
         except Exception:
@@ -505,10 +505,10 @@ def register_consulta_routes(api):
                     if level_name and nombre_nivel(doc, elem) != level_name:
                         continue
                     if parameter_name:
-                        p = elem.LookupParameter(parameter_name)
+                        p = buscar_por_nombre(elem, parameter_name)
                         if p is None:
                             tipo = _tipo_de(doc, elem)
-                            p = tipo.LookupParameter(parameter_name) if tipo is not None else None
+                            p = buscar_por_nombre(tipo, parameter_name) if tipo is not None else None
                         if p is None:
                             continue
                         if valor_buscado is not None:
@@ -668,7 +668,7 @@ def register_consulta_routes(api):
                     parametros = {}
                     for nombre in PARAMETROS_TIPO_PRINCIPALES:
                         try:
-                            p = tipo.LookupParameter(nombre)
+                            p = buscar_por_nombre(tipo, nombre)
                             if p and p.HasValue:
                                 parametros[nombre] = valor_parametro(p, doc)
                         except Exception:

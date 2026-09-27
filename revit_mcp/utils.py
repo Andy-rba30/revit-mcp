@@ -10,6 +10,11 @@ logger = logging.getLogger(__name__)
 # transaccion (los rellena _FailureSwallower; los lee escritura.transaccion).
 ULTIMOS_ERRORES = []
 
+try:
+    _ENTEROS = (int, long)  # IronPython 2.7
+except NameError:  # pragma: no cover - CPython 3 en las pruebas
+    _ENTEROS = (int,)
+
 
 class _FailureSwallower(DB.IFailuresPreprocessor):
     """Resolve Revit failures during a transaction without ever showing a modal
@@ -61,36 +66,32 @@ def suppress_warnings(transaction):
 
 
 def normalize_string(text):
-    """Safely normalize string values to ASCII-safe output."""
-    if text is None:
-        return "Unnamed"
-    try:
-        return str(text).strip().encode('ascii', 'replace').decode('ascii')
-    except Exception:
-        return "Unnamed"
+    """Text value for output, trimmed; "Unnamed" if None or unreadable.
+
+    Accents are kept: the JSON layer escapes them (\u00e9). Passing to ASCII
+    turned "Generico" with its accent into "Gen?rico" in every response."""
+    texto = sanitize_string(text)
+    return texto.strip() if texto != "Unnamed" else texto
 
 
 def sanitize_string(text):
-    """Sanitize a string to be ASCII-safe for JSON serialization."""
+    """Text value for output (unicode, accents kept); "Unnamed" if None or unreadable."""
     if text is None:
         return "Unnamed"
-    try:
-        return str(text).encode('ascii', 'replace').decode('ascii')
-    except Exception:
-        return "Unnamed"
+    texto = _a_unicode(text)
+    return texto if texto is not None else "Unnamed"
 
 
 def get_element_name(element):
     """
-    Get the name of a Revit element.
-    Useful for both FamilySymbol and other elements.
-    Returns ASCII-safe string for JSON serialization.
+    Get the name of a Revit element (FamilySymbol or any other element).
+    Keeps accents and n-tilde ("Generico - Albanileria" with its real letters):
+    the JSON layer escapes them, and passing names to ASCII made every
+    comparison against a user-supplied name with accents fail. "Unnamed" if
+    the element has no readable name.
     """
-    try:
-        name = element.Name
-    except AttributeError:
-        name = DB.Element.Name.__get__(element)
-    return sanitize_string(name)
+    name = nombre_crudo(element)
+    return name if name else "Unnamed"
 
 
 def get_element_id_value(element_or_id):
@@ -103,6 +104,10 @@ def get_element_id_value(element_or_id):
     """
     if element_or_id is None:
         raise ValueError("Cannot extract ElementId from None")
+    # A plain integer id is already the value: the write routes collect ids as
+    # ints and resultado_creacion re-reads them through here.
+    if isinstance(element_or_id, _ENTEROS) and not isinstance(element_or_id, bool):
+        return int(element_or_id)
     try:
         eid = element_or_id.Id if hasattr(element_or_id, "Id") else element_or_id
     except Exception:
@@ -155,7 +160,7 @@ def find_family_symbol_safely(doc, target_family_name, target_type_name=None):
 
         for symbol in collector:
             try:
-                fam_name = sanitize_string(symbol.Family.Name)
+                fam_name = get_element_name(symbol.Family)
             except Exception:
                 continue
             if fam_name == target_family_name:
@@ -213,10 +218,14 @@ def nombre_crudo(element):
         return None
     if name is None:
         return None
+    return _a_unicode(name)
+
+
+def _a_unicode(texto):
     try:
-        return unicode(name)  # IronPython 2.7
+        return unicode(texto)  # IronPython 2.7
     except NameError:  # pragma: no cover - CPython 3 en las pruebas
-        return str(name)
+        return str(texto)
     except Exception:
         return None
 
@@ -288,9 +297,10 @@ def nombre_familia(tipo):
     except Exception:
         pass
     try:
-        return sanitize_string(tipo.FamilyName)
+        nombre = tipo.FamilyName
     except Exception:
         return None
+    return _a_unicode(nombre) if nombre else None
 
 
 def buscar_tipo_por_nombre(tipos, nombre):
@@ -318,3 +328,92 @@ def etiqueta_tipo(tipo):
     familia = nombre_familia(tipo)
     nombre = get_element_name(tipo)
     return "{}: {}".format(familia, nombre) if familia else nombre
+
+
+# ---------------------------------------------------------------------------
+# Parametros por nombre en cualquier idioma de Revit
+# ---------------------------------------------------------------------------
+# LookupParameter busca por el nombre visible, que depende del idioma de Revit
+# ("Comments" en ingles, "Comentarios" en espanol). Para los parametros comunes
+# se admite tambien el nombre ingles y el nombre del BuiltInParameter
+# ("ALL_MODEL_INSTANCE_COMMENTS"), que no cambian con el idioma.
+ALIAS_PARAMETROS = {
+    "comments": ("ALL_MODEL_INSTANCE_COMMENTS",),
+    "mark": ("ALL_MODEL_MARK", "DOOR_NUMBER"),
+    "type comments": ("ALL_MODEL_TYPE_COMMENTS",),
+    "type mark": ("ALL_MODEL_TYPE_MARK", "WINDOW_TYPE_ID"),
+    "description": ("ALL_MODEL_DESCRIPTION",),
+    "model": ("ALL_MODEL_MODEL",),
+    "manufacturer": ("ALL_MODEL_MANUFACTURER",),
+    "url": ("ALL_MODEL_URL",),
+    "cost": ("ALL_MODEL_COST",),
+    "length": ("CURVE_ELEM_LENGTH",),
+    "unconnected height": ("WALL_USER_HEIGHT_PARAM",),
+    "base offset": ("WALL_BASE_OFFSET",),
+    "top offset": ("WALL_TOP_OFFSET",),
+    "base constraint": ("WALL_BASE_CONSTRAINT",),
+    "top constraint": ("WALL_HEIGHT_TYPE",),
+    "room bounding": ("WALL_ATTR_ROOM_BOUNDING",),
+    "structural": ("WALL_STRUCTURAL_SIGNIFICANT",),
+    "width": ("FAMILY_WIDTH_PARAM", "GENERIC_WIDTH", "WALL_ATTR_WIDTH_PARAM", "RBS_CURVE_WIDTH_PARAM"),
+    "height": ("FAMILY_HEIGHT_PARAM", "GENERIC_HEIGHT", "RBS_CURVE_HEIGHT_PARAM"),
+    "diameter": ("RBS_PIPE_DIAMETER_PARAM", "RBS_CURVE_DIAMETER_PARAM"),
+    "depth": ("GENERIC_DEPTH",),
+    "keynote": ("KEYNOTE_PARAM",),
+    "assembly code": ("UNIFORMAT_CODE",),
+    "fire rating": ("DOOR_FIRE_RATING", "FIRE_RATING"),
+    "function": ("FUNCTION_PARAM",),
+    "structural material": ("STRUCTURAL_MATERIAL_PARAM",),
+    "thickness": ("GENERIC_THICKNESS", "FLOOR_ATTR_THICKNESS_PARAM"),
+    "sill height": ("INSTANCE_SILL_HEIGHT_PARAM",),
+    "head height": ("INSTANCE_HEAD_HEIGHT_PARAM",),
+    "level": ("FAMILY_LEVEL_PARAM", "LEVEL_PARAM", "SCHEDULE_LEVEL_PARAM"),
+    "name": ("ROOM_NAME",),
+    "number": ("ROOM_NUMBER",),
+    "area": ("ROOM_AREA", "HOST_AREA_COMPUTED"),
+    "volume": ("ROOM_VOLUME", "HOST_VOLUME_COMPUTED"),
+    "phase created": ("PHASE_CREATED",),
+    "phase demolished": ("PHASE_DEMOLISHED",),
+    "system name": ("RBS_SYSTEM_NAME_PARAM",),
+}
+
+
+def _parametro_integrado(elem, nombre_bip):
+    enumeracion = getattr(DB, "BuiltInParameter", None)
+    bip = getattr(enumeracion, nombre_bip, None) if enumeracion is not None else None
+    if bip is None:
+        return None
+    try:
+        return elem.get_Parameter(bip)
+    except Exception:
+        return None
+
+
+def buscar_por_nombre(elem, nombre):
+    """Parametro del elemento por nombre visible, nombre ingles o BuiltInParameter; None si no.
+
+    Orden: LookupParameter(nombre) (el nombre tal como lo muestra Revit en su
+    idioma), luego el nombre del BuiltInParameter si `nombre` lo es, luego los
+    alias ingleses de ALIAS_PARAMETROS.
+    """
+    if elem is None or not nombre:
+        return None
+    try:
+        param = elem.LookupParameter(nombre)
+    except Exception:
+        param = None
+    if param:
+        return param
+    try:
+        clave = nombre.strip()
+    except Exception:
+        return None
+    candidatos = []
+    if clave.upper() == clave and "_" in clave:
+        candidatos.append(clave)
+    candidatos.extend(ALIAS_PARAMETROS.get(clave.lower(), ()))
+    for nombre_bip in candidatos:
+        param = _parametro_integrado(elem, nombre_bip)
+        if param:
+            return param
+    return None

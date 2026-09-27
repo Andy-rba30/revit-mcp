@@ -71,10 +71,14 @@ def register_structural_tools(mcp, revit_get, revit_post, revit_image=None):
 
         Args:
             host_id: Id of the host wall/floor/roof/ceiling
-            points: In a wall: 2 opposite corners of the rectangular opening
-                {"x","y","z"} in mm (more points are reduced to their bounding
-                corners). In a floor/roof/ceiling: 3+ points of the closed
-                polygon of the opening, in mm.
+            points: In a wall: exactly 2 opposite corners of the rectangular
+                opening {"x","y","z"} in mm, on the wall's location line (e.g.
+                interpolate between the ends of Location.Curve). z is an
+                absolute elevation in the same frame as the wall's bbox_mm, NOT
+                an offset from the wall's level: a wall whose bbox goes from
+                z=2925 to z=5925 needs corners with z between those values. In a
+                floor/roof/ceiling: 3+ points of the closed polygon of the
+                opening, in mm.
             simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """

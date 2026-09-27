@@ -8,6 +8,7 @@ place_family y load_family pasan por escritura.ejecutar (copia, log,
 """
 
 from utils import (
+    buscar_por_nombre,
     get_element_name, find_family_symbol_safely, get_element_id_value, make_element_id,
     xyz_desde_mm, punto_a_mm, mapa_niveles, FEET_TO_MM,
 )
@@ -193,7 +194,7 @@ def register_placement_routes(api):
 
                 for param_name, param_value in properties.items():
                     try:
-                        param = new_instance.LookupParameter(param_name)
+                        param = buscar_por_nombre(new_instance, param_name)
                         if param and not param.IsReadOnly:
                             if param.StorageType == DB.StorageType.String:
                                 param.Set(str(param_value))

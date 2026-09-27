@@ -21,7 +21,7 @@ hereda los flags de __future__ del modulo y el codigo recibido dejaria de
 aceptar la sentencia print de Python 2, que hoy funciona.
 """
 from pyrevit import routes, revit, DB
-from utils import suppress_warnings, get_element_id_value
+from utils import suppress_warnings, get_element_id_value, make_element_id, buscar_por_nombre
 from seguridad import requiere_token
 from escritura import (
     ejecutar, simulacion, EscrituraRechazada, es_forzado, nombre_transaccion,
@@ -161,10 +161,12 @@ def elementos_modificados(doc, ids_antes, avisos_antes):
 
 
 def _espacio(doc, captured_output):
-    """Espacio de nombres del codigo: doc, DB, revit, clr, System, print."""
+    """Espacio de nombres del codigo: doc, DB, revit, clr, System, print y los
+    helpers make_element_id, get_element_id_value y buscar_parametro."""
     # System and clr are pre-imported so callers can use the Revit 2027-safe
     # ElementId pattern: DB.ElementId(System.Int64(id)). In 2027 a bare
-    # DB.ElementId(<int>) raises "Multiple targets could match".
+    # DB.ElementId(<int>) raises "Multiple targets could match";
+    # make_element_id(id) does the same for every Revit version.
     import clr as _clr
     import System as _System
     return {
@@ -173,6 +175,9 @@ def _espacio(doc, captured_output):
         "revit": revit,
         "clr": _clr,
         "System": _System,
+        "make_element_id": make_element_id,
+        "get_element_id_value": get_element_id_value,
+        "buscar_parametro": buscar_por_nombre,
         "__builtins__": __builtins__,
         "print": lambda *args: captured_output.write(
             " ".join(str(arg) for arg in args) + "\n"
@@ -211,7 +216,13 @@ def _pistas(error_type, error_msg):
         )
     if "Multiple targets could match" in error_msg:
         hints.append(
-            "Revit 2027: build ElementIds with DB.ElementId(System.Int64(id)) instead of DB.ElementId(id)."
+            "Revit 2027: build ElementIds with make_element_id(id) (already defined, any Revit version) "
+            "or DB.ElementId(System.Int64(id)) instead of DB.ElementId(id)."
+        )
+    if error_type == "ImportError" and "utils" in error_msg:
+        hints.append(
+            "Do not import the server modules: make_element_id, get_element_id_value and "
+            "buscar_parametro(elem, name) are already defined in the code's namespace."
         )
     return hints
 

@@ -8,7 +8,7 @@ delete_elements y modify_element pasan por escritura.ejecutar: copia, log,
 limite de 200 elementos por llamada salvo `forzar`.
 """
 
-from utils import get_element_name, make_element_id, get_element_id_value
+from utils import get_element_name, make_element_id, get_element_id_value, buscar_por_nombre
 from seguridad import requiere_token
 from escritura import (
     ejecutar, transaccion, simulacion, EscrituraRechazada, comprobar_alcance,
@@ -109,19 +109,18 @@ def register_editing_routes(api):
             planes = []
             failed = []
             for param_name, new_value in parameters.items():
-                param = elem.LookupParameter(param_name)
+                param = buscar_por_nombre(elem, param_name)
                 if not param:
-                    available = []
+                    available = set()
                     for p in elem.Parameters:
                         try:
-                            available.append(p.Definition.Name)
+                            available.add(p.Definition.Name)
                         except Exception:
                             continue
-                    available.sort()
                     failed.append({
                         "parameter": param_name,
                         "reason": "not found",
-                        "available_parameters": available[:20],
+                        "available_parameters": sorted(available)[:60],
                     })
                     continue
                 if param.IsReadOnly:
@@ -249,7 +248,7 @@ def register_editing_routes(api):
                 key_param_names = ["Mark", "Comments", "Length", "Area", "Volume", "Width", "Height"]
                 for pname in key_param_names:
                     try:
-                        p = elem.LookupParameter(pname)
+                        p = buscar_por_nombre(elem, pname)
                         if p and p.HasValue:
                             if p.StorageType == DB.StorageType.String:
                                 val = p.AsString()

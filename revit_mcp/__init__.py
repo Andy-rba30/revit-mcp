@@ -4,7 +4,7 @@ MCP Module for Revit Integration
 Contains all MCP route handlers organized by functionality
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.2"
 __author__ = "Juan D. Rodriguez, Jean-Marc Couffin"
 
 # Common imports that all modules might need

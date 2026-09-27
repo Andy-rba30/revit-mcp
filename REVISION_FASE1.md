@@ -36,3 +36,22 @@ Revit con `pruebas\probar_revit.py` sobre una copia del modelo.
 4. `create_opening` en un muro oblicuo (no paralelo a los ejes).
 5. `purge_unused` con `simular=true`: debe devolver método `PerformanceAdviser`; si devuelve 409, anotar la versión de Revit.
 6. `set_project_location` con `simular=true` y luego `true_north_deg` solo.
+
+## Ejecución en Revit de la 0.2.1 (2026-09-27) y correcciones de la 0.2.2
+
+Resultado en un Revit en español: 7/9 en `probar_revit.py`; `set_parameter` de longitud, `delete_elements`
+con muro y puerta alojada, y lectura de puntos por `execute_code` correctos. Fallos encontrados:
+
+| # | Dónde | Qué fallaba | Qué se hizo |
+|---|---|---|---|
+| 13 | `utils.py` `get_element_id_value`, `escritura.py` `resultado_creacion` | **Toda** creación respondía `ok:false` y "no se encontraron los elementos" aunque Revit los hubiera creado: las rutas guardan ids enteros y `get_element_id_value(int)` lanzaba, así que `describir_elemento` devolvía `None` (visto con `create_opening`) | `get_element_id_value` acepta enteros |
+| 14 | `set_parameter`, `modify_element`, `set_type_parameter`, `find_elements` y los `LookupParameter` con nombre inglés fijo | En un Revit que no está en inglés `Comments` es `Comentarios`: 404 (pruebas 6 y 7), y `Name`/`Number`/`Area`/`Length`... salían vacíos | `utils.buscar_por_nombre`: nombre visible, luego nombre `BuiltInParameter` (`ALL_MODEL_INSTANCE_COMMENTS`), luego alias ingleses de los parámetros comunes; `set_parameter` devuelve `parameter_label` (el nombre que muestra Revit) |
+| 15 | `nombres_parametros` | `available_parameters` repetía nombres (`Categoría` dos veces) y cortaba a 30 | Sin repetidos, hasta 60 |
+| 16 | `utils.py` `get_element_name`, `sanitize_string`, `normalize_string`; `parameters.py` `_safe_str` | Los nombres con tildes o ñ salían como `Gen?rico - Alba?iler?a`, y las comparaciones con un nombre con tildes pasado por el usuario (vistas, tipos, cajetines) nunca coincidían | Se conserva el texto unicode; la capa JSON ya lo escapa (`é`) |
+| 17 | `estructural.py` `create_opening` | Un hueco con z tomada como desfase desde el nivel (900–2100 en un muro de 2925–5925) se creaba sin cortar nada | 400 si el hueco no solapa en altura con el muro; el mensaje ya no dice "Created" cuando la verificación falla; docstring: z es cota absoluta y los 2 puntos van sobre la línea de ubicación |
+| 18 | `code_execution.py` | `DB.ElementId(165465)` falla en Revit 2027 y `from utils import make_element_id` da `ImportError` | `make_element_id`, `get_element_id_value` y `buscar_parametro` ya definidos en el espacio del código; pista para el `ImportError` |
+| 19 | `pruebas/probar_revit.py` | Buscaba el valor original por el nombre pedido (`Comments`) en `element_properties` | Toma el valor original y el nombre visible de la respuesta simulada |
+
+Pendiente en Revit: repetir `probar_revit.py` (se esperan 9/9) y `create_opening` con z dentro del muro. Los
+huecos 615578 y 615589 de la prueba anterior probablemente sí se crearon: revisar el modelo o deshacerlos
+(entradas `IA: Crear hueco en 165465`).

@@ -6,7 +6,7 @@ Handles room creation and room separation lines.
 Ambas rutas pasan por escritura.ejecutar (copia, log, simular, IA:).
 """
 
-from utils import get_element_name, get_element_id_value, xyz_desde_mm, punto_a_mm, mapa_niveles, buscar_vista, MM_TO_FEET
+from utils import get_element_name, get_element_id_value, xyz_desde_mm, punto_a_mm, mapa_niveles, buscar_vista, MM_TO_FEET, buscar_por_nombre
 from seguridad import requiere_token
 from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, resultado_creacion
 from pyrevit import routes, revit, DB
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 def _texto_parametro(elem, nombre):
     try:
-        p = elem.LookupParameter(nombre)
+        p = buscar_por_nombre(elem, nombre)
         if p:
             return p.AsString() or ""
     except Exception:
@@ -81,11 +81,11 @@ def register_room_routes(api):
                         400,
                     )
                 if room_name:
-                    name_param = room.LookupParameter("Name")
+                    name_param = buscar_por_nombre(room, "Name")
                     if name_param and not name_param.IsReadOnly:
                         name_param.Set(room_name)
                 if room_number:
-                    number_param = room.LookupParameter("Number")
+                    number_param = buscar_por_nombre(room, "Number")
                     if number_param and not number_param.IsReadOnly:
                         number_param.Set(room_number)
                 room_id = get_element_id_value(room)
@@ -93,7 +93,7 @@ def register_room_routes(api):
             resultado = resultado_creacion(doc, [room_id])
             area = 0.0
             try:
-                area_param = room.LookupParameter("Area")
+                area_param = buscar_por_nombre(room, "Area")
                 if area_param and area_param.HasValue:
                     area = round(area_param.AsDouble() * 0.092903, 2)  # sq ft to sq m
             except Exception:

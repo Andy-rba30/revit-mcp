@@ -7,6 +7,7 @@ Las tres rutas pasan por escritura.ejecutar (copia, log, simular, IA:).
 """
 
 from utils import (
+    buscar_por_nombre,
     get_element_name, get_element_id_value, make_element_id, xyz_desde_mm, punto_a_mm,
     elementos_por_nombre, mapa_niveles, coleccion_niveles, MM_TO_FEET,
 )
@@ -77,7 +78,7 @@ def _nivel(doc, data, start):
 def _fijar_medida(elem, nombre, valor_mm):
     if valor_mm is None:
         return None
-    p = elem.LookupParameter(nombre)
+    p = buscar_por_nombre(elem, nombre)
     if p and not p.IsReadOnly:
         p.Set(float(valor_mm) * MM_TO_FEET)
         return True
@@ -86,7 +87,7 @@ def _fijar_medida(elem, nombre, valor_mm):
 
 def _medida_mm(elem, nombre):
     try:
-        p = elem.LookupParameter(nombre)
+        p = buscar_por_nombre(elem, nombre)
         if p and p.HasValue:
             return round(p.AsDouble() / MM_TO_FEET, 1)
     except Exception:
@@ -286,7 +287,7 @@ def register_mep_routes(api):
                         )
                 if new_system is None:
                     raise EscrituraRechazada("Failed to create {} system".format(system_type), 500)
-                name_param = new_system.LookupParameter("System Name")
+                name_param = buscar_por_nombre(new_system, "System Name")
                 if name_param and not name_param.IsReadOnly:
                     name_param.Set(system_name)
                 system_id = get_element_id_value(new_system)
@@ -295,7 +296,7 @@ def register_mep_routes(api):
             descripcion = describir_elemento(doc, system_id)
             nombre_real = None
             try:
-                p = doc.GetElement(make_element_id(system_id)).LookupParameter("System Name")
+                p = buscar_por_nombre(doc.GetElement(make_element_id(system_id)), "System Name")
                 nombre_real = p.AsString() if p else None
             except Exception:
                 pass

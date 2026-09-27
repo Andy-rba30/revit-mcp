@@ -9,7 +9,7 @@ Las funciones valor_parametro / asignar_parametro / coincide_valor las reutiliza
 editing.py (modify_element) y tipos.py (set_type_parameter).
 """
 
-from utils import get_element_name, get_element_id_value, make_element_id
+from utils import get_element_name, get_element_id_value, make_element_id, buscar_por_nombre
 from seguridad import requiere_token
 from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, bbox_mm, nombre_nivel, MM_TO_FEET
 from pyrevit import routes, revit, DB
@@ -28,33 +28,19 @@ except NameError:  # pragma: no cover - CPython 3 en las pruebas
 
 
 def _safe_str(value):
-    """Convert a value to a JSON-safe ASCII string, replacing problematic chars.
-    IronPython 2.7 compatible — handles both str (bytes) and unicode."""
-    try:
-        if value is None:
-            return ""
-        # Try unicode first (IronPython 2.7 has unicode type)
-        try:
-            s = unicode(value)
-        except Exception:
-            try:
-                s = str(value)
-            except Exception:
-                return ""
-        # Strip any char with ordinal >= 128
-        result = []
-        for ch in s:
-            try:
-                o = ord(ch)
-                if o < 128:
-                    result.append(chr(o))
-                else:
-                    result.append("?")
-            except Exception:
-                result.append("?")
-        return "".join(result)
-    except Exception:
+    """Texto para la respuesta JSON ("" si None o ilegible); conserva las tildes
+    (la capa JSON las escapa). IronPython 2.7: unicode(); CPython 3: str()."""
+    if value is None:
         return ""
+    try:
+        return unicode(value)
+    except NameError:  # pragma: no cover - CPython 3 en las pruebas
+        return str(value)
+    except Exception:
+        try:
+            return str(value)
+        except Exception:
+            return ""
 
 
 def _get_param_group_name(param):
@@ -255,8 +241,12 @@ def contexto_elemento(doc, elem):
 
 
 def buscar_parametro(doc, elem, parameter_name, incluir_tipo=True):
-    """Parametro de ejemplar (o de tipo si incluir_tipo) por nombre; None si no."""
-    param = elem.LookupParameter(parameter_name)
+    """Parametro de ejemplar (o de tipo si incluir_tipo) por nombre; None si no.
+
+    Acepta el nombre que muestra Revit en su idioma, el nombre ingles de los
+    parametros comunes ("Comments" en un Revit en espanol) o el nombre del
+    BuiltInParameter (ver utils.buscar_por_nombre)."""
+    param = buscar_por_nombre(elem, parameter_name)
     if param or not incluir_tipo:
         return param
     try:
@@ -264,21 +254,21 @@ def buscar_parametro(doc, elem, parameter_name, incluir_tipo=True):
         if type_id and type_id != DB.ElementId.InvalidElementId:
             elem_type = doc.GetElement(type_id)
             if elem_type:
-                return elem_type.LookupParameter(parameter_name)
+                return buscar_por_nombre(elem_type, parameter_name)
     except Exception:
         pass
     return None
 
 
-def nombres_parametros(elem, maximo=30):
-    available = []
+def nombres_parametros(elem, maximo=60):
+    """Nombres de parametro del elemento, sin repetir y ordenados (hasta `maximo`)."""
+    available = set()
     for p in elem.Parameters:
         try:
-            available.append(p.Definition.Name)
+            available.add(p.Definition.Name)
         except Exception:
             continue
-    available.sort()
-    return available[:maximo]
+    return sorted(available)[:maximo]
 
 
 def register_parameter_routes(api):
@@ -437,7 +427,11 @@ def register_parameter_routes(api):
                 raise EscrituraRechazada(
                     "Parameter '{}' is read-only and cannot be modified.".format(parameter_name), 400
                 )
-            es_de_tipo = elem.LookupParameter(parameter_name) is None
+            es_de_tipo = buscar_por_nombre(elem, parameter_name) is None
+            try:
+                etiqueta = _safe_str(param.Definition.Name)
+            except Exception:
+                etiqueta = parameter_name
             try:
                 convertido = convertir_valor(param, value)
             except ValueError as error:
@@ -450,6 +444,7 @@ def register_parameter_routes(api):
                         "accion": "set_parameter",
                         "element_id": int(element_id),
                         "parameter_name": parameter_name,
+                        "parameter_label": etiqueta,
                         "is_type_parameter": es_de_tipo,
                         "storage_type": str(param.StorageType),
                         "antes": antes,
@@ -465,6 +460,7 @@ def register_parameter_routes(api):
             resultado = {
                 "element_id": int(element_id),
                 "parameter_name": parameter_name,
+                "parameter_label": etiqueta,
                 "is_type_parameter": es_de_tipo,
                 "antes": antes,
                 "despues": despues,

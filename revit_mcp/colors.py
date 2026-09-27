@@ -4,7 +4,7 @@ Color management functionality for Revit elements
 Provides tools for color splashing elements based on parameter values
 """
 
-from utils import get_element_id_value, suppress_warnings
+from utils import get_element_id_value, suppress_warnings, buscar_por_nombre
 from seguridad import requiere_token
 from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada
 from pyrevit import routes, DB
@@ -199,7 +199,7 @@ def get_parameter_value_safe(element, parameter_name):
     """
     try:
         # Try to get parameter by name
-        param = element.LookupParameter(parameter_name)
+        param = buscar_por_nombre(element, parameter_name)
         if param and param.HasValue:
             if param.StorageType == DB.StorageType.String:
                 value = param.AsString()

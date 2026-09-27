@@ -1,6 +1,6 @@
 # Revit MCP Server
 
-MCP server for Autodesk Revit 2024/2025/2026/2027 via pyRevit — **68 tools** for building design, structure, coordinates, editing, analysis, clash detection, MEP, interop, documentation and model persistence, with a safe-write layer (backups, action log, dry-run `simular`, verification and `IA:` undo entries). Version **0.2.1**.
+MCP server for Autodesk Revit 2024/2025/2026/2027 via pyRevit — **68 tools** for building design, structure, coordinates, editing, analysis, clash detection, MEP, interop, documentation and model persistence, with a safe-write layer (backups, action log, dry-run `simular`, verification and `IA:` undo entries). Version **0.2.2**.
 
 Works with any MCP client: Claude Desktop, Claude Code, Cursor, Windsurf, Copilot, or any other MCP-compatible application.
 

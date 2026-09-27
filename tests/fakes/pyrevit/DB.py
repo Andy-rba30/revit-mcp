@@ -80,6 +80,8 @@ class BuiltInParameter(object):
     SCHEDULE_LEVEL_PARAM = _Enum("SCHEDULE_LEVEL_PARAM")
     FAMILY_BASE_LEVEL_PARAM = _Enum("FAMILY_BASE_LEVEL_PARAM")
     ELEM_PARTITION_PARAM = _Enum("ELEM_PARTITION_PARAM")
+    ALL_MODEL_INSTANCE_COMMENTS = _Enum("ALL_MODEL_INSTANCE_COMMENTS")
+    WALL_USER_HEIGHT_PARAM = _Enum("WALL_USER_HEIGHT_PARAM")
 
 
 class BuiltInCategory(object):
@@ -162,6 +164,22 @@ class TransactionGroup(Transaction):
 
 
 class Element(object):
+    pass
+
+
+class Wall(Element):
+    pass
+
+
+class Floor(Element):
+    pass
+
+
+class RoofBase(Element):
+    pass
+
+
+class Ceiling(Element):
     pass
 
 
