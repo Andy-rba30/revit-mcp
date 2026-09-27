@@ -95,6 +95,16 @@ def _segmentos(boundary, idx):
     return boundary
 
 
+def crear_nivel(doc, elevation_mm, name=None):
+    """DB.Level.Create a la cota en mm y, si se da, el nombre. Devuelve el nivel.
+
+    Lo reutiliza macros.create_grid_and_levels."""
+    nivel = DB.Level.Create(doc, float(elevation_mm) * MM_TO_FEET)
+    if name:
+        nivel.Name = name
+    return nivel
+
+
 def register_building_routes(api):
     """Register all building creation routes with the API"""
 
@@ -392,9 +402,7 @@ def register_building_routes(api):
             with transaccion(doc, "Crear niveles"):
                 for plan in planes:
                     try:
-                        new_level = DB.Level.Create(doc, plan["elevation_mm"] * MM_TO_FEET)
-                        if plan["name"]:
-                            new_level.Name = plan["name"]
+                        new_level = crear_nivel(doc, plan["elevation_mm"], plan["name"])
                         ids.append(get_element_id_value(new_level))
                     except Exception as lv_err:
                         errors.append("Level {}: {}".format(plan["idx"], str(lv_err)))

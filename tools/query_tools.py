@@ -11,17 +11,27 @@ def register_query_tools(mcp, revit_get, revit_post, revit_image=None):
     _ = revit_image  # Acknowledge unused parameter
 
     @mcp.tool()
-    async def list_warnings(max: int = 100, ctx: Context = None) -> str:
+    async def list_warnings(max: int = 100, group_by: str = None, ctx: Context = None) -> str:
         """List the model warnings (doc.GetWarnings): description, severity and element ids.
 
         Call it after creating elements to check that nothing overlaps or is
         unjoined. Returns `total` and `truncated` when there are more than `max`.
 
+        With group_by="description" the warnings come grouped by type
+        (`groups[]`: descripcion, failure_definition_guid, failure, severidad,
+        count, element_ids, sugerencia). The group and its suggestion are
+        chosen by the FailureDefinitionId, not by the text, so they work in any
+        Revit language; `max` then limits the number of groups.
+
         Args:
-            max: Maximum warnings returned (default 100)
+            max: Maximum warnings (or groups) returned (default 100)
+            group_by: "description" to group the warnings by type with a suggestion each
             ctx: MCP context for logging
         """
-        response = await revit_get("/warnings/", ctx, params={"max": str(max)})
+        params = {"max": str(max)}
+        if group_by:
+            params["group_by"] = group_by
+        response = await revit_get("/warnings/", ctx, params=params)
         return format_response(response)
 
     @mcp.tool()

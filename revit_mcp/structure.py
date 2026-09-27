@@ -18,6 +18,23 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def crear_rejilla(doc, start, end, name=None):
+    """DB.Grid.Create entre dos XYZ (pies) y, si se da, el nombre.
+
+    Devuelve (grid, error_de_nombre): el error es None si el nombre se aplico
+    (o no se pidio); si Revit lo rechaza (nombre repetido), la rejilla queda
+    creada con su nombre automatico y se devuelve el texto del error.
+    Lo reutiliza macros.create_grid_and_levels."""
+    grid = DB.Grid.Create(doc, DB.Line.CreateBound(start, end))
+    error = None
+    if name:
+        try:
+            grid.Name = name
+        except Exception as name_err:
+            error = str(name_err)
+    return grid, error
+
+
 def register_structure_routes(api):
     """Register all structure routes with the API"""
 
@@ -66,16 +83,13 @@ def register_structure_routes(api):
             with transaccion(doc, "Crear rejillas"):
                 for plan in planes:
                     try:
-                        grid = DB.Grid.Create(doc, DB.Line.CreateBound(plan["start"], plan["end"]))
-                        if plan["name"]:
-                            try:
-                                grid.Name = plan["name"]
-                            except Exception as name_err:
-                                errors.append(
-                                    "Grid {}: could not set name '{}': {}".format(
-                                        plan["idx"], plan["name"], str(name_err)
-                                    )
+                        grid, error_nombre = crear_rejilla(doc, plan["start"], plan["end"], plan["name"])
+                        if error_nombre:
+                            errors.append(
+                                "Grid {}: could not set name '{}': {}".format(
+                                    plan["idx"], plan["name"], error_nombre
                                 )
+                            )
                         ids.append(get_element_id_value(grid))
                     except Exception as grid_err:
                         errors.append("Grid {}: {}".format(plan["idx"], str(grid_err)))

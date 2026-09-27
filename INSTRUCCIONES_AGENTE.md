@@ -19,7 +19,10 @@ persona.
    - no borrar colecciones con `doc.Delete(<colección>)` (se rechaza salvo
      `forzar=true`); para borrar usa `delete_elements` con la lista de ids.
 3. Las herramientas de lectura (`get_*`, `list_*`, `find_elements`,
-   `read_log`) no cambian nada: úsalas sin pedir permiso.
+   `query_elements`, `describe_element`, `dependency_graph`,
+   `schedule_to_json`, `snapshot_model`, `diff_snapshots`, `read_log`) no
+   cambian nada en el modelo: úsalas sin pedir permiso (`snapshot_model`
+   solo escribe un `.json` en `snapshots\`).
 
 ## 2. Flujo obligatorio para cualquier cambio en el modelo
 
@@ -45,6 +48,35 @@ Todas las herramientas de escritura devuelven además `copia` (ruta de la
 copia de seguridad del **último guardado** en `backups\`, no del estado en
 memoria) y `ms`. El registro completo está en `mcp_log.jsonl` junto al `.rvt`
 (léelo con `read_log`).
+
+## 2b. Flujo de navegación profunda (0.3.0)
+
+1. Antes de tocar un elemento, `describe_element(element_id, depth=1)`: sus
+   parámetros (con `builtin`, el nombre de `BuiltInParameter` que vale en
+   cualquier idioma), qué aloja (`hosted_elements`), con qué está unido
+   (`joined_elements`), qué depende de él (`dependents`, lo que se borraría
+   con él) y qué cotas y etiquetas de la vista activa lo referencian.
+2. Para buscar, `query_elements` con `filters` en lugar de recorrer listados:
+   `[{"parameter": "Mark", "op": "contains", "value": "P-"}]`,
+   `[{"parameter": "Length", "op": ">", "value": 4000}]` (mm). Pagina con
+   `page` y `page_size` (máximo 500) y usa `fields` para leer varios
+   parámetros de golpe. `find_elements` sigue funcionando (es un alias).
+3. Antes de una tanda de cambios, `snapshot_model(name="antes de ...")`;
+   después, `diff_snapshots(a="antes de ...")` (sin `b` compara con el modelo
+   actual) y muestra al usuario `added`, `removed` y `modified` con los
+   parámetros que cambiaron.
+4. `list_warnings(group_by="description")` agrupa las advertencias por tipo
+   con una sugerencia; la sugerencia se elige por el identificador del fallo,
+   no por el texto, así que vale en cualquier idioma de Revit.
+5. `dependency_graph` antes de borrar o mover algo con muchas relaciones;
+   `get_view_extents` antes de crear vistas o colocar planos; `schedule_to_json`
+   para leer una tabla de planificación tal como la muestra Revit.
+6. Macros (`create_grid_and_levels`, `create_sheet_set`, `import_from_civil`):
+   siempre `simular=true` primero, muestra al usuario el `plan` (recuentos,
+   nombres, posiciones en mm, vistas que se saltarán) y ejecuta solo tras su
+   confirmación. `import_from_civil` con `use_shared_coordinates=true` cambia
+   las coordenadas compartidas del proyecto: pide confirmación expresa y no
+   uses `forzar` sin que el usuario lo diga.
 
 ## 3. Reglas de dominio
 
@@ -76,6 +108,18 @@ memoria) y `ms`. El registro completo está en `mcp_log.jsonl` junto al `.rvt`
 - Con `purge_unused` ejecuta siempre `simular=true` primero y muestra la
   lista completa; purgar es irreversible tras guardar.
 - No abras transacciones en `execute_revit_code`: el manejador ya abre una.
+- **Nunca uses nombres visibles en inglés** para categorías, vistas,
+  plantillas ni parámetros en un Revit que no está en inglés: categorías por
+  `BuiltInCategory` (`OST_Walls`), parámetros por el nombre que muestra Revit,
+  por su alias inglés común (`Mark`, `Comments`, `Length`) o por el nombre de
+  `BuiltInParameter` (`ALL_MODEL_MARK`), y vistas, niveles, cajetines y tipos
+  por el nombre exacto que devuelven `list_revit_views`, `list_levels` y
+  `list_element_types`.
+- `create_grid_and_levels` rechaza (`400`) nombres de rejilla o de nivel que
+  ya existen: elige `x_names`/`y_names` que continúen la secuencia del
+  proyecto (`query_elements(category="OST_Grids")` los lista).
+- `create_sheet_set` no coloca una vista que ya está en otro plano: la
+  informa en `skipped`; no la repitas, duplica la vista en Revit si hace falta.
 
 ## 4. Glosario español ↔ API de Revit
 
@@ -108,6 +152,18 @@ memoria) y `ms`. El registro completo está en `mcp_log.jsonl` junto al `.rvt`
 | Hueco | `Opening` (`doc.Create.NewOpening`) |
 | Purgar sin usar | `Purge Unused` |
 | Deshacer | `Undo` (entradas `IA: ...`) |
+| Instantánea del modelo | `Snapshot` (`snapshot_model`, `diff_snapshots`; comparación por `UniqueId`) |
+| Grafo de dependencias | `Dependency graph` (`GetDependentElements`, `FindInserts`, `JoinGeometryUtils`) |
+| Elemento alojado / anfitrión | `Hosted element` / `Host` (`FamilyInstance.Host`) |
+| Tabla de planificación a JSON | `Schedule` (`ViewSchedule.GetTableData`, `GetCellText`) |
+| Recorte de vista | `Crop box` (`View.CropBox`) |
+| Rango de vista | `View range` (`PlanViewRange`: `TopClipPlane`, `CutPlane`, `BottomClipPlane`, `ViewDepthPlane`) |
+| Plantilla de vista | `View template` (`View.ViewTemplateId`) |
+| Ventana gráfica (vista en un plano) | `Viewport` (`Viewport.Create`, `ScheduleSheetInstance` para tablas) |
+| Cajetín | `Title block` (`OST_TitleBlocks`) |
+| Superficie de Civil 3D | `LandXML` (`Surface/Definition/Pnts`, puntos en orden norte-este-cota) |
+| Adquirir coordenadas | `Acquire Coordinates` (`doc.AcquireCoordinates`) |
+| Filtro de parámetro nativo | `ElementParameterFilter` (`ParameterValueProvider` + `FilterRule`) |
 
 ## 5. Errores típicos y qué hacer
 
@@ -129,3 +185,9 @@ memoria) y `ms`. El registro completo está en `mcp_log.jsonl` junto al `.rvt`
 | `"Revit no está abierto o el conector no ha iniciado"` | No existe el archivo del token | Abre Revit con la extensión cargada. |
 | `"Revit no respondió en N s"` | Tiempo de espera agotado (30 s lectura, 120 s escritura, 600 s operaciones largas) | La operación puede seguir en curso: comprueba con `read_log` / `get_revit_status` antes de repetir. |
 | `ok: false` con `verificacion.coincide: false` | El valor releído no coincide con lo pedido | No reintentes; muestra `detalle` al usuario. |
+| `409` "Snapshot already exists" | Ya hay una instantánea con ese nombre | Usa otro nombre o `overwrite=true` si el usuario quiere sustituirla. |
+| `404` "Snapshot not found" con `available_snapshots` | El nombre no coincide con ningún `.json` de `snapshots\` | Elige uno de `available_snapshots`. |
+| `400` "These grid names already exist" con `existing` | La rejilla pedida repite nombres del proyecto | Pasa `x_names`/`y_names` que continúen la secuencia. |
+| `404` "Views not found" con `missing_views` | Una vista de `create_sheet_set` no existe con ese nombre exacto | Toma el nombre de `list_revit_views`. |
+| `409` "The project already has shared coordinates" | `import_from_civil` con `use_shared_coordinates` sobrescribiría las coordenadas compartidas | Confirma con el usuario y repite con `forzar=true` solo si lo pide. |
+| `400` "op '...' not supported" | `filters[].op` desconocido | Usa `=`, `!=`, `>`, `<`, `>=`, `<=`, `contains`, `starts`, `empty`, `not_empty` o `exists`. |

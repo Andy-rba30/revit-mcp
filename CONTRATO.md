@@ -3,7 +3,7 @@
 Este documento describe el servidor HTTP que la extensión de pyRevit levanta
 dentro de Revit, cómo se protege, cómo escribe en el modelo y qué rutas
 expone. Es la referencia para el puente `main.py` y para cualquier cliente que
-quiera hablar con Revit directamente. Versión del conector: **0.2.0**.
+quiera hablar con Revit directamente. Versión del conector: **0.3.0**.
 
 ## El servidor
 
@@ -14,7 +14,7 @@ quiera hablar con Revit directamente. Versión del conector: **0.2.0**.
 | Prefijo de las rutas | `http://127.0.0.1:48884/revit_mcp/...` |
 | Motor | IronPython 2.7 (los manejadores viven en `revit_mcp/`) |
 | Puente MCP | `main.py` (CPython 3.11+, SDK mcp 2.2) en `http://127.0.0.1:8000` |
-| Herramientas MCP | 68 (40 de escritura, todas con `simular`) |
+| Herramientas MCP | 78 (43 de escritura, todas con `simular`); 0.3.0 añade 7 de navegación profunda y 3 macros de proyecto |
 
 El servidor debe usarse **solo desde loopback**. pyRevit Routes escucha en
 todas las interfaces, así que el usuario aplica a mano esta regla de firewall
@@ -47,7 +47,7 @@ Invoke-RestMethod "http://127.0.0.1:48884/revit_mcp/status/?token=$token"
 
 Toda ruta que modifica el modelo pasa por `revit_mcp/escritura.py`
 (`ejecutar` → `preparar` → `transaccion` → verificación → `registrar`).
-Las garantías son las mismas para las 40 herramientas de escritura:
+Las garantías son las mismas para las 43 herramientas de escritura:
 
 | Garantía | Detalle |
 |----------|---------|
@@ -57,7 +57,7 @@ Las garantías son las mismas para las 40 herramientas de escritura:
 | **`simular`** | Parámetro booleano (por defecto `false`) en **todas** las rutas de escritura. Con `true` el manejador valida todo (elementos, tipos, niveles, unidades convertidas) y responde `{"simulado": true, "haria": [...]}` sin abrir transacción ni hacer copia. La llamada queda en el log con `"simulado": true`. |
 | **Transacción `IA:`** | `transaccion(doc, nombre)` abre `DB.Transaction(doc, "IA: <acción>")` con `suppress_warnings`, hace `Commit` al salir y `RollBack` ante excepción. Si Revit revierte por un fallo de validación, la ruta responde `500` en vez de un éxito falso. Todas las transacciones del conector se llaman `IA: ...` (`IA: Crear muros/vigas`, `IA: Borrar elementos`, `IA: Parametro Mark de 1234`...), así el usuario distingue en el historial de deshacer lo que hizo la IA. `execute_code` usa un `TransactionGroup` con el mismo prefijo. |
 | **Verificación** | Cada manejador vuelve a leer lo que cambió: creación → `"creados": [{"id", "categoria", "tipo", "nivel", "bbox_mm"}]`; parámetros → `"antes"` / `"despues"`; borrado → `"eliminados"` / `"en_cascada"`. La respuesta lleva `"ok"` y `"verificacion": {"coincide": bool, "detalle"}`. Si lo releído no coincide con lo pedido, `ok=false` con explicación y **nunca** se reintenta solo. |
-| **Límite de alcance** | `delete_elements`, `transform_elements`, `change_type` y `set_workset` rechazan (`400`, con `limite` y `cantidad`) más de 200 elementos por llamada salvo `forzar=true`. `execute_code` exige `description` (`400` si falta) y rechaza código con `doc.Delete(<colección>)` salvo `forzar=true`. |
+| **Límite de alcance** | `delete_elements`, `transform_elements`, `change_type`, `set_workset` y las macros de 0.3.0 (`/grid_levels/`, `/sheet_set/`, `/import_civil/`, sobre el total de elementos que crean) rechazan (`400`, con `limite` y `cantidad`) más de 200 elementos por llamada salvo `forzar=true`. `execute_code` exige `description` (`400` si falta) y rechaza código con `doc.Delete(<colección>)` salvo `forzar=true`. |
 | **Respuesta** | Éxito: `200` con los datos, `ok`, `ms`, `copia` (o `simulado`/`haria`). Error controlado: `400`/`404`/`409` con `{"error", ...detalles}`. Excepción: `500` con `error`, `traceback` y `copia` si ya se había hecho. |
 
 Comandos de ejemplo (PowerShell; `$token` como arriba):
@@ -83,7 +83,11 @@ Tiempos de espera del puente: 30 s lectura; 120 s escritura (`create_*`,
 `transform_elements`, `color_splash`...); 600 s `export_ifc`,
 `export_document`, `check_clashes`, `get_material_quantities`, `link_file`,
 `load_family`, `save_document`, `execute_revit_code`, `create_toposolid`,
-`purge_unused`, `create_backup`.
+`purge_unused`, `create_backup` y, desde 0.3.0, `snapshot_model`,
+`diff_snapshots` e `import_from_civil`. El tiempo de espera largo no sustituye
+al límite de elementos: Routes ejecuta cada llamada en el hilo de Revit, que
+queda bloqueado mientras dura, y por eso toda macro aplica `comprobar_alcance`
+al total de elementos que va a crear.
 
 ### Estado y modelo (lectura)
 
@@ -187,6 +191,38 @@ Tiempos de espera del puente: 30 s lectura; 120 s escritura (`create_*`,
 | POST | `/purge_unused/` | `max_rounds` (3), `forzar`, `simular` | `candidatos[]`, `eliminados[]`, `rounds`; con `simular` solo lista. Solo purga con el PerformanceAdviser; si no está disponible responde `409` y la lista de reserva (tipos sin ejemplares) es solo informativa. Más de 200 tipos exige `forzar=true`. Una transacción `IA:` por ronda |
 | POST | `/backup/` | `suffix`, `simular` | `copia` forzada (`backups\<nombre>_<marca>_<suffix>.rvt`); `400` en modelos compartidos o sin guardar |
 
+### Navegación profunda (0.3.0, lectura)
+
+Ninguna abre transacción. Los parámetros se resuelven como en `set_parameter`
+(nombre visible, alias inglés o `BuiltInParameter`), las categorías por
+`BuiltInCategory` y los valores numéricos van en mm, mm², mm³ o grados.
+
+| Método | Ruta | Parámetros | Respuesta |
+|--------|------|------------|-----------|
+| POST | `/describe/` | `element_id`*, `depth` (0-2), `include_geometry` | `categoria`, `familia`, `tipo`, `type_id`, `nivel`, `host`/`host_id`, `workset`, `phase_created`, `phase_demolished`, `design_option`, `pinned`, `bbox_mm`, `parameters` {`instance[]`, `type[]`: `name`, `value` (mm, mm², mm³, grados), `display`, `unit`, `is_read_only`, `is_shared`, `guid`, `builtin`}, `hosted_elements[]` (`FamilyInstance.Host` inverso y `HostObject.FindInserts`), `joined_elements[]` (`JoinGeometryUtils`), `dependents[]` (`GetDependentElements`, solo categorías de modelo), `referenced_by[]` (cotas y etiquetas **solo de la vista activa**), `counts`; con `include_geometry`: `geometry` (`location`, `solids[]`, `volume_m3`, `area_m2`). Con `depth` 1 los relacionados llevan categoría, tipo y nivel; con 2, además sus propios `hosted_ids` y `joined_ids` |
+| POST | `/dependency_graph/` | `element_id`*, `max_nodes` (100, máx 500), `max_depth` (2, máx 6) | `nodes[]` (`id`, `categoria`, `tipo`, `nivel`, `bbox_mm`, `depth`), `edges[]` (`from`, `to`, `kind` = `hosts` / `joins` / `depends`), `node_count`, `edge_count`, `truncated` |
+| POST | `/query/` | `category` (nombre o lista), `family`, `type_name`, `level`, `view_id`, `workset`, `phase`, `filters[]` (`{"parameter", "op", "value"}`; `op` = `=`, `!=`, `>`, `<`, `>=`, `<=`, `contains`, `starts`, `empty`, `not_empty`, `exists`), `bbox_min_mm` + `bbox_max_mm`, `sort_by` (`-` = descendente), `page`, `page_size` (100, máx 500), `fields[]`, `name_contains`, `ids_only` | `elements[]` (`id`, `categoria`, `tipo`, `familia`, `nivel`, `bbox_mm`, `fields`), `ids[]`, `count`, `total_matched`, `scanned`, `page`, `pages`, `truncated`, `native[]` (criterios evaluados en Revit), `python_filters[]`, `warnings[]`. Categoría, vista, subproyecto, caja envolvente y los `filters` con `=`, `>`, `<`, `>=`, `<=`, `contains` o `starts` sobre un `BuiltInParameter` o un parámetro compartido de ejemplar usan `ElementParameterFilter`; el resto (`!=`, `empty`, `exists`, parámetros de proyecto o de tipo, familia, tipo, fase) se evalúa en Python. Los textos no distinguen mayúsculas. Al menos un criterio |
+| POST | `/find_elements/` | como en 0.2.0 | Alias de `/query/`: conserva `elements`, `ids`, `count`, `total_matched`, `scanned`, `truncated` y `filters`. `max` se limita a 500 y un nivel inexistente responde `404` con `available_levels` |
+| GET | `/warnings/` | `max` (100), **nuevo** `group_by=description` | Con `group_by`: `groups[]` (`descripcion`, `failure_definition_guid`, `failure` (miembro de `BuiltInFailures`), `severidad`, `count`, `element_ids[]`, `elements_total`, `sugerencia`), `group_count`, `total`. El grupo y la sugerencia se eligen por el `FailureDefinitionId` (`GetFailureDefinitionId().Guid`), no por el texto. Sin `group_by`, la respuesta de 0.2.0 sin cambios |
+| POST | `/schedule/` | `name`* o `view_id`*, `start_row` (0), `max_rows` (500, máx 5000) | `schedule` (`id`, `name`, `title`), `headers[]`, `headers_from`, `rows[][]` (textos como los muestra Revit, `GetTableData().GetSectionData(SectionType.Body)` y `GetCellText`), `row_count`, `total_rows` (filas de datos, sin la fila de encabezados), `truncated`, `fields[]` (`name`, `heading`, `hidden`), `is_itemized`, `show_grand_total`. Va por POST y no por GET con el nombre en la ruta porque los nombres llevan espacios y tildes |
+| POST | `/snapshot/` (`name` es un nombre, no una ruta: siempre se guarda en `snapshots\` junto al `.rvt`) | `name`*, `categories[]`, `parameters[]`, `include_parameters` (true), `max_elements` (20000), `overwrite` | Escribe `<carpeta del rvt>\snapshots\<name>.json` (o `%LOCALAPPDATA%\RevitMcp\snapshots\` si el modelo no está guardado) con, por elemento, `id`, `unique_id`, `categoria`, `tipo`, `nivel`, `bbox_mm`, `hash` de parámetros y `params`. Por defecto entran los elementos de categoría de modelo no específicos de vista más niveles y rejillas. Responde `ruta`, `count`, `total_elements`, `truncated` (+ `warning`), `categories`, `ms`. Sin transacción; `409` si el archivo existe y no se pasa `overwrite` |
+| POST | `/diff_snapshots/` | `a`*, `b` (otra instantánea; vacío o `actual` = el modelo ahora), `max_items` (500) | Compara por `UniqueId`: `added[]`, `removed[]`, `modified[]` (`cambios[]` {`parametro`, `antes`, `despues`}, `bbox_movido`, `bbox_antes_mm`, `bbox_despues_mm`), `counts`, `truncated`, `a` y `b` (metadatos); `warning` si no cubren las mismas categorías |
+| POST | `/view_extents/` | `view_id`* (o `view_name`) | `view_type`, `is_template`, `scale`, `level`, `discipline`, `detail_level`, `view_template`, `crop` (`active`, `visible`, `box`: `min_mm`/`max_mm` en coordenadas de vista y `min_model_mm`/`max_model_mm`), `view_range` (`top`, `cut`, `bottom`, `view_depth`, `underlay_bottom`: `level`, `offset_mm`), `section_box` (vistas 3D), `sheet_number`, `phase` |
+
+### Macros de proyecto (0.3.0)
+
+Pasan por `escritura.ejecutar` como cualquier escritura: con `simular` validan
+todo y responden `haria` más `plan`; aplican `comprobar_alcance` (200 salvo
+`forzar`) al total de elementos que van a crear y reutilizan el código interno
+de `create_grid`, `create_level`, `create_sheet`, `create_toposolid` y
+`link_file`.
+
+| Método | Ruta | Parámetros | Respuesta |
+|--------|------|------------|-----------|
+| POST | `/grid_levels/` | `x_spacings_mm[]`, `y_spacings_mm[]`, `x_names`, `y_names` (lista completa o primer nombre desde el que continuar: `1`, `A`, `P1`), `levels[]` (`{name, elevation_mm}`), `origin_mm`, `extension_mm` (2000), `simular`, `forzar` | Rejilla completa con nombres correlativos (1, 2, 3 / A, B, C) y niveles en una sola transacción `IA: Rejilla y niveles`. `plan` (`grids_x[]`, `grids_y[]` con `x_mm`/`y_mm`, `start_mm`, `end_mm`; `levels[]`; `counts`), `creados[]` más `grids[]` y `levels[]` (`elevation_mm`). `400` si un nombre de rejilla o de nivel ya existe (`existing`, `repeated`) |
+| POST | `/sheet_set/` | `sheets[]` (`{number, name, title_block, views[] {view_name | view_id, position_mm {x, y}}}`), `simular`, `forzar` | Planos con vistas colocadas: `Viewport.CanAddViewToSheet` antes de `Viewport.Create` (tablas con `ScheduleSheetInstance.Create`; sin `position_mm`, el centro del cajetín). Una vista que ya está en otro plano se informa en `skipped` y no se coloca. `sheets[]` (`id`, `number`, `name`, `title_block`, `views_placed[]`, `skipped[]`), `creados[]`, `plan`. `404` con `missing_views` si una vista no existe; `400` si el número de plano ya existe |
+| POST | `/import_civil/` | `file_path`* (LandXML `.xml`/`.landxml`, CSV `P,N,E,Z` / `X,Y,Z`, o `.dwg`/`.dxf`/`.dgn`), `level`*, `use_shared_coordinates`, `origin_offset_mm`, `units` (CSV: `m` por defecto; LandXML lee `<Units>`), `type_name`, `placement` (`origin`, `center` (por defecto al adquirir coordenadas), `shared`), `simular`, `forzar` | LandXML (`Surface/Definition/Pnts` o `CgPoints`, puntos en orden norte-este-cota) o CSV → toposólido (`creados[]`, `toposolid_id`, `source` con `format`, `points`, `extent_mm`; `400` si Revit no tiene `Toposolid`). DWG → vínculo en la planta del nivel (o la vista activa) (`creados[]`, `link_id`) y, con `use_shared_coordinates`, `doc.AcquireCoordinates` con `coordinates.antes/despues`; `409` (`shared_coordinates_set`) si el proyecto ya tiene coordenadas compartidas, y `409` (`pinned`/`clipped`) si el punto base o el de replanteo están fijados o recortados, salvo `forzar=true`. `.dgn` se vincula con `DGNImportOptions` |
+
 ### Ejecución de código
 
 | Método | Ruta | Parámetros | Respuesta |
@@ -268,6 +304,17 @@ curl -X POST $R/purge_unused/ -H "Content-Type: application/json" -d '{"token":"
 curl -X POST $R/backup/ -H "Content-Type: application/json" -d '{"token":"TOKEN","suffix":"antes_de_purgar"}'
 # Código (description obligatoria)
 curl -X POST $R/execute_code/ -H "Content-Type: application/json" -d '{"token":"TOKEN","description":"Contar muros","code":"print(len(list(DB.FilteredElementCollector(doc).OfCategory(DB.BuiltInCategory.OST_Walls).WhereElementIsNotElementType())))"}'
+# 0.3.0: rejilla 3x2 (1, 2, 3 / A, B) y dos niveles en una transacción; primero con simular
+curl -X POST $R/grid_levels/ -H "Content-Type: application/json" -d '{"token":"TOKEN","x_spacings_mm":[6000,6000],"y_spacings_mm":[5000],"levels":[{"name":"Nivel 1","elevation_mm":0},{"name":"Nivel 2","elevation_mm":3500}],"origin_mm":{"x":0,"y":0,"z":0},"simular":true}'
+# 0.3.0: dos planos con vistas colocadas (posición en mm sobre el plano)
+curl -X POST $R/sheet_set/ -H "Content-Type: application/json" -d '{"token":"TOKEN","sheets":[{"number":"E-101","name":"Planta cimentación","title_block":"A1 métrico","views":[{"view_name":"Cimentación","position_mm":{"x":420,"y":297}}]},{"number":"E-102","name":"Tablas","views":["Tabla de pilares"]}]}'
+# 0.3.0: topografía desde LandXML o CSV, y DWG con coordenadas compartidas
+curl -X POST $R/import_civil/ -H "Content-Type: application/json" -d '{"token":"TOKEN","file_path":"C:\\Proyectos\\terreno.xml","level":"Terreno","simular":true}'
+curl -X POST $R/import_civil/ -H "Content-Type: application/json" -d '{"token":"TOKEN","file_path":"C:\\Proyectos\\topografia.dwg","level":"Terreno","use_shared_coordinates":true,"placement":"center"}'
+# 0.3.0: instantáneas (escriben snapshots\<name>.json, no tocan el modelo) y consulta con filtros
+curl -X POST $R/snapshot/ -H "Content-Type: application/json" -d '{"token":"TOKEN","name":"antes de estructura","overwrite":true}'
+curl -X POST $R/diff_snapshots/ -H "Content-Type: application/json" -d '{"token":"TOKEN","a":"antes de estructura"}'
+curl -X POST $R/query/ -H "Content-Type: application/json" -d '{"token":"TOKEN","category":"OST_Walls","filters":[{"parameter":"Mark","op":"contains","value":"M-"},{"parameter":"Length","op":">","value":4000}],"sort_by":"-Length","page_size":50,"fields":["Mark","Length"]}'
 ```
 
 ## Pruebas
@@ -302,10 +349,25 @@ El script ejecuta y muestra literalmente (nombre, código de estado y cuerpo):
 
 Termina con `Resultado: 9/9 pruebas correctas` y código de salida 0.
 
+Con `--fase 2a` (0.3.0) se añaden cuatro pruebas más, ninguna dependiente de
+nombres visibles en inglés (`Mark` se resuelve por `BuiltInParameter`):
+
+| Prueba | Petición | Esperado |
+|--------|----------|----------|
+| 2a.1 | `POST .../describe/` del primer muro con `depth: 1` | `200` con `parameters.instance` no vacío, `bbox_mm` y `hosted_elements` (lista) |
+| 2a.2 | Marcas temporales `MCP-2A-1` y `MCP-2A-2` en dos muros; `POST .../query/` con `filters: [{"parameter": "Mark", "op": "contains", "value": "MCP-2A"}]`, `page_size: 1` | Páginas disjuntas de un elemento, `pages` = `total_matched` ≥ 2; después se restauran las marcas |
+| 2a.3 | `POST .../snapshot/` (`prueba2a_antes`), `POST .../create_level/`, `POST .../snapshot/` (`prueba2a_despues`), `POST .../diff_snapshots/` | `added` contiene exactamente el nivel creado y `removed` está vacío; el nivel se borra y los dos `.json` se eliminan |
+| 2a.4 | `POST .../grid_levels/` con `simular: true` | `200` con `simulado: true`, `plan.counts.total: 6`, sin `copia`; el número de rejillas y niveles no cambia y la última entrada de `/grid_levels/` en el log es simulada |
+
+Termina con `Resultado: 13/13 pruebas correctas`.
+
 Sin Revit, en CPython: `uv run pytest` ejecuta las pruebas de
 `tests/` (formato JSON de `format_response`, gestor `transaccion` simulado,
-rotación del log, rutas de escritura contra un `pyrevit` simulado, lector CSV
-y guarda de compatibilidad IronPython 2.7).
+rotación del log, rutas de escritura contra un `pyrevit` simulado, lector CSV,
+guarda de compatibilidad IronPython 2.7 y, desde 0.3.0, una prueba de extremo
+a extremo por ruta de navegación, instantáneas y macros sobre el modelo
+simulado de `tests/fakes/modelo_falso.py`: `test_navegacion.py`,
+`test_instantaneas.py` y `test_macros.py`).
 
 ## Deshacer
 

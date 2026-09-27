@@ -37,6 +37,42 @@ def _punto_base(doc, de_proyecto):
     return None
 
 
+def puntos_base(doc):
+    """[(etiqueta, DB.BasePoint)] del punto base del proyecto y del punto de reconocimiento que existan."""
+    return [(etiqueta, punto) for etiqueta, punto in
+            (("project base point", _punto_base(doc, True)), ("survey point", _punto_base(doc, False)))
+            if punto is not None]
+
+
+def comprobar_puntos_base_libres(puntos):
+    """409 si alguno de los puntos base esta fijado (Pinned) o recortado (Clipped).
+
+    Moverlo falla en Revit o cambia el sistema de coordenadas compartidas de todo
+    el modelo. Lo usan set_project_location e import_from_civil (macros)."""
+    for etiqueta, punto in puntos:
+        if punto is None:
+            continue
+        fijado = recortado = False
+        try:
+            fijado = bool(punto.Pinned)
+        except Exception:
+            pass
+        try:
+            recortado = bool(punto.Clipped)
+        except Exception:
+            pass
+        if fijado or recortado:
+            raise EscrituraRechazada(
+                "The {} is {}: moving it {}. Unpin/unclip it in Revit first or pass forzar=true.".format(
+                    etiqueta,
+                    "pinned" if fijado and not recortado else "clipped" if recortado and not fijado else "pinned and clipped",
+                    "fails in Revit" if fijado and not recortado else "changes the shared coordinate system of the whole model",
+                ),
+                409,
+                {"pinned": fijado, "clipped": recortado},
+            )
+
+
 def _posicion_mm(punto, compartida=False):
     try:
         xyz = punto.SharedPosition if compartida else punto.Position
@@ -222,28 +258,7 @@ def register_coordenadas_routes(api):
                     "send it alone, without the other arguments", 400
                 )
             if not es_forzado(data):
-                for etiqueta, punto in (("project base point", punto_base), ("survey point", punto_rec)):
-                    if punto is None:
-                        continue
-                    fijado = recortado = False
-                    try:
-                        fijado = bool(punto.Pinned)
-                    except Exception:
-                        pass
-                    try:
-                        recortado = bool(punto.Clipped)
-                    except Exception:
-                        pass
-                    if fijado or recortado:
-                        raise EscrituraRechazada(
-                            "The {} is {}: moving it {}. Unpin/unclip it in Revit first or pass forzar=true.".format(
-                                etiqueta,
-                                "pinned" if fijado and not recortado else "clipped" if recortado and not fijado else "pinned and clipped",
-                                "fails in Revit" if fijado and not recortado else "changes the shared coordinate system of the whole model",
-                            ),
-                            409,
-                            {"pinned": fijado, "clipped": recortado},
-                        )
+                comprobar_puntos_base_libres((("project base point", punto_base), ("survey point", punto_rec)))
 
             antes = ubicacion_proyecto(doc)
             if ctx["simular"]:

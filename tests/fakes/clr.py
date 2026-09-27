@@ -7,7 +7,9 @@ def AddReference(nombre):
 
 
 class _Ref(object):
-    def __init__(self, tipo):
+    """clr.Reference[T]() : argumento de salida; el manejador lee .Value."""
+
+    def __init__(self, tipo=None):
         self.Value = None
 
 

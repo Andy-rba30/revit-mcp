@@ -108,6 +108,49 @@ def leer_csv_puntos(ruta, unidades="m"):
     return puntos, formato, avisos
 
 
+def comprobar_toposolido_disponible():
+    """400 si esta version de Revit no tiene DB.Toposolid (necesita 2024+)."""
+    if not hasattr(DB, "Toposolid"):
+        raise EscrituraRechazada(
+            "DB.Toposolid is not available in this Revit version (needs 2024+)", 400
+        )
+
+
+def tipo_toposolido(doc, type_name=None):
+    """ToposolidType por nombre (o el primero). Lanza EscrituraRechazada(404).
+
+    Lo reutiliza macros.import_from_civil."""
+    tipos = elementos_por_nombre(DB.FilteredElementCollector(doc).OfClass(DB.ToposolidType).ToElements())
+    if not tipos:
+        raise EscrituraRechazada("No toposolid types in the project", 404)
+    if type_name:
+        tipo = tipos.get(type_name)
+        if tipo is None:
+            raise EscrituraRechazada(
+                "Toposolid type '{}' not found".format(type_name), 404,
+                {"available_types": sorted(tipos.keys())},
+            )
+        return tipo
+    return list(tipos.values())[0]
+
+
+def crear_toposolido(doc, puntos, tipo, nivel, contorno=None):
+    """DB.Toposolid.Create con los XYZ (pies) y, si se da, el contorno cerrado (XYZ).
+
+    Debe llamarse dentro de una transaccion. Lo reutiliza macros.import_from_civil."""
+    lista = List[DB.XYZ]()
+    for p in puntos:
+        lista.Add(p)
+    if contorno:
+        loop = DB.CurveLoop()
+        for i in range(len(contorno)):
+            loop.Append(DB.Line.CreateBound(contorno[i], contorno[(i + 1) % len(contorno)]))
+        loops = List[DB.CurveLoop]()
+        loops.Add(loop)
+        return DB.Toposolid.Create(doc, loops, lista, tipo.Id, nivel.Id)
+    return DB.Toposolid.Create(doc, lista, tipo.Id, nivel.Id)
+
+
 def register_topografia_routes(api):
     """Register toposolid routes with the API."""
 
@@ -118,10 +161,7 @@ def register_topografia_routes(api):
 
         def cuerpo(ctx):
             data = ctx["data"]
-            if not hasattr(DB, "Toposolid"):
-                raise EscrituraRechazada(
-                    "DB.Toposolid is not available in this Revit version (needs 2024+)", 400
-                )
+            comprobar_toposolido_disponible()
             level_name = data.get("level_name")
             if not level_name:
                 raise EscrituraRechazada("level_name is required", 400)
@@ -155,19 +195,7 @@ def register_topografia_routes(api):
             except ValueError as error:
                 raise EscrituraRechazada(str(error), 400)
 
-            tipos = elementos_por_nombre(DB.FilteredElementCollector(doc).OfClass(DB.ToposolidType).ToElements())
-            if not tipos:
-                raise EscrituraRechazada("No toposolid types in the project", 404)
-            type_name = data.get("type_name")
-            if type_name:
-                tipo = tipos.get(type_name)
-                if tipo is None:
-                    raise EscrituraRechazada(
-                        "Toposolid type '{}' not found".format(type_name), 404,
-                        {"available_types": sorted(tipos.keys())},
-                    )
-            else:
-                tipo = list(tipos.values())[0]
+            tipo = tipo_toposolido(doc, data.get("type_name"))
 
             boundary = data.get("boundary") or []
             contorno = None
@@ -196,18 +224,7 @@ def register_topografia_routes(api):
                 return simulacion([resumen], warnings=avisos)
 
             with transaccion(doc, "Crear toposolido {}".format(get_element_name(tipo))):
-                lista = List[DB.XYZ]()
-                for p in puntos:
-                    lista.Add(p)
-                if contorno:
-                    loop = DB.CurveLoop()
-                    for i in range(len(contorno)):
-                        loop.Append(DB.Line.CreateBound(contorno[i], contorno[(i + 1) % len(contorno)]))
-                    loops = List[DB.CurveLoop]()
-                    loops.Add(loop)
-                    topo = DB.Toposolid.Create(doc, loops, lista, tipo.Id, nivel.Id)
-                else:
-                    topo = DB.Toposolid.Create(doc, lista, tipo.Id, nivel.Id)
+                topo = crear_toposolido(doc, puntos, tipo, nivel, contorno)
                 topo_id = get_element_id_value(topo)
 
             resultado = resultado_creacion(doc, [topo_id])
