@@ -7,9 +7,28 @@ from mcp.server.mcpserver import MCPServer, Image, Context
 import base64
 from typing import Optional, Dict, Any, Union
 
+# Instrucciones para el agente (precedencia, flujo obligatorio, reglas de
+# dominio, glosario y errores típicos). Viven en INSTRUCCIONES_AGENTE.md, junto
+# a este archivo, y se envían al cliente como `instructions` del servidor.
+RUTA_INSTRUCCIONES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "INSTRUCCIONES_AGENTE.md")
+
+
+def leer_instrucciones() -> str:
+    try:
+        with open(RUTA_INSTRUCCIONES, "r", encoding="utf-8") as archivo:
+            return archivo.read()
+    except OSError as error:
+        logging.getLogger(__name__).warning("No se pudo leer %s: %s", RUTA_INSTRUCCIONES, error)
+        return (
+            "Usa las herramientas específicas antes que execute_revit_code; ejecuta "
+            "los cambios con simular=true, confirma con el usuario y comprueba "
+            "antes/despues. Todas las unidades en milímetros."
+        )
+
+
 # Create a generic MCP server for interacting with Revit
 # Use stateless_http=True and json_response=True for better compatibility
-mcp = MCPServer("Revit MCP Server")
+mcp = MCPServer("Revit MCP Server", instructions=leer_instrucciones())
 
 # Configuration
 REVIT_HOST = os.environ.get("REVIT_HOST", "localhost")
@@ -24,6 +43,18 @@ MENSAJE_SIN_TOKEN = "Revit no está abierto o el conector no ha iniciado"
 MENSAJE_TOKEN_CAMBIO = "el token cambió: Revit se reinició, reintenta en unos segundos"
 
 _token_cache: Optional[str] = None
+
+# Tiempos de espera por herramienta (segundos). Cada tools/*_tools.py pasa el
+# suyo en revit_get/revit_post(timeout=...); los valores viven en tools/utils.py
+# para evitar la importación circular main -> tools -> main.
+#
+#   TIMEOUT_LECTURA   30 s  consultas (status, listados, propiedades, vistas...)
+#   TIMEOUT_ESCRITURA 120 s create_*, transform_elements, color_splash y demás
+#                           cambios en el modelo
+#   TIMEOUT_LARGO     600 s export_ifc, export_document, check_clashes,
+#                           get_material_quantities, link_file, load_family,
+#                           save_document, execute_revit_code
+from tools.utils import TIMEOUT_LECTURA, TIMEOUT_ESCRITURA, TIMEOUT_LARGO  # noqa: E402,F401
 
 # httpx registra cada URL a nivel INFO y en GET la URL lleva ?token=...;
 # se sube el umbral para que el token no acabe en el log del puente.
@@ -98,7 +129,7 @@ async def revit_image(endpoint: str, ctx: Context = None) -> Union[Image, str]:
 
 
 async def _enviar(method: str, endpoint: str, token: str, data: Dict = None,
-                  params: Dict = None, timeout: float = 30.0) -> httpx.Response:
+                  params: Dict = None, timeout: float = TIMEOUT_LECTURA) -> httpx.Response:
     """Una petición HTTP a Revit con el token incluido (POST: cuerpo; GET: query)."""
     client = _get_client()
     if method == "GET":
@@ -116,7 +147,7 @@ async def _enviar(method: str, endpoint: str, token: str, data: Dict = None,
 
 
 async def _enviar_con_token(method: str, endpoint: str, data: Dict = None,
-                            params: Dict = None, timeout: float = 30.0
+                            params: Dict = None, timeout: float = TIMEOUT_LECTURA
                             ) -> Union[httpx.Response, str]:
     """Envía la petición con el token; ante 401 relee el archivo y reintenta una vez.
 
@@ -144,13 +175,38 @@ async def _enviar_con_token(method: str, endpoint: str, data: Dict = None,
 
 
 async def _revit_call(method: str, endpoint: str, data: Dict = None, ctx: Context = None,
-                     timeout: float = 30.0, params: Dict = None) -> Union[Dict, str]:
-    """Internal function handling all HTTP calls"""
-    response = await _enviar_con_token(method, endpoint, data=data, params=params, timeout=timeout)
+                     timeout: float = TIMEOUT_LECTURA, params: Dict = None) -> Union[Dict, str]:
+    """Internal function handling all HTTP calls.
+
+    `timeout` lo fija cada herramienta (tools/*_tools.py) según la tabla de
+    tiempos de espera de arriba. Las respuestas de error (400/404/409/500) se
+    devuelven como dict con `error` y `http_status` para que el agente reciba
+    los detalles (parámetros disponibles, límite, transacción abierta...) en
+    lugar de un texto plano.
+    """
+    try:
+        response = await _enviar_con_token(method, endpoint, data=data, params=params, timeout=timeout)
+    except httpx.TimeoutException:
+        return {
+            "error": f"Revit no respondió en {timeout:.0f} s a {endpoint}",
+            "status": "error",
+            "endpoint": endpoint,
+            "details": "La operación puede seguir en curso en Revit; comprueba antes de repetirla.",
+        }
     if isinstance(response, str):
         return response
     try:
-        return response.json() if response.status_code == 200 else f"Error: {response.status_code} - {response.text}"
+        if response.status_code == 200:
+            return response.json()
+        try:
+            cuerpo = response.json()
+        except Exception:
+            cuerpo = None
+        if isinstance(cuerpo, dict):
+            cuerpo.setdefault("error", f"HTTP {response.status_code}")
+            cuerpo["http_status"] = response.status_code
+            return cuerpo
+        return f"Error: {response.status_code} - {response.text}"
     except Exception as e:
         return f"Error: {e}"
 

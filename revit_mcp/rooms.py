@@ -1,20 +1,28 @@
 # -*- coding: UTF-8 -*-
 """
 Rooms Module for Revit MCP
-Handles room creation and room separation lines
+Handles room creation and room separation lines.
+
+Ambas rutas pasan por escritura.ejecutar (copia, log, simular, IA:).
 """
 
-from utils import get_element_name, get_element_id_value, make_element_id, suppress_warnings
+from utils import get_element_name, get_element_id_value, xyz_desde_mm, punto_a_mm, mapa_niveles, buscar_vista, MM_TO_FEET, buscar_por_nombre
 from seguridad import requiere_token
+from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, resultado_creacion
 from pyrevit import routes, revit, DB
-from System.Collections.Generic import List
-import json
-import traceback
 import logging
 
 logger = logging.getLogger(__name__)
 
-MM_TO_FEET = 1.0 / 304.8
+
+def _texto_parametro(elem, nombre):
+    try:
+        p = buscar_por_nombre(elem, nombre)
+        if p:
+            return p.AsString() or ""
+    except Exception:
+        pass
+    return ""
 
 
 def register_room_routes(api):
@@ -23,274 +31,167 @@ def register_room_routes(api):
     @api.route("/create_room/", methods=["POST"])
     @requiere_token
     def create_room_handler(doc, request):
-        """Create a room at a specified level."""
-        try:
-            if not doc:
-                return routes.make_response(
-                    data={"error": "No active Revit document"}, status=503
-                )
+        """Create a room at a specified level. Accepts `simular`."""
 
-            data = json.loads(request.data) if isinstance(request.data, str) else request.data
-
+        def cuerpo(ctx):
+            data = ctx["data"]
             level_name = data.get("level_name")
             if not level_name:
-                return routes.make_response(
-                    data={"error": "level_name is required"}, status=400
-                )
+                raise EscrituraRechazada("level_name is required", 400)
 
-            # Find the level
-            levels = (
-                DB.FilteredElementCollector(doc)
-                .OfCategory(DB.BuiltInCategory.OST_Levels)
-                .WhereElementIsNotElementType()
-                .ToElements()
-            )
-            target_level = None
-            for lv in levels:
-                if get_element_name(lv) == level_name:
-                    target_level = lv
-                    break
-
+            level_map = mapa_niveles(doc)
+            target_level = level_map.get(level_name)
             if not target_level:
-                available = [get_element_name(lv) for lv in levels]
-                return routes.make_response(
-                    data={
-                        "error": "Level '{}' not found".format(level_name),
-                        "available_levels": available,
-                    },
-                    status=404,
+                raise EscrituraRechazada(
+                    "Level '{}' not found".format(level_name), 404,
+                    {"available_levels": sorted(level_map.keys())},
                 )
 
-            # Get the phase — rooms require a phase
+            # Rooms require a phase
             phases = doc.Phases
             if not phases or phases.Size == 0:
-                return routes.make_response(
-                    data={"error": "No phases found in the project"},
-                    status=500,
-                )
+                raise EscrituraRechazada("No phases found in the project", 400)
             phase = phases.get_Item(phases.Size - 1)
 
-            t = DB.Transaction(doc, "Create Room via MCP")
-            t.Start()
-            suppress_warnings(t)
+            location = data.get("location")
+            point = None
+            if location:
+                xyz = xyz_desde_mm(location)
+                point = DB.UV(xyz.X, xyz.Y)
+            room_name = data.get("name")
+            room_number = data.get("number")
 
-            try:
-                location = data.get("location")
-                if location:
-                    x = float(location.get("x", 0)) * MM_TO_FEET
-                    y = float(location.get("y", 0)) * MM_TO_FEET
-                    point = DB.UV(x, y)
+            if ctx["simular"]:
+                return simulacion([{
+                    "accion": "crear", "element_type": "room", "level": level_name,
+                    "location_mm": punto_a_mm(xyz) if location else None,
+                    "name": room_name, "number": room_number,
+                    "phase": get_element_name(phase),
+                }])
+
+            with transaccion(doc, "Crear habitacion"):
+                if point is not None:
                     room = doc.Create.NewRoom(target_level, point)
                 else:
-                    # Create unplaced room first, then Revit associates it
                     room = doc.Create.NewRoom(phase)
-
                 if not room:
-                    t.RollBack()
-                    return routes.make_response(
-                        data={"error": "Failed to create room — no enclosed area found at the specified location. Add walls or room separation lines first."},
-                        status=500,
+                    raise EscrituraRechazada(
+                        "Failed to create room — no enclosed area found at the specified location. "
+                        "Add walls or room separation lines first.",
+                        400,
                     )
-
-                # Set name and number if provided
-                room_name = data.get("name")
                 if room_name:
-                    name_param = room.LookupParameter("Name")
+                    name_param = buscar_por_nombre(room, "Name")
                     if name_param and not name_param.IsReadOnly:
                         name_param.Set(room_name)
-
-                room_number = data.get("number")
                 if room_number:
-                    number_param = room.LookupParameter("Number")
+                    number_param = buscar_por_nombre(room, "Number")
                     if number_param and not number_param.IsReadOnly:
                         number_param.Set(room_number)
+                room_id = get_element_id_value(room)
 
-                t.Commit()
+            resultado = resultado_creacion(doc, [room_id])
+            area = 0.0
+            try:
+                area_param = buscar_por_nombre(room, "Area")
+                if area_param and area_param.HasValue:
+                    area = round(area_param.AsDouble() * 0.092903, 2)  # sq ft to sq m
+            except Exception:
+                pass
+            actual_name = _texto_parametro(room, "Name")
+            actual_number = _texto_parametro(room, "Number")
+            resultado.update({
+                "room_id": room_id,
+                "name": actual_name,
+                "number": actual_number,
+                "level": level_name,
+                "area": area,
+                "message": "Room '{}' created on level '{}'".format(
+                    actual_name or actual_number or "Unnamed", level_name
+                ),
+            })
+            if area <= 0:
+                resultado["warning"] = "Room is unplaced or has no enclosed area (area 0)"
+            return resultado
 
-                # Get area after commit
-                area = 0.0
-                try:
-                    area_param = room.LookupParameter("Area")
-                    if area_param and area_param.HasValue:
-                        area = round(area_param.AsDouble() * 0.092903, 2)  # sq ft to sq m
-                except Exception:
-                    pass
-
-                actual_name = ""
-                try:
-                    name_p = room.LookupParameter("Name")
-                    if name_p:
-                        actual_name = name_p.AsString() or ""
-                except Exception:
-                    pass
-
-                actual_number = ""
-                try:
-                    number_p = room.LookupParameter("Number")
-                    if number_p:
-                        actual_number = number_p.AsString() or ""
-                except Exception:
-                    pass
-
-                return routes.make_response(
-                    data={
-                        "status": "success",
-                        "room_id": get_element_id_value(room),
-                        "name": actual_name,
-                        "number": actual_number,
-                        "level": level_name,
-                        "area": area,
-                        "message": "Room '{}' created on level '{}'".format(
-                            actual_name or actual_number or "Unnamed", level_name
-                        ),
-                    }
-                )
-
-            except Exception as tx_error:
-                if t.HasStarted() and not t.HasEnded():
-                    t.RollBack()
-                raise tx_error
-
-        except Exception as e:
-            logger.error("Failed to create room: {}".format(str(e)))
-            error_trace = traceback.format_exc()
-            return routes.make_response(
-                data={"error": str(e), "traceback": error_trace}, status=500
-            )
+        return ejecutar(doc, "/create_room/", request, cuerpo)
 
     @api.route("/create_room_separation/", methods=["POST"])
     @requiere_token
     def create_room_separation_handler(doc, request):
-        """Create room separation lines."""
-        try:
-            if not doc:
-                return routes.make_response(
-                    data={"error": "No active Revit document"}, status=503
-                )
+        """Create room separation lines. Accepts `simular`."""
 
-            data = json.loads(request.data) if isinstance(request.data, str) else request.data
-
+        def cuerpo(ctx):
+            data = ctx["data"]
             lines = data.get("lines", [])
             if not lines:
-                return routes.make_response(
-                    data={"error": "No lines provided"}, status=400
-                )
+                raise EscrituraRechazada("No lines provided", 400)
 
-            # Find the view to create lines in
             view_name = data.get("view_name")
-            level_name = data.get("level_name")
-
-            target_view = None
             if view_name:
-                views = (
-                    DB.FilteredElementCollector(doc)
-                    .OfClass(DB.ViewPlan)
-                    .WhereElementIsNotElementType()
-                    .ToElements()
-                )
-                for v in views:
-                    if get_element_name(v) == view_name:
-                        target_view = v
-                        break
+                target_view = buscar_vista(doc, view_name, solo_planta=True)
                 if not target_view:
-                    return routes.make_response(
-                        data={"error": "View '{}' not found".format(view_name)},
-                        status=404,
-                    )
+                    raise EscrituraRechazada("View '{}' not found".format(view_name), 404)
             else:
-                # Use active view if it's a plan view
                 active_view = doc.ActiveView
                 if hasattr(active_view, "ViewType") and active_view.ViewType in [
                     DB.ViewType.FloorPlan, DB.ViewType.CeilingPlan, DB.ViewType.AreaPlan
                 ]:
                     target_view = active_view
                 else:
-                    return routes.make_response(
-                        data={"error": "Active view is not a plan view — specify a view_name or switch to a plan view"},
-                        status=400,
+                    raise EscrituraRechazada(
+                        "Active view is not a plan view — specify a view_name or switch to a plan view", 400
                     )
 
-            # Find sketch plane from level
-            sketch_plane = None
-            if level_name:
-                levels = (
-                    DB.FilteredElementCollector(doc)
-                    .OfCategory(DB.BuiltInCategory.OST_Levels)
-                    .WhereElementIsNotElementType()
-                    .ToElements()
-                )
-                for lv in levels:
-                    if get_element_name(lv) == level_name:
-                        sketch_plane = lv
-                        break
+            curvas = []
+            haria = []
+            for idx, line_def in enumerate(lines):
+                try:
+                    start = xyz_desde_mm(line_def.get("start_point", {}))
+                    end = xyz_desde_mm(line_def.get("end_point", {}))
+                except ValueError as error:
+                    raise EscrituraRechazada("Line {}: {}".format(idx, error), 400)
+                if start.DistanceTo(end) < 0.001:
+                    raise EscrituraRechazada("Line {}: zero length".format(idx), 400)
+                curvas.append((start, end))
+                haria.append({
+                    "accion": "crear", "element_type": "room_separation",
+                    "view": get_element_name(target_view),
+                    "start_mm": punto_a_mm(start), "end_mm": punto_a_mm(end),
+                })
 
-            t = DB.Transaction(doc, "Create Room Separation Lines via MCP")
-            t.Start()
-            suppress_warnings(t)
+            if ctx["simular"]:
+                return simulacion(haria, count=len(haria))
 
-            try:
-                created_ids = []
+            ids = []
+            with transaccion(doc, "Crear separaciones de habitacion"):
                 curve_array = DB.CurveArray()
-
-                for line_def in lines:
-                    sp = line_def.get("start_point", {})
-                    ep = line_def.get("end_point", {})
-
-                    start = DB.XYZ(
-                        float(sp.get("x", 0)) * MM_TO_FEET,
-                        float(sp.get("y", 0)) * MM_TO_FEET,
-                        float(sp.get("z", 0)) * MM_TO_FEET,
-                    )
-                    end = DB.XYZ(
-                        float(ep.get("x", 0)) * MM_TO_FEET,
-                        float(ep.get("y", 0)) * MM_TO_FEET,
-                        float(ep.get("z", 0)) * MM_TO_FEET,
-                    )
-
-                    line = DB.Line.CreateBound(start, end)
-                    curve_array.Append(line)
-
-                # Create room separation lines
+                for start, end in curvas:
+                    curve_array.Append(DB.Line.CreateBound(start, end))
                 sp_plane = target_view.SketchPlane
                 if not sp_plane:
-                    # Create a sketch plane from the view's level
                     level_id = target_view.GenLevel.Id if target_view.GenLevel else None
                     if level_id:
-                        level_elem = doc.GetElement(level_id)
                         sp_plane = DB.SketchPlane.Create(doc, level_id)
-
-                separator = doc.Create.NewRoomBoundaryLines(
-                    sp_plane, curve_array, target_view
-                )
-
+                separator = doc.Create.NewRoomBoundaryLines(sp_plane, curve_array, target_view)
                 if separator:
                     for elem in separator:
-                        created_ids.append(get_element_id_value(elem))
+                        ids.append(get_element_id_value(elem))
 
-                t.Commit()
-
-                return routes.make_response(
-                    data={
-                        "status": "success",
-                        "line_count": len(created_ids),
-                        "line_ids": created_ids,
-                        "message": "Created {} room separation line{}".format(
-                            len(created_ids),
-                            "s" if len(created_ids) != 1 else ""
-                        ),
-                    }
-                )
-
-            except Exception as tx_error:
-                if t.HasStarted() and not t.HasEnded():
-                    t.RollBack()
-                raise tx_error
-
-        except Exception as e:
-            logger.error("Failed to create room separation: {}".format(str(e)))
-            error_trace = traceback.format_exc()
-            return routes.make_response(
-                data={"error": str(e), "traceback": error_trace}, status=500
+            resultado = resultado_creacion(doc, ids)
+            resultado["line_count"] = len(ids)
+            resultado["line_ids"] = ids
+            resultado["message"] = "Created {} room separation line{}".format(
+                len(ids), "s" if len(ids) != 1 else ""
             )
+            if len(ids) != len(curvas):
+                resultado["ok"] = False
+                resultado["verificacion"] = {
+                    "coincide": False,
+                    "detalle": "Requested {} lines, Revit created {}".format(len(curvas), len(ids)),
+                }
+            return resultado
+
+        return ejecutar(doc, "/create_room_separation/", request, cuerpo)
 
     logger.info("Room routes registered successfully")

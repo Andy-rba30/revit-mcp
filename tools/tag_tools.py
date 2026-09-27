@@ -2,7 +2,7 @@
 """Tagging tools — tag elements with annotation symbols"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_ESCRITURA
 
 
 def register_tag_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -17,6 +17,7 @@ def register_tag_tools(mcp, revit_get, revit_post, revit_image=None):
         add_leader: bool = False,
         orientation: str = "horizontal",
         offset: dict = None,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Tag elements with annotation symbols in a view.
@@ -32,6 +33,7 @@ def register_tag_tools(mcp, revit_get, revit_post, revit_image=None):
             add_leader: Show leader line from tag to element (default: false)
             orientation: Tag orientation — "horizontal" or "vertical" (default: "horizontal")
             offset: Tag offset from element center {"x": float, "y": float} in mm
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {
@@ -45,5 +47,6 @@ def register_tag_tools(mcp, revit_get, revit_post, revit_image=None):
             data["tag_type_name"] = tag_type_name
         if offset is not None:
             data["offset"] = offset
-        response = await revit_post("/tag_elements/", data, ctx)
+        data["simular"] = simular
+        response = await revit_post("/tag_elements/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)

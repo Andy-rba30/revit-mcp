@@ -2,7 +2,7 @@
 """Building creation tools — walls, floors, roofs, ceilings, and levels"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_ESCRITURA
 
 
 def register_building_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -12,6 +12,7 @@ def register_building_tools(mcp, revit_get, revit_post, revit_image=None):
     @mcp.tool()
     async def create_line_based_element(
         elements: list[dict],
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Create walls, beams, and other line-based building elements in Revit.
@@ -31,15 +32,18 @@ def register_building_tools(mcp, revit_get, revit_post, revit_image=None):
                 - offset (float): Offset from base level in mm (optional, defaults to 0)
                 - structural (bool): Mark as structural (optional, defaults to false)
                 - name (str): Description for reference (optional)
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"elements": elements}
-        response = await revit_post("/create_line/", data, ctx)
+        data["simular"] = simular
+        response = await revit_post("/create_line/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
     async def create_surface_based_element(
         elements: list[dict],
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Create floors, roofs, ceilings, and other surface-based building elements.
@@ -57,15 +61,18 @@ def register_building_tools(mcp, revit_get, revit_post, revit_image=None):
                 - level_name (str): Target level name (optional)
                 - offset (float): Offset from level in mm (optional, defaults to 0)
                 - name (str): Description for reference (optional)
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"elements": elements}
-        response = await revit_post("/create_surface/", data, ctx)
+        data["simular"] = simular
+        response = await revit_post("/create_surface/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
     async def create_level(
         levels: list[dict],
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Create building levels (floor elevations) in Revit.
@@ -77,8 +84,10 @@ def register_building_tools(mcp, revit_get, revit_post, revit_image=None):
             levels: List of level definitions, each with:
                 - elevation (float): Elevation in mm from project origin (required)
                 - name (str): Level name, e.g. "Ground Floor" (optional, auto-assigned)
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"levels": levels}
-        response = await revit_post("/create_level/", data, ctx)
+        data["simular"] = simular
+        response = await revit_post("/create_level/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)

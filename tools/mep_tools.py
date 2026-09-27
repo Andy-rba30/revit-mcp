@@ -2,7 +2,7 @@
 """MEP tools — ducts, pipes, and mechanical/plumbing systems"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_ESCRITURA
 
 
 def register_mep_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -19,6 +19,7 @@ def register_mep_tools(mcp, revit_get, revit_post, revit_image=None):
         diameter: float = None,
         width: float = None,
         height: float = None,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Create a duct in the Revit model between two points.
@@ -36,6 +37,7 @@ def register_mep_tools(mcp, revit_get, revit_post, revit_image=None):
             diameter: Round duct diameter in mm
             width: Rectangular duct width in mm
             height: Rectangular duct height in mm
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"start_point": start_point, "end_point": end_point}
@@ -51,7 +53,8 @@ def register_mep_tools(mcp, revit_get, revit_post, revit_image=None):
             data["width"] = width
         if height is not None:
             data["height"] = height
-        response = await revit_post("/create_duct/", data, ctx)
+        data["simular"] = simular
+        response = await revit_post("/create_duct/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
@@ -62,6 +65,7 @@ def register_mep_tools(mcp, revit_get, revit_post, revit_image=None):
         pipe_type: str = None,
         level_name: str = None,
         diameter: float = None,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Create a pipe in the Revit model between two points.
@@ -76,6 +80,7 @@ def register_mep_tools(mcp, revit_get, revit_post, revit_image=None):
             pipe_type: Pipe type name (e.g., "Copper"). Auto-detects if omitted
             level_name: Level name. Defaults to nearest level
             diameter: Pipe diameter in mm
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"start_point": start_point, "end_point": end_point}
@@ -87,7 +92,8 @@ def register_mep_tools(mcp, revit_get, revit_post, revit_image=None):
             data["level_name"] = level_name
         if diameter is not None:
             data["diameter"] = diameter
-        response = await revit_post("/create_pipe/", data, ctx)
+        data["simular"] = simular
+        response = await revit_post("/create_pipe/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
@@ -95,6 +101,7 @@ def register_mep_tools(mcp, revit_get, revit_post, revit_image=None):
         system_type: str,
         system_name: str,
         element_ids: list[int] = None,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Create a mechanical or piping system and optionally add elements to it.
@@ -105,10 +112,12 @@ def register_mep_tools(mcp, revit_get, revit_post, revit_image=None):
             system_type: "mechanical" or "piping"
             system_name: Display name for the system (e.g., "Level 1 Supply Air")
             element_ids: Optional list of duct/pipe element IDs to add to the system
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"system_type": system_type, "system_name": system_name}
         if element_ids is not None:
             data["element_ids"] = element_ids
-        response = await revit_post("/create_mep_system/", data, ctx)
+        data["simular"] = simular
+        response = await revit_post("/create_mep_system/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)

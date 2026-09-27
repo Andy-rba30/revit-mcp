@@ -218,6 +218,34 @@ def register_routes():
 
         register_document_routes(api)
 
+        from revit_mcp.consulta import register_consulta_routes
+
+        register_consulta_routes(api)
+
+        from revit_mcp.coordenadas import register_coordenadas_routes
+
+        register_coordenadas_routes(api)
+
+        from revit_mcp.tipos import register_tipos_routes
+
+        register_tipos_routes(api)
+
+        from revit_mcp.estructural import register_estructural_routes
+
+        register_estructural_routes(api)
+
+        from revit_mcp.topografia import register_topografia_routes
+
+        register_topografia_routes(api)
+
+        from revit_mcp.subproyectos import register_subproyectos_routes
+
+        register_subproyectos_routes(api)
+
+        from revit_mcp.mantenimiento import register_mantenimiento_routes
+
+        register_mantenimiento_routes(api)
+
         logger.info("All MCP routes registered successfully")
 
     except Exception as e:

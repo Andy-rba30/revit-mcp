@@ -2,7 +2,7 @@
 """Annotation tools — dimensions and wall tags"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_ESCRITURA
 
 
 def register_annotation_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -13,6 +13,7 @@ def register_annotation_tools(mcp, revit_get, revit_post, revit_image=None):
     async def create_dimensions(
         element_ids: list[int],
         dimension_type: str = "linear",
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Create dimension annotations for elements in the current view.
@@ -25,16 +26,19 @@ def register_annotation_tools(mcp, revit_get, revit_post, revit_image=None):
             element_ids: List of element IDs to dimension
             dimension_type: Type of dimension — "linear", "aligned", or "angular"
                 (defaults to "linear")
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"element_ids": element_ids, "dimension_type": dimension_type}
-        response = await revit_post("/create_dimensions/", data, ctx)
+        data["simular"] = simular
+        response = await revit_post("/create_dimensions/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
     async def tag_walls(
         use_leader: bool = False,
         tag_type_name: str = None,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Tag all untagged walls in the current Revit view.
@@ -45,8 +49,10 @@ def register_annotation_tools(mcp, revit_get, revit_post, revit_image=None):
         Args:
             use_leader: Whether to show leader lines (defaults to False)
             tag_type_name: Specific wall tag family type name (optional, uses first available)
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"use_leader": use_leader, "tag_type_name": tag_type_name}
-        response = await revit_post("/tag_walls/", data, ctx)
+        data["simular"] = simular
+        response = await revit_post("/tag_walls/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)

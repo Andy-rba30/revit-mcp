@@ -2,7 +2,7 @@
 """Documentation tools — sheets, schedules, and document export"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_LARGO, TIMEOUT_ESCRITURA
 
 
 def register_documentation_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -14,6 +14,7 @@ def register_documentation_tools(mcp, revit_get, revit_post, revit_image=None):
         sheet_number: str = None,
         sheet_name: str = "Unnamed Sheet",
         title_block_name: str = None,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Create a drawing sheet in Revit for construction documentation.
@@ -26,6 +27,7 @@ def register_documentation_tools(mcp, revit_get, revit_post, revit_image=None):
             sheet_number: Sheet number, e.g. "A101" (optional, auto-assigned)
             sheet_name: Sheet title, e.g. "Ground Floor Plan" (defaults to "Unnamed Sheet")
             title_block_name: Title block family name (optional, uses first available)
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {
@@ -33,7 +35,8 @@ def register_documentation_tools(mcp, revit_get, revit_post, revit_image=None):
             "sheet_name": sheet_name,
             "title_block_name": title_block_name,
         }
-        response = await revit_post("/create_sheet/", data, ctx)
+        data["simular"] = simular
+        response = await revit_post("/create_sheet/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
@@ -41,6 +44,7 @@ def register_documentation_tools(mcp, revit_get, revit_post, revit_image=None):
         category: str,
         fields: list[str] = None,
         schedule_name: str = None,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Create a schedule (quantity takeoff view) for a specific element category.
@@ -54,6 +58,7 @@ def register_documentation_tools(mcp, revit_get, revit_post, revit_image=None):
             fields: Parameter names to include as columns (optional, uses default set)
                 e.g., ["Family and Type", "Length", "Area", "Mark"]
             schedule_name: Name for the schedule view (optional, auto-generated)
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {
@@ -61,7 +66,8 @@ def register_documentation_tools(mcp, revit_get, revit_post, revit_image=None):
             "fields": fields,
             "schedule_name": schedule_name,
         }
-        response = await revit_post("/create_schedule/", data, ctx)
+        data["simular"] = simular
+        response = await revit_post("/create_schedule/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
@@ -87,5 +93,5 @@ def register_documentation_tools(mcp, revit_get, revit_post, revit_image=None):
             "format": format,
             "resolution": resolution,
         }
-        response = await revit_post("/export_document/", data, ctx)
+        response = await revit_post("/export_document/", data, ctx, timeout=TIMEOUT_LARGO)
         return format_response(response)

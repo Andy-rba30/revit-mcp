@@ -4,7 +4,7 @@ Analysis Module for Revit MCP
 Handles element filtering, room data, material quantities, and model statistics
 """
 
-from utils import get_element_name, normalize_string, get_element_id_value
+from utils import get_element_name, normalize_string, get_element_id_value, buscar_por_nombre
 from seguridad import requiere_token
 from pyrevit import routes, revit, DB
 import json
@@ -138,16 +138,16 @@ def register_analysis_routes(api):
 
                 # Get dimensions if available
                 try:
-                    length_param = elem.LookupParameter("Length")
+                    length_param = buscar_por_nombre(elem, "Length")
                     if length_param and length_param.HasValue:
                         elem_info["length_mm"] = round(length_param.AsDouble() / MM_TO_FEET, 0)
                 except Exception:
                     pass
 
                 try:
-                    height_param = elem.LookupParameter("Height")
+                    height_param = buscar_por_nombre(elem, "Height")
                     if not height_param:
-                        height_param = elem.LookupParameter("Unconnected Height")
+                        height_param = buscar_por_nombre(elem, "Unconnected Height")
                     if height_param and height_param.HasValue:
                         elem_info["height_mm"] = round(height_param.AsDouble() / MM_TO_FEET, 0)
                 except Exception:

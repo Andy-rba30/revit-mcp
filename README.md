@@ -1,6 +1,6 @@
 # Revit MCP Server
 
-MCP server for Autodesk Revit 2024/2025/2026/2027 via pyRevit — 48 tools for building design, editing, analysis, clash detection, MEP, interop, documentation, and model persistence.
+MCP server for Autodesk Revit 2024/2025/2026/2027 via pyRevit — **68 tools** for building design, structure, coordinates, editing, analysis, clash detection, MEP, interop, documentation and model persistence, with a safe-write layer (backups, action log, dry-run `simular`, verification and `IA:` undo entries). Version **0.2.2**.
 
 Works with any MCP client: Claude Desktop, Claude Code, Cursor, Windsurf, Copilot, or any other MCP-compatible application.
 
@@ -114,9 +114,16 @@ To run the smoke tests (Revit open, bridge started with `--combined` or
 python pruebas\probar_revit.py
 ```
 
-Expected: `401` without token, `200` with token, `200` for `execute_code`, and
-`421` from the bridge when the `Host` header is forged. Details in
-[CONTRATO.md](CONTRATO.md).
+Expected: `401` without token, `200` with token, `200` for `execute_code`,
+`421` from the bridge when the `Host` header is forged, every read route in
+under 5 s, `set_parameter` with `simular=true` leaving the value untouched, a
+real `set_parameter` returning `antes`/`despues` plus a log line and a backup,
+`400` for `execute_code` without `description`, and the last undo entry named
+`IA: ...`. Details in [CONTRATO.md](CONTRATO.md).
+
+Without Revit, `uv run pytest` runs the CPython tests in `tests/` (JSON
+formatting, simulated transactions, log rotation, write routes against a fake
+`pyrevit`, CSV reader and the IronPython 2.7 compatibility guard).
 
 ## Connecting Your AI Client
 
@@ -163,9 +170,13 @@ mcp dev main.py
 
 Then open `http://127.0.0.1:6274` in your browser.
 
-## Supported Tools (48)
+## Supported Tools (68)
 
-### Create (15)
+Every write tool accepts `simular` (dry run: validates and returns `haria`
+without touching the model) and returns `ok`, `verificacion`, `copia` (backup
+of the last save) and `ms`. See [Seguridad de escritura](#seguridad-de-escritura).
+
+### Create (20)
 
 | Tool | Description |
 |------|-------------|
@@ -175,6 +186,10 @@ Then open `http://127.0.0.1:6274` in your browser.
 | `place_family` | Place a family instance at specified location |
 | `create_grid` | Create column grid lines |
 | `create_structural_framing` | Create structural beams and framing |
+| `create_structural_column` | Create structural columns between levels (`StructuralType.Column`) |
+| `create_foundation` | Isolated footings, wall foundations (`WallFoundation`) and foundation slabs |
+| `create_opening` | Openings in walls (2 corners) or floors/roofs/ceilings (polygon) |
+| `create_toposolid` | Toposolid (Revit 2024+) from points in mm or a Civil 3D CSV (P,N,E,Z / X,Y,Z) |
 | `create_sheet` | Create new drawing sheets |
 | `create_schedule` | Create schedules with custom fields |
 | `create_room` | Create rooms at specified levels |
@@ -184,37 +199,54 @@ Then open `http://127.0.0.1:6274` in your browser.
 | `create_mep_system` | Create mechanical or piping systems |
 | `create_detail_line` | Create view-specific detail lines |
 | `create_view` | Create floor plans, sections, elevations, 3D views |
+| `create_dimensions` | Create dimension annotations |
 
-### Query (12)
+### Query (21)
 
 | Tool | Description |
 |------|-------------|
 | `get_revit_status` | Check if the API is active and responding |
-| `get_revit_model_info` | Get model information |
+| `get_revit_model_info` | Model information + `file` block (workshared, path, last saved, units, base points, true north) |
 | `list_levels` | Get all levels with elevations |
-| `list_families` | Get available family types |
+| `list_families` | Family types filtered by `contains`, `category` and `limit` |
 | `list_family_categories` | Get all family categories |
+| `list_element_types` | Types of a category with main type parameters and instance counts |
+| `find_elements` | Search by category, name, type, level and parameter value (ids + summary) |
+| `get_element_properties` | Parameters plus bbox, level, workset, phase, design option, host |
+| `get_element_geometry` | Bounding box in mm, location curves or solids (volume, area) |
 | `get_revit_view` | Export a view as an image |
 | `list_revit_views` | List all exportable views |
 | `get_current_view_info` | Get active view details |
 | `get_current_view_elements` | Get elements in current view |
 | `get_selected_elements` | Get currently selected elements |
 | `list_category_parameters` | List parameters for a category |
-| `get_element_properties` | Get all parameters and properties of an element |
+| `list_warnings` | Model warnings with severity and element ids |
+| `list_worksets` | Worksets: id, name, owner, editable, open |
+| `list_phases_and_options` | Phases and design options |
+| `list_links` | RVT/IFC links and CAD imports with path, loaded status and position |
+| `get_project_location` | Project base point, survey point, true north, shared coordinates |
+| `read_log` | Last entries of `mcp_log.jsonl` |
 
-### Modify (8)
+### Modify (16)
 
 | Tool | Description |
 |------|-------------|
-| `delete_elements` | Delete elements from the model |
-| `modify_element` | Modify element parameter values |
+| `delete_elements` | Delete elements (verifies `eliminados`/`en_cascada`; >200 needs `forzar`) |
+| `modify_element` | Modify element parameter values (`antes`/`despues`) |
+| `set_parameter` | Set a single instance (or type) parameter on an element |
+| `set_type_parameter` | Set a type parameter (reports affected instances) |
+| `change_element_type` | Change the type of elements (`ChangeTypeId`) |
+| `transform_elements` | Move, copy, rotate, or mirror elements (>200 needs `forzar`) |
+| `set_workset` | Move elements to another workset |
+| `join_geometry` | Join / unjoin the geometry of two elements |
+| `set_project_location` | Move base/survey point, rotate true north, acquire coordinates from a link |
 | `color_splash` | Color elements by parameter values |
 | `clear_colors` | Reset element colors |
 | `tag_walls` | Tag all walls in current view |
-| `set_parameter` | Set a single parameter value on an element |
 | `tag_elements` | Tag specific elements with annotation symbols |
-| `transform_elements` | Move, copy, rotate, or mirror elements |
 | `set_active_view` | Switch the active view in Revit |
+| `purge_unused` | Purge unused families and types (run with `simular` first) |
+| `create_backup` | On-demand copy of the saved `.rvt` to `backups\` |
 
 ### Analyze (5)
 
@@ -226,27 +258,54 @@ Then open `http://127.0.0.1:6274` in your browser.
 | `check_clashes` | Detect hard clashes (interferences) between disciplines, e.g. structure vs MEP |
 | `analyze_model_statistics` | Element counts and model stats |
 
-### Document (3)
+### Document, Interop & Persistence (5)
 
 | Tool | Description |
 |------|-------------|
-| `create_dimensions` | Create dimension annotations |
 | `export_document` | Export views to PDF or image |
-
-### Interop & Persistence (4)
-
-| Tool | Description |
-|------|-------------|
 | `export_ifc` | Export model to IFC format (IFC2x3/IFC4) |
 | `link_file` | Link or import DWG, DXF, DGN, SAT, SKP, 3DM, or RVT files |
 | `load_family` | Load a Revit family (`.rfa`) from disk so its types can be placed |
-| `save_document` | Save / Save-As the model to disk (persistence across sessions) |
+| `save_document` | Save / Save-As the model to disk (only when the user asks) |
 
 ### Advanced (1)
 
 | Tool | Description |
 |------|-------------|
-| `execute_revit_code` | Execute IronPython code in Revit context |
+| `execute_revit_code` | Execute IronPython code in Revit context (`description` required; full code logged; `elementos_modificados` in the response) |
+
+## Seguridad de escritura
+
+Las 40 herramientas de escritura pasan por `revit_mcp/escritura.py`
+(detalle en [CONTRATO.md](CONTRATO.md#escritura-segura)):
+
+- **Comprobación previa.** `409` si Revit tiene una transacción abierta de
+  otra operación (`doc.IsModifiable`) o el documento es de solo lectura.
+- **Copia de seguridad.** Antes de escribir, si el modelo está guardado y no
+  es de trabajo compartido, se copia el `.rvt` a
+  `<carpeta>\backups\<nombre>_<yyyyMMdd_HHmmss>.rvt` (una copia cada 30 min
+  como mucho, se conservan 10). La copia refleja el **último guardado**, no el
+  estado en memoria; el MCP nunca guarda por su cuenta. `create_backup` hace
+  una copia a demanda.
+- **Registro.** Cada acción deja una línea JSON en `mcp_log.jsonl` junto al
+  `.rvt` (ruta, argumentos, `ok`, `ms`, error, resumen; código completo en
+  `execute_revit_code`). Rota a 5 MB. Se lee con `read_log`.
+- **Simulación.** `simular=true` valida y devuelve `{"simulado": true,
+  "haria": [...]}` sin abrir transacción.
+- **Verificación.** Tras escribir se relee el resultado: `creados` (id,
+  categoría, tipo, nivel, bbox), `antes`/`despues` o
+  `eliminados`/`en_cascada`. Si no coincide con lo pedido, `ok: false` con
+  `verificacion.detalle`; nunca se reintenta solo.
+- **Deshacer.** Todas las transacciones se llaman `IA: <acción>`, así se
+  distinguen en el historial de Revit.
+- **Límites.** Más de 200 elementos por llamada exige `forzar=true`
+  (`delete_elements`, `transform_elements`, `change_element_type`,
+  `set_workset`). `execute_revit_code` exige `description` y rechaza
+  `doc.Delete(<colección>)` salvo `forzar`.
+- **Instrucciones al agente.** `INSTRUCCIONES_AGENTE.md` se envía como
+  `instructions` del servidor: precedencia de herramientas, flujo obligatorio
+  (leer → plan → `simular` → confirmar → ejecutar → verificar →
+  `list_warnings`), reglas de dominio y glosario español ↔ API.
 
 ## Security
 
@@ -298,7 +357,7 @@ This server supports Revit 2024, 2025, 2026, and 2027 through centralized helper
 
 No configuration needed — version detection is automatic via try/except at runtime.
 
-> **Revit 2027 note:** Revit 2027 runs on **.NET 10** (vs .NET 8 in 2025/2026). This MCP server is pyRevit-based, so .NET compatibility is handled by pyRevit itself — ensure you run a **pyRevit build with Revit 2027 support**. None of the 48 tools use APIs removed in 2027 (AXM/FormIt import, `Mechanical.Zone` members, legacy rebar creation, or the dropped `EnergyDataSettings` properties).
+> **Revit 2027 note:** Revit 2027 runs on **.NET 10** (vs .NET 8 in 2025/2026). This MCP server is pyRevit-based, so .NET compatibility is handled by pyRevit itself — ensure you run a **pyRevit build with Revit 2027 support**. None of the 68 tools use APIs removed in 2027 (AXM/FormIt import, `Mechanical.Zone` members, legacy rebar creation, or the dropped `EnergyDataSettings` properties). `create_toposolid` needs Revit 2024+ (`DB.Toposolid`).
 
 ## Unit Handling
 
@@ -316,10 +375,18 @@ Adding a new tool requires 2 files + 2 registration lines:
 
 1. **Route handler** in `revit_mcp/new_module.py` (IronPython 2.7) — put
    `@requiere_token` (from `seguridad`) right below `@api.route(...)` so the
-   route requires the session token
-2. **Tool definition** in `tools/new_tools.py` (Python 3.11+)
+   route requires the session token. A write route wraps its body in
+   `escritura.ejecutar(doc, "/ruta/", request, cuerpo)`, honours
+   `ctx["simular"]`, opens `with escritura.transaccion(doc, "Acción")` and
+   returns `escritura.resultado_creacion(...)` or `antes`/`despues`
+2. **Tool definition** in `tools/new_tools.py` (Python 3.11+) with a
+   `simular: bool = False` parameter and a `timeout=` from `tools/utils.py`
 3. **Register routes** in `startup.py`
 4. **Register tools** in `tools/__init__.py`
+
+Run `uv run pytest`: `tests/test_compatibilidad_ironpython.py` rejects
+Python-3-only syntax in `revit_mcp/` and imports every module with a fake
+`pyrevit`.
 
 See `LLM.txt` for full context that helps AI assistants understand the codebase.
 

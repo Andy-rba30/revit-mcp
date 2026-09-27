@@ -9,10 +9,50 @@ from pyrevit.revit.db import ProjectInfo as RevitProjectInfo
 import pyrevit.revit.db.query as q
 import logging
 
-from utils import normalize_string, get_element_name
+from utils import normalize_string, get_element_name, buscar_por_nombre
 from seguridad import requiere_token
+from escritura import ruta_documento, es_compartido, _fecha_archivo
+from coordenadas import resumen_para_model_info
 
 logger = logging.getLogger(__name__)
+
+
+def unidades_proyecto(doc):
+    """Sistema de unidades del proyecto (longitud, area, volumen) legible."""
+    unidades = {"system": None, "length": None, "area": None, "volume": None}
+    try:
+        units = doc.GetUnits()
+    except Exception:
+        return unidades
+    try:
+        # Revit 2021+: ForgeTypeId
+        for clave, spec in (("length", "Length"), ("area", "Area"), ("volume", "Volume")):
+            try:
+                opciones = units.GetFormatOptions(getattr(DB.SpecTypeId, spec))
+                unidad = opciones.GetUnitTypeId()
+                etiqueta = None
+                try:
+                    etiqueta = DB.LabelUtils.GetLabelForUnit(unidad)
+                except Exception:
+                    pass
+                unidades[clave] = normalize_string(etiqueta or unidad.TypeId)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    if unidades["length"] is None:
+        try:
+            # Revit <= 2020: DisplayUnitType
+            unidades["length"] = str(units.GetFormatOptions(DB.UnitType.UT_Length).DisplayUnits)
+        except Exception:
+            pass
+    try:
+        texto = (unidades["length"] or "").lower()
+        if texto:
+            unidades["system"] = "metric" if any(m in texto for m in ("meter", "metre", "milli", "centi")) else "imperial"
+    except Exception:
+        pass
+    return unidades
 
 
 def register_model_info_routes(api):
@@ -20,7 +60,7 @@ def register_model_info_routes(api):
 
     @api.route("/model_info/", methods=["GET"])
     @requiere_token
-    def get_model_info():
+    def get_model_info(doc):
         """
         Get comprehensive information about the current Revit model
 
@@ -33,7 +73,10 @@ def register_model_info_routes(api):
         - Link status
         """
         try:
-            doc = revit.doc
+            # `doc` en la firma hace que pyRevit ejecute la ruta en el contexto de la API
+            # (hilo principal de Revit); sin el, corria en el hilo HTTP.
+            if doc is None:
+                doc = revit.doc
             if not doc:
                 return routes.make_response(
                     data={"error": "No active Revit document"}, status=503
@@ -161,7 +204,7 @@ def register_model_info_routes(api):
                 for room in rooms_collector:
                     try:
                         # Get room name safely
-                        name_param = room.LookupParameter("Name")
+                        name_param = buscar_por_nombre(room, "Name")
                         room_name = (
                             name_param.AsString()
                             if name_param and name_param.HasValue
@@ -169,7 +212,7 @@ def register_model_info_routes(api):
                         )
 
                         # Get room number safely
-                        number_param = room.LookupParameter("Number")
+                        number_param = buscar_por_nombre(room, "Number")
                         room_number = (
                             number_param.AsString()
                             if number_param and number_param.HasValue
@@ -310,9 +353,24 @@ def register_model_info_routes(api):
                 logger.warning("Could not get linked models: {}".format(str(e)))
                 linked_models = []
 
+            # ============ FILE, UNITS AND COORDINATES ============
+            ruta = ruta_documento(doc)
+            archivo = {
+                "is_workshared": es_compartido(doc),
+                "path": ruta or None,
+                "last_saved": _fecha_archivo(ruta) if ruta else None,
+                "units": unidades_proyecto(doc),
+            }
+            try:
+                archivo.update(resumen_para_model_info(doc))
+            except Exception as e:
+                logger.warning("Could not read project location: {}".format(str(e)))
+                archivo.update({"project_base_point_mm": None, "survey_point_mm": None, "true_north_deg": None})
+
             # ============ COMPILE RESPONSE ============
             model_data = {
                 "project_info": project_info,
+                "file": archivo,
                 "element_summary": {
                     "total_elements": total_elements,
                     "by_category": element_counts,

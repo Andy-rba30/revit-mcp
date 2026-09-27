@@ -2,7 +2,7 @@
 """Interop tools — IFC export and external file linking"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_LARGO
 
 
 def register_interop_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -36,7 +36,7 @@ def register_interop_tools(mcp, revit_get, revit_post, revit_image=None):
         }
         if view_name is not None:
             data["view_name"] = view_name
-        response = await revit_post("/export_ifc/", data, ctx)
+        response = await revit_post("/export_ifc/", data, ctx, timeout=TIMEOUT_LARGO)
         return format_response(response)
 
     @mcp.tool()
@@ -44,6 +44,7 @@ def register_interop_tools(mcp, revit_get, revit_post, revit_image=None):
         file_path: str,
         mode: str = "link",
         position: dict = None,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Link or import an external file into the Revit model.
@@ -55,10 +56,12 @@ def register_interop_tools(mcp, revit_get, revit_post, revit_image=None):
             file_path: Path to the file (DWG, DXF, DGN, or RVT)
             mode: "link" (default, maintains connection) or "import" (embeds copy)
             position: Optional placement offset {"x", "y", "z"} in mm
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"file_path": file_path, "mode": mode}
         if position is not None:
             data["position"] = position
-        response = await revit_post("/link_file/", data, ctx)
+        data["simular"] = simular
+        response = await revit_post("/link_file/", data, ctx, timeout=TIMEOUT_LARGO)
         return format_response(response)

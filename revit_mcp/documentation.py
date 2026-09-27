@@ -1,11 +1,16 @@
 # -*- coding: UTF-8 -*-
 """
 Documentation Module for Revit MCP
-Handles sheet creation, schedule creation, and document export
+Handles sheet creation, schedule creation, and document export.
+
+create_sheet y create_schedule pasan por escritura.ejecutar (copia, log,
+simular, IA:, creados). export_document no modifica el modelo: solo usa la
+transaccion "IA: Exportar documento" que Revit exige para ExportImage.
 """
 
 from utils import get_element_name, get_element_id_value, suppress_warnings
 from seguridad import requiere_token
+from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, resultado_creacion, nombre_transaccion
 from pyrevit import routes, revit, DB
 import json
 import traceback
@@ -21,35 +26,24 @@ def register_documentation_routes(api):
     @api.route("/create_sheet/", methods=["POST"])
     @requiere_token
     def create_sheet_handler(doc, request):
-        """Create a drawing sheet in Revit."""
-        try:
-            if not doc:
-                return routes.make_response(
-                    data={"error": "No active Revit document"}, status=503
-                )
+        """Create a drawing sheet in Revit. Accepts `simular`."""
 
-            data = {}
-            if request and request.data:
-                data = json.loads(request.data) if isinstance(request.data, str) else request.data
-
+        def cuerpo(ctx):
+            data = ctx["data"]
             sheet_number = data.get("sheet_number")
             sheet_name = data.get("sheet_name", "Unnamed Sheet")
             title_block_name = data.get("title_block_name")
 
-            # Find title block
             title_blocks = (
                 DB.FilteredElementCollector(doc)
                 .OfCategory(DB.BuiltInCategory.OST_TitleBlocks)
                 .OfClass(DB.FamilySymbol)
                 .ToElements()
             )
-
             if not title_blocks or len(title_blocks) == 0:
-                return routes.make_response(
-                    data={"error": "No title block families found — load a title block family into the project"},
-                    status=404,
+                raise EscrituraRechazada(
+                    "No title block families found — load a title block family into the project", 404
                 )
-
             target_tb = None
             if title_block_name:
                 for tb in title_blocks:
@@ -59,136 +53,105 @@ def register_documentation_routes(api):
                             break
                     except Exception:
                         continue
-
-            if not target_tb:
+                if target_tb is None:
+                    raise EscrituraRechazada("Title block '{}' not found".format(title_block_name), 404)
+            if target_tb is None:
                 target_tb = title_blocks[0]
 
-            # Check for duplicate sheet number
             if sheet_number:
-                existing_sheets = (
-                    DB.FilteredElementCollector(doc)
-                    .OfClass(DB.ViewSheet)
-                    .ToElements()
-                )
-                for sheet in existing_sheets:
+                for sheet in DB.FilteredElementCollector(doc).OfClass(DB.ViewSheet).ToElements():
                     try:
                         if sheet.SheetNumber == sheet_number:
-                            return routes.make_response(
-                                data={"error": "Sheet number '{}' already exists in the project".format(sheet_number)},
-                                status=400,
+                            raise EscrituraRechazada(
+                                "Sheet number '{}' already exists in the project".format(sheet_number), 400
                             )
+                    except EscrituraRechazada:
+                        raise
                     except Exception:
                         continue
 
-            t = DB.Transaction(doc, "Create Sheet via MCP")
-            t.Start()
-            suppress_warnings(t)
+            tb_name = get_element_name(target_tb)
+            if ctx["simular"]:
+                return simulacion([{
+                    "accion": "crear", "element_type": "sheet", "sheet_number": sheet_number,
+                    "sheet_name": sheet_name, "title_block": tb_name,
+                }])
 
-            try:
-                # Activate title block
+            with transaccion(doc, "Crear plano {}".format(sheet_number or sheet_name)):
                 if not target_tb.IsActive:
                     target_tb.Activate()
                     doc.Regenerate()
-
-                # Create the sheet
                 new_sheet = DB.ViewSheet.Create(doc, target_tb.Id)
-
                 if sheet_number:
                     new_sheet.SheetNumber = sheet_number
                 if sheet_name:
                     new_sheet.Name = sheet_name
+                sheet_id = get_element_id_value(new_sheet)
 
-                t.Commit()
+            resultado = resultado_creacion(doc, [sheet_id])
+            numero_real = new_sheet.SheetNumber
+            nombre_real = new_sheet.Name
+            for creado in resultado["creados"]:
+                creado["sheet_number"] = numero_real
+                creado["sheet_name"] = nombre_real
+                creado["title_block"] = tb_name
+            resultado["created"] = resultado["creados"][0] if resultado["creados"] else None
+            resultado["message"] = "Created sheet {} - {}".format(numero_real, nombre_real)
+            if (sheet_number and numero_real != sheet_number) or (sheet_name and nombre_real != sheet_name):
+                resultado["ok"] = False
+                resultado["verificacion"] = {
+                    "coincide": False,
+                    "detalle": "Sheet created as {} - {} instead of {} - {}".format(
+                        numero_real, nombre_real, sheet_number, sheet_name
+                    ),
+                }
+            return resultado
 
-                tb_name = get_element_name(target_tb)
-
-                return routes.make_response(
-                    data={
-                        "status": "success",
-                        "created": {
-                            "id": get_element_id_value(new_sheet),
-                            "sheet_number": new_sheet.SheetNumber,
-                            "sheet_name": new_sheet.Name,
-                            "title_block": tb_name,
-                        },
-                        "message": "Created sheet {} - {}".format(
-                            new_sheet.SheetNumber, new_sheet.Name
-                        ),
-                    }
-                )
-
-            except Exception as tx_error:
-                if t.HasStarted() and not t.HasEnded():
-                    t.RollBack()
-                raise tx_error
-
-        except Exception as e:
-            logger.error("Failed to create sheet: {}".format(str(e)))
-            error_trace = traceback.format_exc()
-            return routes.make_response(
-                data={"error": str(e), "traceback": error_trace}, status=500
-            )
+        return ejecutar(doc, "/create_sheet/", request, cuerpo)
 
     @api.route("/create_schedule/", methods=["POST"])
     @requiere_token
     def create_schedule_handler(doc, request):
-        """Create a schedule view in Revit."""
-        try:
-            if not doc:
-                return routes.make_response(
-                    data={"error": "No active Revit document"}, status=503
-                )
+        """Create a schedule view in Revit. Accepts `simular`."""
 
-            if not request or not request.data:
-                return routes.make_response(
-                    data={"error": "No data provided"}, status=400
-                )
-
-            data = json.loads(request.data) if isinstance(request.data, str) else request.data
-
+        def cuerpo(ctx):
+            data = ctx["data"]
             category_str = data.get("category")
             fields = data.get("fields")
             schedule_name = data.get("schedule_name")
-
             if not category_str:
-                return routes.make_response(
-                    data={"error": "No category provided"}, status=400
-                )
-
-            # Resolve category
+                raise EscrituraRechazada("No category provided", 400)
             try:
                 bic = getattr(DB.BuiltInCategory, category_str)
             except AttributeError:
-                return routes.make_response(
-                    data={"error": "Invalid category '{}' — use a valid BuiltInCategory name like OST_Walls, OST_Rooms, OST_Doors".format(category_str)},
-                    status=400,
+                raise EscrituraRechazada(
+                    "Invalid category '{}' — use a valid BuiltInCategory name like OST_Walls, OST_Rooms, OST_Doors".format(category_str),
+                    400,
                 )
-
-            # Get ElementId for category
             cat_id = DB.ElementId(bic)
+            cat_display = category_str.replace("OST_", "").lower()
+            nombre = schedule_name or "{} Schedule".format(category_str.replace("OST_", ""))
 
-            t = DB.Transaction(doc, "Create Schedule via MCP")
-            t.Start()
-            suppress_warnings(t)
+            if ctx["simular"]:
+                return simulacion([{
+                    "accion": "crear", "element_type": "schedule", "category": category_str,
+                    "name": nombre, "fields": fields or "(first 5 schedulable fields)",
+                    "nota": "Los campos solo se validan al crear la tabla (GetSchedulableFields).",
+                }])
 
-            try:
-                # Create the schedule
+            fields_added = []
+            fields_failed = []
+            available = []
+            with transaccion(doc, "Crear tabla {}".format(nombre)):
                 schedule = DB.ViewSchedule.CreateSchedule(doc, cat_id)
-
-                if schedule_name:
-                    schedule.Name = schedule_name
-                else:
-                    # Auto-generate name from category
-                    cat_name = category_str.replace("OST_", "")
-                    schedule.Name = "{} Schedule".format(cat_name)
-
-                # Add fields
+                schedule.Name = nombre
                 sched_def = schedule.Definition
                 schedulable_fields = sched_def.GetSchedulableFields()
-
-                fields_added = []
-                fields_failed = []
-
+                for sf in schedulable_fields:
+                    try:
+                        available.append(sf.GetName(doc))
+                    except Exception:
+                        continue
                 if fields:
                     for field_name in fields:
                         found = False
@@ -201,11 +164,9 @@ def register_documentation_routes(api):
                                     break
                             except Exception:
                                 continue
-
                         if not found:
                             fields_failed.append(field_name)
                 else:
-                    # Add first few available fields as defaults
                     count = 0
                     for sf in schedulable_fields:
                         if count >= 5:
@@ -217,63 +178,38 @@ def register_documentation_routes(api):
                             count += 1
                         except Exception:
                             continue
+                schedule_id = get_element_id_value(schedule)
 
-                # Get row count
-                row_count = 0
-                try:
-                    table_data = schedule.GetTableData()
-                    section = table_data.GetSectionData(DB.SectionType.Body)
-                    row_count = section.NumberOfRows
-                except Exception:
-                    pass
+            row_count = 0
+            try:
+                table_data = schedule.GetTableData()
+                section = table_data.GetSectionData(DB.SectionType.Body)
+                row_count = section.NumberOfRows
+            except Exception:
+                pass
 
-                t.Commit()
-
-                # Get category display name
-                cat_display = category_str.replace("OST_", "").lower()
-
-                result = {
-                    "status": "success",
-                    "created": {
-                        "id": get_element_id_value(schedule),
-                        "name": schedule.Name,
-                        "category": cat_display,
-                        "fields": fields_added,
-                        "row_count": row_count,
-                    },
-                    "message": "Created {} schedule with {} field{} and {} row{}".format(
-                        cat_display,
-                        len(fields_added),
-                        "s" if len(fields_added) != 1 else "",
-                        row_count,
-                        "s" if row_count != 1 else "",
-                    ),
-                }
-
-                if fields_failed:
-                    # Get available field names for error context
-                    available = []
-                    for sf in schedulable_fields:
-                        try:
-                            available.append(sf.GetName(doc))
-                        except Exception:
-                            continue
-                    result["fields_not_found"] = fields_failed
-                    result["available_fields"] = sorted(available)[:30]
-
-                return routes.make_response(data=result)
-
-            except Exception as tx_error:
-                if t.HasStarted() and not t.HasEnded():
-                    t.RollBack()
-                raise tx_error
-
-        except Exception as e:
-            logger.error("Failed to create schedule: {}".format(str(e)))
-            error_trace = traceback.format_exc()
-            return routes.make_response(
-                data={"error": str(e), "traceback": error_trace}, status=500
+            resultado = resultado_creacion(doc, [schedule_id])
+            for creado in resultado["creados"]:
+                creado["name"] = schedule.Name
+                creado["category"] = cat_display
+                creado["fields"] = fields_added
+                creado["row_count"] = row_count
+            resultado["created"] = resultado["creados"][0] if resultado["creados"] else None
+            resultado["message"] = "Created {} schedule with {} field{} and {} row{}".format(
+                cat_display, len(fields_added), "s" if len(fields_added) != 1 else "",
+                row_count, "s" if row_count != 1 else "",
             )
+            if fields_failed:
+                resultado["fields_not_found"] = fields_failed
+                resultado["available_fields"] = sorted(available)[:30]
+                resultado["ok"] = False
+                resultado["verificacion"] = {
+                    "coincide": False,
+                    "detalle": "Schedule created but these fields do not exist: {}".format(fields_failed),
+                }
+            return resultado
+
+        return ejecutar(doc, "/create_schedule/", request, cuerpo)
 
     @api.route("/export_document/", methods=["POST"])
     @requiere_token
@@ -342,7 +278,7 @@ def register_documentation_routes(api):
 
             fmt = export_format.lower()
 
-            t = DB.Transaction(doc, "Export Document via MCP")
+            t = DB.Transaction(doc, nombre_transaccion("Exportar documento"))
             t.Start()
             suppress_warnings(t)
 

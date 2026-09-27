@@ -2,7 +2,7 @@
 """Editing tools — delete, modify, and select elements"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_ESCRITURA
 
 
 def register_editing_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -12,6 +12,8 @@ def register_editing_tools(mcp, revit_get, revit_post, revit_image=None):
     @mcp.tool()
     async def delete_elements(
         element_ids: list[int],
+        simular: bool = False,
+        forzar: bool = False,
         ctx: Context = None,
     ) -> str:
         """Delete one or more elements from the Revit model.
@@ -22,16 +24,21 @@ def register_editing_tools(mcp, revit_get, revit_post, revit_image=None):
 
         Args:
             element_ids: List of Revit element IDs to delete
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
+            forzar: Required (true) to affect more than 200 elements in one call
             ctx: MCP context for logging
         """
         data = {"element_ids": element_ids}
-        response = await revit_post("/delete_elements/", data, ctx)
+        data["simular"] = simular
+        data["forzar"] = forzar
+        response = await revit_post("/delete_elements/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
     async def modify_element(
         element_id: int,
         parameters: dict,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Modify parameter values on a Revit element.
@@ -42,11 +49,14 @@ def register_editing_tools(mcp, revit_get, revit_post, revit_image=None):
         Args:
             element_id: Revit element ID to modify
             parameters: Dictionary of parameter name to new value pairs
+                (lengths in mm, areas in mm², volumes in mm³, angles in degrees)
                 e.g., {"Mark": "EW-01", "Comments": "Updated via MCP"}
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"element_id": element_id, "parameters": parameters}
-        response = await revit_post("/modify_element/", data, ctx)
+        data["simular"] = simular
+        response = await revit_post("/modify_element/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()

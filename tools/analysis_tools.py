@@ -2,7 +2,7 @@
 """Analysis tools — element filtering, rooms, materials, and statistics"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_LARGO
 
 
 def register_analysis_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -76,7 +76,7 @@ def register_analysis_tools(mcp, revit_get, revit_post, revit_image=None):
             ctx: MCP context for logging
         """
         data = {"categories": categories}
-        response = await revit_post("/material_quantities/", data, ctx)
+        response = await revit_post("/material_quantities/", data, ctx, timeout=TIMEOUT_LARGO)
         return format_response(response)
 
     @mcp.tool()

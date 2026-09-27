@@ -2,7 +2,7 @@
 """Room creation tools — rooms and room separation lines"""
 
 from mcp.server.mcpserver import Context
-from .utils import format_response
+from .utils import format_response, TIMEOUT_ESCRITURA
 
 
 def register_room_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -15,6 +15,7 @@ def register_room_tools(mcp, revit_get, revit_post, revit_image=None):
         location: dict = None,
         name: str = None,
         number: str = None,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Create a room in the Revit model at a specified level.
@@ -27,6 +28,7 @@ def register_room_tools(mcp, revit_get, revit_post, revit_image=None):
             location: Optional placement point {"x": float, "y": float} in mm
             name: Room name (e.g., "Living Room")
             number: Room number (e.g., "101")
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"level_name": level_name}
@@ -36,7 +38,8 @@ def register_room_tools(mcp, revit_get, revit_post, revit_image=None):
             data["name"] = name
         if number is not None:
             data["number"] = number
-        response = await revit_post("/create_room/", data, ctx)
+        data["simular"] = simular
+        response = await revit_post("/create_room/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
 
     @mcp.tool()
@@ -44,6 +47,7 @@ def register_room_tools(mcp, revit_get, revit_post, revit_image=None):
         lines: list[dict],
         level_name: str = None,
         view_name: str = None,
+        simular: bool = False,
         ctx: Context = None,
     ) -> str:
         """Create room separation lines to define room boundaries.
@@ -58,6 +62,7 @@ def register_room_tools(mcp, revit_get, revit_post, revit_image=None):
                 - end_point (dict): {"x": float, "y": float, "z": float} in mm
             level_name: Target level name (defaults to active view's level)
             view_name: Plan view name (defaults to active view)
+            simular: If true, only validate and return {"simulado": true, "haria": [...]} without changing the model
             ctx: MCP context for logging
         """
         data = {"lines": lines}
@@ -65,5 +70,6 @@ def register_room_tools(mcp, revit_get, revit_post, revit_image=None):
             data["level_name"] = level_name
         if view_name is not None:
             data["view_name"] = view_name
-        response = await revit_post("/create_room_separation/", data, ctx)
+        data["simular"] = simular
+        response = await revit_post("/create_room_separation/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response)
