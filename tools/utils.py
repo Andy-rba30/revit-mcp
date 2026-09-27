@@ -1,20 +1,44 @@
 # -*- coding: utf-8 -*-
-"""Utility functions for MCP tools: response formatting and per-tool timeouts."""
+"""Utilidades de las herramientas MCP: formato de respuesta, tiempos de espera y
+`ms_puente` (tiempo total de la llamada HTTP visto desde el puente)."""
 
 import json
+import time
 
 # Tiempos de espera (segundos) que cada herramienta pasa a revit_get/revit_post.
 # main.py los reexporta y documenta; las herramientas los importan de aqui para
 # no crear una importacion circular (main -> tools -> main).
 TIMEOUT_LECTURA = 30.0      # consultas: status, listados, propiedades...
-TIMEOUT_ESCRITURA = 120.0   # create_*, transform_elements, color_splash y demas cambios
-TIMEOUT_LARGO = 600.0       # export_ifc, export_document, check_clashes,
-                            # get_material_quantities, link_file, load_family,
-                            # save_document, execute_revit_code, create_toposolid,
-                            # purge_unused, create_backup y, desde 0.3.0,
-                            # snapshot_model, diff_snapshots e import_from_civil.
+TIMEOUT_ESCRITURA = 120.0   # set_parameters, create_elements, transform_elements y demas cambios
+TIMEOUT_LARGO = 600.0       # export, check_clashes, analyze_model(materials), link_file,
+                            # load_family, maintain_model, execute_revit_code,
+                            # create_elements(toposolid), snapshot_model, diff_snapshots,
+                            # import_from_civil y run_macro (salvo timeout_s propio).
                             # No es un sustituto de un limite de elementos: cada
-                            # macro aplica comprobar_alcance (200 salvo forzar).
+                            # lote y macro aplica comprobar_alcance (200 salvo forzar).
+
+
+class Cronometro(object):
+    """Mide el tiempo total que una herramienta pasa llamando a Revit (una o varias rutas)."""
+
+    def __init__(self):
+        self.inicio = time.perf_counter()
+
+    def ms(self):
+        return int((time.perf_counter() - self.inicio) * 1000)
+
+
+async def con_tiempo(coro):
+    """Espera la llamada a Revit y anade `ms_puente` (ms desde el puente) a la respuesta dict.
+
+    `ms` (dentro de la respuesta) es el tiempo que Revit tardo en el manejador;
+    `ms_puente` incluye ademas la red y la serializacion JSON en ambos sentidos.
+    """
+    crono = Cronometro()
+    respuesta = await coro
+    if isinstance(respuesta, dict):
+        respuesta["ms_puente"] = crono.ms()
+    return respuesta
 
 
 def _texto_estado(response):
@@ -57,7 +81,8 @@ def _texto_error(response):
 
     debug_fields = ["code_attempted", "endpoint", "request_data", "response_code", "hints",
                     "open_transaction", "available_parameters", "available_levels",
-                    "available_views", "available_families", "limite", "cantidad", "copia"]
+                    "available_views", "available_families", "available_macros", "limite",
+                    "cantidad", "copia", "index", "kind", "fallidos", "faltan", "sobran"]
     for field in debug_fields:
         if field in response:
             error_parts.append("{}: {}".format(
@@ -76,7 +101,7 @@ def _json(valor):
     return json.dumps(valor, ensure_ascii=False, default=str)
 
 
-def format_response(response):
+def format_response(response, ms_puente=None):
     """Formatea la respuesta de revit_get/revit_post para devolverla al agente.
 
     - dict o list -> JSON (`json.dumps(..., ensure_ascii=False)`), para que el
@@ -87,8 +112,14 @@ def format_response(response):
       "=== REVIT STATUS ===";
     - cualquier otra cosa (texto del puente, p. ej. "Revit no está abierto")
       -> str.
+
+    `ms_puente` (opcional): tiempo total de la llamada HTTP medido desde el
+    puente; se anade al dict al lado del `ms` que devuelve Revit para separar
+    el tiempo de Revit del de red y serializacion.
     """
     if isinstance(response, dict):
+        if ms_puente is not None:
+            response["ms_puente"] = int(ms_puente)
         status = str(response.get("status", "") or "").lower()
         has_error = (bool(response.get("error")) or
                      status in ("error", "failed", "failure", "exception"))
@@ -100,3 +131,10 @@ def format_response(response):
     if isinstance(response, list):
         return json.dumps(response, ensure_ascii=False, indent=2, default=str)
     return str(response)
+
+
+def es_error(response):
+    """True si la respuesta es un texto del puente o un dict con `error`."""
+    if not isinstance(response, dict):
+        return True
+    return bool(response.get("error"))

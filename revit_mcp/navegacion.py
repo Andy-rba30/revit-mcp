@@ -1227,6 +1227,9 @@ def consultar_elementos(doc, data):
             datos = describir_elemento(doc, elem) or {"id": get_element_id_value(elem)}
             tipo = _tipo_de(doc, elem)
             datos["familia"] = nombre_familia(tipo) if tipo is not None else None
+            # 0.4.0: nombre propio del elemento (vistas, niveles, rejillas, planos...),
+            # que `tipo` no da (es el nombre del tipo).
+            datos["nombre"] = get_element_name(elem)
             if campos:
                 datos["fields"] = _valores_campos(doc, elem, campos)
             elementos.append(datos)
