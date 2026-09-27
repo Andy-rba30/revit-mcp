@@ -4,6 +4,9 @@ MEP Module for Revit MCP
 Handles duct, pipe, and MEP system creation.
 
 Las tres rutas pasan por escritura.ejecutar (copia, log, simular, IA:).
+
+0.4.0: planificar_conducto / crear_conducto y planificar_tuberia / crear_tuberia
+los reutiliza lotes.py (/create_elements/).
 """
 
 from utils import (
@@ -96,6 +99,106 @@ def _medida_mm(elem, nombre):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Conductos y tuberias: planificar (sin transaccion) y crear (dentro de una)
+# ---------------------------------------------------------------------------
+def planificar_conducto(doc, data):
+    """Valida {start_point, end_point, duct_type, system_type, level_name, diameter, width, height}.
+    Lanza EscrituraRechazada. Devuelve el plan con `haria`."""
+    start, end = _puntos(data)
+    duct_types = elementos_por_nombre(
+        DB.FilteredElementCollector(doc).OfClass(DB.Mechanical.DuctType).ToElements()
+    )
+    target_duct_type = _tipo(duct_types, data.get("duct_type") or data.get("type_name"), "duct", "available_duct_types")
+    system_types = elementos_por_nombre(
+        DB.FilteredElementCollector(doc).OfClass(DB.Mechanical.MechanicalSystemType).ToElements()
+    )
+    target_system_type = _sistema(system_types, data.get("system_type"))
+    target_level = _nivel(doc, data, start)
+    medidas = {
+        "Diameter": data.get("diameter"), "Width": data.get("width"), "Height": data.get("height"),
+    }
+    haria = {
+        "accion": "crear", "element_type": "duct",
+        "duct_type": get_element_name(target_duct_type),
+        "system_type": get_element_name(target_system_type) if target_system_type else None,
+        "level": get_element_name(target_level),
+        "start_mm": punto_a_mm(start), "end_mm": punto_a_mm(end),
+        "dimensions_mm": dict((k.lower(), v) for k, v in medidas.items() if v is not None),
+    }
+    return {"kind": "duct", "start": start, "end": end, "duct_type": target_duct_type,
+            "system_type": target_system_type, "level": target_level, "medidas": medidas, "haria": haria}
+
+
+def crear_conducto(doc, plan):
+    """DB.Mechanical.Duct.Create + medidas. Dentro de una transaccion."""
+    sys_type_id = plan["system_type"].Id if plan["system_type"] else DB.ElementId.InvalidElementId
+    duct = DB.Mechanical.Duct.Create(
+        doc, sys_type_id, plan["duct_type"].Id, plan["level"].Id, plan["start"], plan["end"]
+    )
+    for nombre, valor in plan["medidas"].items():
+        _fijar_medida(duct, nombre, valor)
+    return duct
+
+
+def describir_conducto(duct, plan):
+    return {
+        "system_type": get_element_name(plan["system_type"]) if plan["system_type"] else "None",
+        "duct_type": get_element_name(plan["duct_type"]),
+        "level": get_element_name(plan["level"]),
+        "dimensions_mm": {
+            "diameter": _medida_mm(duct, "Diameter"),
+            "width": _medida_mm(duct, "Width"),
+            "height": _medida_mm(duct, "Height"),
+        },
+    }
+
+
+def planificar_tuberia(doc, data):
+    """Valida {start_point, end_point, pipe_type, system_type, level_name, diameter}.
+    Lanza EscrituraRechazada. Devuelve el plan con `haria`."""
+    start, end = _puntos(data)
+    pipe_types = elementos_por_nombre(
+        DB.FilteredElementCollector(doc).OfClass(DB.Plumbing.PipeType).ToElements()
+    )
+    target_pipe_type = _tipo(pipe_types, data.get("pipe_type") or data.get("type_name"), "pipe", "available_pipe_types")
+    system_types = elementos_por_nombre(
+        DB.FilteredElementCollector(doc).OfClass(DB.Plumbing.PipingSystemType).ToElements()
+    )
+    target_system_type = _sistema(system_types, data.get("system_type"))
+    target_level = _nivel(doc, data, start)
+    diameter = data.get("diameter")
+    haria = {
+        "accion": "crear", "element_type": "pipe",
+        "pipe_type": get_element_name(target_pipe_type),
+        "system_type": get_element_name(target_system_type) if target_system_type else None,
+        "level": get_element_name(target_level),
+        "start_mm": punto_a_mm(start), "end_mm": punto_a_mm(end),
+        "diameter_mm": diameter,
+    }
+    return {"kind": "pipe", "start": start, "end": end, "pipe_type": target_pipe_type,
+            "system_type": target_system_type, "level": target_level, "diameter": diameter, "haria": haria}
+
+
+def crear_tuberia(doc, plan):
+    """DB.Plumbing.Pipe.Create + diametro. Dentro de una transaccion."""
+    sys_type_id = plan["system_type"].Id if plan["system_type"] else DB.ElementId.InvalidElementId
+    pipe = DB.Plumbing.Pipe.Create(
+        doc, sys_type_id, plan["pipe_type"].Id, plan["level"].Id, plan["start"], plan["end"]
+    )
+    _fijar_medida(pipe, "Diameter", plan["diameter"])
+    return pipe
+
+
+def describir_tuberia(pipe, plan):
+    return {
+        "system_type": get_element_name(plan["system_type"]) if plan["system_type"] else "None",
+        "pipe_type": get_element_name(plan["pipe_type"]),
+        "level": get_element_name(plan["level"]),
+        "diameter_mm": _medida_mm(pipe, "Diameter"),
+    }
+
+
 def register_mep_routes(api):
     """Register all MEP routes with the API"""
 
@@ -106,52 +209,18 @@ def register_mep_routes(api):
 
         def cuerpo(ctx):
             data = ctx["data"]
-            start, end = _puntos(data)
-            duct_types = elementos_por_nombre(
-                DB.FilteredElementCollector(doc).OfClass(DB.Mechanical.DuctType).ToElements()
-            )
-            target_duct_type = _tipo(duct_types, data.get("duct_type"), "duct", "available_duct_types")
-            system_types = elementos_por_nombre(
-                DB.FilteredElementCollector(doc).OfClass(DB.Mechanical.MechanicalSystemType).ToElements()
-            )
-            target_system_type = _sistema(system_types, data.get("system_type"))
-            target_level = _nivel(doc, data, start)
-            medidas = {
-                "Diameter": data.get("diameter"), "Width": data.get("width"), "Height": data.get("height"),
-            }
-
+            plan = planificar_conducto(doc, data)
             if ctx["simular"]:
-                return simulacion([{
-                    "accion": "crear", "element_type": "duct",
-                    "duct_type": get_element_name(target_duct_type),
-                    "system_type": get_element_name(target_system_type) if target_system_type else None,
-                    "level": get_element_name(target_level),
-                    "start_mm": punto_a_mm(start), "end_mm": punto_a_mm(end),
-                    "dimensions_mm": dict((k.lower(), v) for k, v in medidas.items() if v is not None),
-                }])
+                return simulacion([plan["haria"]])
 
             with transaccion(doc, "Crear conducto"):
-                sys_type_id = target_system_type.Id if target_system_type else DB.ElementId.InvalidElementId
-                duct = DB.Mechanical.Duct.Create(
-                    doc, sys_type_id, target_duct_type.Id, target_level.Id, start, end
-                )
-                for nombre, valor in medidas.items():
-                    _fijar_medida(duct, nombre, valor)
+                duct = crear_conducto(doc, plan)
                 duct_id = get_element_id_value(duct)
 
             resultado = resultado_creacion(doc, [duct_id])
-            resultado.update({
-                "duct_id": duct_id,
-                "system_type": get_element_name(target_system_type) if target_system_type else "None",
-                "duct_type": get_element_name(target_duct_type),
-                "level": get_element_name(target_level),
-                "dimensions_mm": {
-                    "diameter": _medida_mm(duct, "Diameter"),
-                    "width": _medida_mm(duct, "Width"),
-                    "height": _medida_mm(duct, "Height"),
-                },
-                "message": "Created duct on level '{}'".format(get_element_name(target_level)),
-            })
+            resultado.update(describir_conducto(duct, plan))
+            resultado["duct_id"] = duct_id
+            resultado["message"] = "Created duct on level '{}'".format(get_element_name(plan["level"]))
             return resultado
 
         return ejecutar(doc, "/create_duct/", request, cuerpo)
@@ -163,45 +232,18 @@ def register_mep_routes(api):
 
         def cuerpo(ctx):
             data = ctx["data"]
-            start, end = _puntos(data)
-            pipe_types = elementos_por_nombre(
-                DB.FilteredElementCollector(doc).OfClass(DB.Plumbing.PipeType).ToElements()
-            )
-            target_pipe_type = _tipo(pipe_types, data.get("pipe_type"), "pipe", "available_pipe_types")
-            system_types = elementos_por_nombre(
-                DB.FilteredElementCollector(doc).OfClass(DB.Plumbing.PipingSystemType).ToElements()
-            )
-            target_system_type = _sistema(system_types, data.get("system_type"))
-            target_level = _nivel(doc, data, start)
-            diameter = data.get("diameter")
-
+            plan = planificar_tuberia(doc, data)
             if ctx["simular"]:
-                return simulacion([{
-                    "accion": "crear", "element_type": "pipe",
-                    "pipe_type": get_element_name(target_pipe_type),
-                    "system_type": get_element_name(target_system_type) if target_system_type else None,
-                    "level": get_element_name(target_level),
-                    "start_mm": punto_a_mm(start), "end_mm": punto_a_mm(end),
-                    "diameter_mm": diameter,
-                }])
+                return simulacion([plan["haria"]])
 
             with transaccion(doc, "Crear tuberia"):
-                sys_type_id = target_system_type.Id if target_system_type else DB.ElementId.InvalidElementId
-                pipe = DB.Plumbing.Pipe.Create(
-                    doc, sys_type_id, target_pipe_type.Id, target_level.Id, start, end
-                )
-                _fijar_medida(pipe, "Diameter", diameter)
+                pipe = crear_tuberia(doc, plan)
                 pipe_id = get_element_id_value(pipe)
 
             resultado = resultado_creacion(doc, [pipe_id])
-            resultado.update({
-                "pipe_id": pipe_id,
-                "system_type": get_element_name(target_system_type) if target_system_type else "None",
-                "pipe_type": get_element_name(target_pipe_type),
-                "level": get_element_name(target_level),
-                "diameter_mm": _medida_mm(pipe, "Diameter"),
-                "message": "Created pipe on level '{}'".format(get_element_name(target_level)),
-            })
+            resultado.update(describir_tuberia(pipe, plan))
+            resultado["pipe_id"] = pipe_id
+            resultado["message"] = "Created pipe on level '{}'".format(get_element_name(plan["level"]))
             return resultado
 
         return ejecutar(doc, "/create_pipe/", request, cuerpo)

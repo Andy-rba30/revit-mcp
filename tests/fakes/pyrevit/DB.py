@@ -267,6 +267,11 @@ class BuiltInParameter(object):
     FAMILY_TOP_LEVEL_PARAM = _Enum("FAMILY_TOP_LEVEL_PARAM", -1001221)
     FAMILY_TOP_LEVEL_OFFSET_PARAM = _Enum("FAMILY_TOP_LEVEL_OFFSET_PARAM", -1001222)
     ALL_MODEL_TYPE_NAME = _Enum("ALL_MODEL_TYPE_NAME", -1001223)
+    CEILING_HEIGHTABOVELEVEL_PARAM = _Enum("CEILING_HEIGHTABOVELEVEL_PARAM", -1001224)
+    RBS_CURVE_DIAMETER_PARAM = _Enum("RBS_CURVE_DIAMETER_PARAM", -1001225)
+    RBS_PIPE_DIAMETER_PARAM = _Enum("RBS_PIPE_DIAMETER_PARAM", -1001226)
+    RBS_CURVE_WIDTH_PARAM = _Enum("RBS_CURVE_WIDTH_PARAM", -1001227)
+    RBS_CURVE_HEIGHT_PARAM = _Enum("RBS_CURVE_HEIGHT_PARAM", -1001228)
 
 
 class BuiltInCategory(object):
@@ -634,20 +639,157 @@ class HostObject(Element):
         return [ElementId(i) for i in getattr(self, "insertos", [])]
 
 
+def _registrar_creado(doc, elemento, categoria, bic, tipo_id=None, nivel_id=None, tipo_categoria=None):
+    """Da categoria, tipo y nivel a un elemento creado por una fabrica y lo registra en doc."""
+    elemento.bic = bic
+    elemento.Category = Category(categoria, bic, tipo_categoria)
+    if tipo_id is not None:
+        elemento.type_id = tipo_id
+    if nivel_id is not None:
+        elemento.LevelId = nivel_id
+    doc.agregar(elemento)
+    return elemento
+
+
 class Wall(HostObject):
-    pass
+    @staticmethod
+    def Create(doc, curva, tipo_id, nivel_id, altura, desfase, flip, estructural):
+        muro = Wall()
+        muro.curva = curva
+        muro.altura = altura
+        muro.desfase = desfase
+        muro.estructural = estructural
+        muro.Location = _UbicacionCurva(curva)
+        return _registrar_creado(doc, muro, u"Muros", BuiltInCategory.OST_Walls, tipo_id, nivel_id)
+
+
+class _UbicacionCurva(object):
+    def __init__(self, curva):
+        self.Curve = curva
 
 
 class Floor(HostObject):
-    pass
+    @staticmethod
+    def Create(doc, loops, tipo_id, nivel_id):
+        suelo = Floor()
+        suelo.loops = list(loops)
+        return _registrar_creado(doc, suelo, u"Suelos", BuiltInCategory.OST_Floors, tipo_id, nivel_id)
 
 
 class RoofBase(HostObject):
     pass
 
 
-class Ceiling(HostObject):
+class FootPrintRoof(RoofBase):
     pass
+
+
+class Ceiling(HostObject):
+    @staticmethod
+    def Create(doc, loops, tipo_id, nivel_id):
+        techo = Ceiling()
+        techo.loops = list(loops)
+        return _registrar_creado(doc, techo, u"Techos", BuiltInCategory.OST_Ceilings, tipo_id, nivel_id)
+
+
+class CeilingType(ElementType):
+    pass
+
+
+class WallFoundationType(ElementType):
+    pass
+
+
+class WallFoundation(Element):
+    @staticmethod
+    def Create(doc, tipo_id, muro_id):
+        zapata = WallFoundation()
+        zapata.wall_id = muro_id
+        return _registrar_creado(doc, zapata, u"Cimentación estructural", BuiltInCategory.OST_StructuralFoundation, tipo_id)
+
+
+class ModelCurveArray(object):
+    pass
+
+
+class SketchPlane(Element):
+    @staticmethod
+    def Create(doc, nivel_id):
+        plano = SketchPlane()
+        plano.nivel_id = nivel_id
+        doc.agregar(plano)
+        return plano
+
+
+class Plane(object):
+    def __init__(self, normal=None, origen=None):
+        self.Normal = normal
+        self.Origin = origen
+
+    @staticmethod
+    def CreateByNormalAndOrigin(normal, origen):
+        return Plane(normal, origen)
+
+
+class FamilyPlacementType(object):
+    OneLevelBased = _Enum("OneLevelBased")
+    OneLevelBasedHosted = _Enum("OneLevelBasedHosted")
+    TwoLevelsBased = _Enum("TwoLevelsBased")
+    ViewBased = _Enum("ViewBased")
+    WorkPlaneBased = _Enum("WorkPlaneBased")
+    CurveBased = _Enum("CurveBased")
+
+
+class GraphicsStyleType(object):
+    Projection = _Enum("Projection")
+    Cut = _Enum("Cut")
+
+
+class Structure(object):
+    class StructuralType(object):
+        NonStructural = _Enum("NonStructural")
+        Beam = _Enum("Beam")
+        Brace = _Enum("Brace")
+        Column = _Enum("Column")
+        Footing = _Enum("Footing")
+
+
+class Mechanical(object):
+    class DuctType(ElementType):
+        pass
+
+    class MechanicalSystemType(ElementType):
+        pass
+
+    class DuctSystemType(object):
+        SupplyAir = _Enum("SupplyAir")
+
+    class Duct(Element):
+        @staticmethod
+        def Create(doc, sistema_id, tipo_id, nivel_id, inicio, fin):
+            conducto = Mechanical.Duct()
+            conducto.sistema_id = sistema_id
+            conducto.Location = _UbicacionCurva(Line.CreateBound(inicio, fin))
+            return _registrar_creado(doc, conducto, u"Conductos", BuiltInCategory.OST_DuctCurves, tipo_id, nivel_id)
+
+
+class Plumbing(object):
+    class PipeType(ElementType):
+        pass
+
+    class PipingSystemType(ElementType):
+        pass
+
+    class PipeSystemType(object):
+        DomesticHotWater = _Enum("DomesticHotWater")
+
+    class Pipe(Element):
+        @staticmethod
+        def Create(doc, sistema_id, tipo_id, nivel_id, inicio, fin):
+            tuberia = Plumbing.Pipe()
+            tuberia.sistema_id = sistema_id
+            tuberia.Location = _UbicacionCurva(Line.CreateBound(inicio, fin))
+            return _registrar_creado(doc, tuberia, u"Tuberías", BuiltInCategory.OST_PipeCurves, tipo_id, nivel_id)
 
 
 class Toposolid(Element):
@@ -991,7 +1133,34 @@ class ElementTransformUtils(object):
 
     @staticmethod
     def CopyElement(doc, elem_id, delta):
-        return []
+        """Copia el elemento (mismo tipo, categoria y nivel) desplazado `delta`; devuelve [ElementId]."""
+        import copy as _copy
+
+        original = doc.GetElement(elem_id)
+        if original is None:
+            return []
+        copia = _copy.copy(original)
+        copia.Id = ElementId.InvalidElementId
+        copia.UniqueId = None
+        copia.Parameters = list(getattr(original, "Parameters", []))
+        doc.agregar(copia)
+        if hasattr(copia, "mover"):
+            copia.mover(delta)
+        elif getattr(copia, "caja", None) is not None:
+            copia.caja = BoundingBoxXYZ(copia.caja.Min.Add(delta), copia.caja.Max.Add(delta))
+        return [copia.Id]
+
+    @staticmethod
+    def RotateElement(doc, elem_id, eje, angulo):
+        elemento = doc.GetElement(elem_id)
+        if elemento is not None:
+            elemento.rotado = angulo
+
+    @staticmethod
+    def MirrorElement(doc, elem_id, plano):
+        elemento = doc.GetElement(elem_id)
+        if elemento is not None:
+            elemento.reflejado = plano
 
 
 class LabelUtils(object):

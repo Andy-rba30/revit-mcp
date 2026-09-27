@@ -5,6 +5,9 @@ Handles family placement, family loading and family/level listing.
 
 place_family y load_family pasan por escritura.ejecutar (copia, log,
 `simular`, transaccion "IA: ..." y verificacion de lo creado).
+
+0.4.0: planificar_colocacion / colocar_familia los reutiliza lotes.py
+(/create_elements/, kind family_instance).
 """
 
 from utils import (
@@ -78,6 +81,148 @@ def _muro_mas_cercano(doc, point):
     return host_wall
 
 
+# ---------------------------------------------------------------------------
+# Colocacion de familias: planificar (sin transaccion) y colocar (dentro de una)
+# ---------------------------------------------------------------------------
+def planificar_colocacion(doc, data):
+    """Valida {family_name, type_name, location, rotation, level_name, properties}.
+    Lanza EscrituraRechazada. Devuelve el plan con `haria`."""
+    family_name = data.get("family_name")
+    type_name = data.get("type_name")
+    location = data.get("location", {})
+    rotation = data.get("rotation", 0.0) or 0.0
+    level_name = data.get("level_name") or data.get("level")
+    properties = data.get("properties", {}) or {}
+
+    if not family_name:
+        raise EscrituraRechazada("No family_name provided", 400)
+    if not location or not all(k in location for k in ["x", "y", "z"]):
+        raise EscrituraRechazada("Invalid location - must include x, y, z coordinates", 400)
+
+    target_symbol = find_family_symbol_safely(doc, family_name, type_name)
+    if not target_symbol:
+        raise EscrituraRechazada(
+            "Family type not found: {} - {}".format(family_name, type_name or "Any"),
+            404,
+            {"available_families": _familias_disponibles(doc)},
+        )
+
+    target_level = None
+    if level_name:
+        target_level = mapa_niveles(doc).get(level_name)
+        if not target_level:
+            raise EscrituraRechazada("Level not found: {}".format(level_name), 404)
+
+    try:
+        point = xyz_desde_mm(location)
+    except ValueError as coord_error:
+        raise EscrituraRechazada("Invalid coordinates: {}".format(coord_error), 400)
+    try:
+        rotation = float(rotation)
+    except (TypeError, ValueError):
+        raise EscrituraRechazada("rotation must be a number (degrees)", 400)
+
+    needs_wall_host = _necesita_muro(target_symbol)
+    host_wall = _muro_mas_cercano(doc, point) if needs_wall_host else None
+    if needs_wall_host and host_wall is None:
+        raise EscrituraRechazada(
+            "Family '{}' must be hosted by a wall, but no wall was found near the requested "
+            "location. Create the host wall first.".format(family_name),
+            400,
+        )
+    haria = {
+        "accion": "colocar",
+        "family_name": get_element_name(target_symbol.Family),
+        "type_name": get_element_name(target_symbol),
+        "level": level_name,
+        "location_mm": punto_a_mm(point),
+        "rotation_degrees": rotation,
+        "host_wall_id": get_element_id_value(host_wall) if host_wall is not None else None,
+        "properties": properties,
+    }
+    return {"kind": "family_instance", "family_name": family_name, "type_name": type_name, "symbol": target_symbol,
+            "level": target_level, "level_name": level_name, "point": point, "rotation": rotation,
+            "host_wall": host_wall, "properties": properties, "haria": haria}
+
+
+def colocar_familia(doc, plan):
+    """NewFamilyInstance (con muro anfitrion y nivel si procede), giro y propiedades.
+
+    Devuelve (instancia, properties_set, properties_failed). Dentro de una transaccion."""
+    target_symbol = plan["symbol"]
+    point = plan["point"]
+    host_wall = plan["host_wall"]
+    target_level = plan["level"]
+    rotation = plan["rotation"]
+    properties_set = []
+    properties_failed = []
+    if not target_symbol.IsActive:
+        target_symbol.Activate()
+        doc.Regenerate()
+
+    if host_wall is not None:
+        if target_level:
+            new_instance = doc.Create.NewFamilyInstance(
+                point, target_symbol, host_wall, target_level,
+                DB.Structure.StructuralType.NonStructural,
+            )
+        else:
+            new_instance = doc.Create.NewFamilyInstance(
+                point, target_symbol, host_wall, DB.Structure.StructuralType.NonStructural
+            )
+    elif target_level:
+        new_instance = doc.Create.NewFamilyInstance(
+            point, target_symbol, target_level, DB.Structure.StructuralType.NonStructural
+        )
+    else:
+        new_instance = doc.Create.NewFamilyInstance(
+            point, target_symbol, DB.Structure.StructuralType.NonStructural
+        )
+
+    if rotation != 0:
+        try:
+            rotation_radians = rotation * (3.14159265359 / 180.0)
+            axis = DB.Line.CreateBound(point, point.Add(DB.XYZ(0, 0, 1)))
+            if hasattr(new_instance.Location, "Rotate"):
+                if not new_instance.Location.Rotate(axis, rotation_radians):
+                    properties_failed.append("rotation (element may not support rotation)")
+        except Exception as rotate_err:
+            properties_failed.append("rotation (error: {})".format(str(rotate_err)))
+
+    for param_name, param_value in plan["properties"].items():
+        try:
+            param = buscar_por_nombre(new_instance, param_name)
+            if param and not param.IsReadOnly:
+                if param.StorageType == DB.StorageType.String:
+                    param.Set(str(param_value))
+                elif param.StorageType == DB.StorageType.Integer:
+                    param.Set(int(param_value))
+                elif param.StorageType == DB.StorageType.Double:
+                    param.Set(float(param_value))
+                else:
+                    properties_failed.append("{} (unsupported type)".format(param_name))
+                    continue
+                properties_set.append(param_name)
+            elif param:
+                properties_failed.append("{} (read-only)".format(param_name))
+            else:
+                properties_failed.append("{} (not found)".format(param_name))
+        except Exception as param_error:
+            properties_failed.append("{} (error: {})".format(param_name, str(param_error)))
+    return new_instance, properties_set, properties_failed
+
+
+def describir_colocacion(new_instance, plan):
+    """requested_location, actual_location y desvio (mm) de la instancia colocada."""
+    try:
+        actual_coords = punto_a_mm(new_instance.Location.Point)
+    except Exception:
+        actual_coords = punto_a_mm(plan["point"])
+    requested = punto_a_mm(plan["point"])
+    desvio = max(abs(actual_coords[e] - requested[e]) for e in ("x", "y", "z"))
+    return requested, actual_coords, desvio
+
+
 def register_placement_routes(api):
     """Register all placement-related routes with the API"""
 
@@ -101,139 +246,26 @@ def register_placement_routes(api):
 
         def cuerpo(ctx):
             data = ctx["data"]
-            family_name = data.get("family_name")
-            type_name = data.get("type_name")
-            location = data.get("location", {})
-            rotation = data.get("rotation", 0.0) or 0.0
-            level_name = data.get("level_name")
-            properties = data.get("properties", {}) or {}
-
-            if not family_name:
-                raise EscrituraRechazada("No family_name provided", 400)
-            if not location or not all(k in location for k in ["x", "y", "z"]):
-                raise EscrituraRechazada("Invalid location - must include x, y, z coordinates", 400)
-
-            target_symbol = find_family_symbol_safely(doc, family_name, type_name)
-            if not target_symbol:
-                raise EscrituraRechazada(
-                    "Family type not found: {} - {}".format(family_name, type_name or "Any"),
-                    404,
-                    {"available_families": _familias_disponibles(doc)},
-                )
-
-            target_level = None
-            if level_name:
-                target_level = mapa_niveles(doc).get(level_name)
-                if not target_level:
-                    raise EscrituraRechazada("Level not found: {}".format(level_name), 404)
-
-            try:
-                point = xyz_desde_mm(location)
-            except ValueError as coord_error:
-                raise EscrituraRechazada("Invalid coordinates: {}".format(coord_error), 400)
-            try:
-                rotation = float(rotation)
-            except (TypeError, ValueError):
-                raise EscrituraRechazada("rotation must be a number (degrees)", 400)
-
-            needs_wall_host = _necesita_muro(target_symbol)
-            host_wall = _muro_mas_cercano(doc, point) if needs_wall_host else None
-            if needs_wall_host and host_wall is None:
-                raise EscrituraRechazada(
-                    "Family '{}' must be hosted by a wall, but no wall was found near the requested "
-                    "location. Create the host wall first.".format(family_name),
-                    400,
-                )
-
+            plan = planificar_colocacion(doc, data)
             if ctx["simular"]:
-                return simulacion([{
-                    "accion": "colocar",
-                    "family_name": get_element_name(target_symbol.Family),
-                    "type_name": get_element_name(target_symbol),
-                    "level": level_name,
-                    "location_mm": punto_a_mm(point),
-                    "rotation_degrees": rotation,
-                    "host_wall_id": get_element_id_value(host_wall) if host_wall is not None else None,
-                    "properties": properties,
-                }])
+                return simulacion([plan["haria"]])
 
-            properties_set = []
-            properties_failed = []
-            with transaccion(doc, "Colocar {}".format(family_name)):
-                if not target_symbol.IsActive:
-                    target_symbol.Activate()
-                    doc.Regenerate()
-
-                if host_wall is not None:
-                    if target_level:
-                        new_instance = doc.Create.NewFamilyInstance(
-                            point, target_symbol, host_wall, target_level,
-                            DB.Structure.StructuralType.NonStructural,
-                        )
-                    else:
-                        new_instance = doc.Create.NewFamilyInstance(
-                            point, target_symbol, host_wall, DB.Structure.StructuralType.NonStructural
-                        )
-                elif target_level:
-                    new_instance = doc.Create.NewFamilyInstance(
-                        point, target_symbol, target_level, DB.Structure.StructuralType.NonStructural
-                    )
-                else:
-                    new_instance = doc.Create.NewFamilyInstance(
-                        point, target_symbol, DB.Structure.StructuralType.NonStructural
-                    )
-
-                if rotation != 0:
-                    try:
-                        rotation_radians = rotation * (3.14159265359 / 180.0)
-                        axis = DB.Line.CreateBound(point, point.Add(DB.XYZ(0, 0, 1)))
-                        if hasattr(new_instance.Location, "Rotate"):
-                            if not new_instance.Location.Rotate(axis, rotation_radians):
-                                properties_failed.append("rotation (element may not support rotation)")
-                    except Exception as rotate_err:
-                        properties_failed.append("rotation (error: {})".format(str(rotate_err)))
-
-                for param_name, param_value in properties.items():
-                    try:
-                        param = buscar_por_nombre(new_instance, param_name)
-                        if param and not param.IsReadOnly:
-                            if param.StorageType == DB.StorageType.String:
-                                param.Set(str(param_value))
-                            elif param.StorageType == DB.StorageType.Integer:
-                                param.Set(int(param_value))
-                            elif param.StorageType == DB.StorageType.Double:
-                                param.Set(float(param_value))
-                            else:
-                                properties_failed.append("{} (unsupported type)".format(param_name))
-                                continue
-                            properties_set.append(param_name)
-                        elif param:
-                            properties_failed.append("{} (read-only)".format(param_name))
-                        else:
-                            properties_failed.append("{} (not found)".format(param_name))
-                    except Exception as param_error:
-                        properties_failed.append("{} (error: {})".format(param_name, str(param_error)))
-
+            with transaccion(doc, "Colocar {}".format(plan["family_name"])):
+                new_instance, properties_set, properties_failed = colocar_familia(doc, plan)
                 new_id = get_element_id_value(new_instance)
 
             # Verificacion: la instancia existe y donde quedo realmente
             resultado = resultado_creacion(doc, [new_id])
-            try:
-                actual_location = new_instance.Location.Point
-                actual_coords = punto_a_mm(actual_location)
-            except Exception:
-                actual_coords = punto_a_mm(point)
-            requested = punto_a_mm(point)
-            desvio = max(abs(actual_coords[e] - requested[e]) for e in ("x", "y", "z"))
+            requested, actual_coords, desvio = describir_colocacion(new_instance, plan)
             resultado.update({
                 "element_id": new_id,
-                "family_name": family_name,
-                "type_name": type_name,
+                "family_name": plan["family_name"],
+                "type_name": plan["type_name"],
                 "requested_location": requested,
                 "actual_location": actual_coords,
-                "rotation_degrees": rotation,
-                "level": level_name if target_level else None,
-                "host_wall_id": get_element_id_value(host_wall) if host_wall is not None else None,
+                "rotation_degrees": plan["rotation"],
+                "level": plan["level_name"] if plan["level"] else None,
+                "host_wall_id": get_element_id_value(plan["host_wall"]) if plan["host_wall"] is not None else None,
                 "properties_set": properties_set,
                 "properties_failed": properties_failed,
             })
