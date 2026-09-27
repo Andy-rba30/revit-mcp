@@ -27,6 +27,7 @@ import inspect
 import json
 import logging
 import os
+import time
 
 from pyrevit import routes
 
@@ -44,6 +45,25 @@ CARPETA_TOKEN = os.path.join(os.environ.get("LOCALAPPDATA", ""), "RevitMcp")
 RUTA_TOKEN = os.path.join(CARPETA_TOKEN, "token")
 
 MENSAJE_401 = u"token ausente o incorrecto"
+
+# Los rechazos se registran como WARNING (pyRevit abre su ventana de salida con
+# cada uno) solo la primera vez por ruta y despues una vez por minuto con el
+# recuento: un cliente que sondea /status/ con un token viejo mientras Revit
+# arranca generaba decenas de avisos seguidos. El resto va a DEBUG.
+INTERVALO_AVISO_401_S = 60.0
+_rechazos = {}
+
+
+def registrar_rechazo(ruta):
+    """Devuelve (avisar, rechazos_desde_el_ultimo_aviso) y actualiza el recuento."""
+    ahora = time.time()
+    ultimo, pendientes = _rechazos.get(ruta, (None, 0))
+    pendientes += 1
+    if ultimo is None or ahora - ultimo >= INTERVALO_AVISO_401_S:
+        _rechazos[ruta] = (ahora, 0)
+        return True, pendientes
+    _rechazos[ruta] = (ultimo, pendientes)
+    return False, pendientes
 
 # Token en memoria: se rellena desde startup.py para no leer el archivo en cada
 # peticion. Si aun no esta, token_actual() lo lee del archivo una sola vez.
@@ -151,10 +171,16 @@ def requiere_token(funcion):
     def _ejecutar(request, kwargs):
         recibido = _extraer_token(request)
         if not _tokens_iguales(recibido, token_actual()):
-            logger.warning(
-                u"Peticion rechazada (401) en %s: token ausente o incorrecto",
-                getattr(request, "path", "?"),
-            )
+            ruta = getattr(request, "path", "?")
+            avisar, cuantos = registrar_rechazo(ruta)
+            if avisar:
+                logger.warning(
+                    u"Peticion rechazada (401) en %s: token ausente o incorrecto (%d en el ultimo minuto; "
+                    u"si Revit acaba de arrancar, el cliente debe releer %%LOCALAPPDATA%%\\RevitMcp\\token)",
+                    ruta, cuantos,
+                )
+            else:
+                logger.debug(u"Peticion rechazada (401) en %s (%d sin avisar)", ruta, cuantos)
             return respuesta_401()
         return funcion(**kwargs)
 
