@@ -13,6 +13,11 @@ Rutas de solo lectura anadidas en la version 0.2.0:
   GET  /log/              ultimas lineas de mcp_log.jsonl
 
 Ninguna abre transaccion ni modifica el modelo.
+
+0.3.0: GET /warnings/?group_by=description agrupa las advertencias por
+FailureDefinitionId con recuento, ids y sugerencia (navegacion.agrupar_avisos),
+y POST /find_elements/ es un alias de POST /query/ (navegacion.consultar_elementos)
+que conserva sus campos de siempre.
 """
 
 from utils import get_element_name, get_element_id_value, make_element_id, punto_a_mm, FEET_TO_MM, buscar_por_nombre
@@ -339,8 +344,29 @@ def register_consulta_routes(api):
         try:
             if not doc:
                 return _sin_documento()
-            maximo = _entero(_query(request).get("max"), 100)
+            consulta = _query(request)
+            maximo = _entero(consulta.get("max"), 100)
+            group_by = _texto_seguro(consulta.get("group_by") or u"").strip().lower()
+            if group_by and group_by != "description":
+                return routes.make_response(
+                    data={"error": "group_by only supports 'description'"}, status=400
+                )
             avisos = list(doc.GetWarnings())
+            if group_by:
+                # 0.3.0: agrupadas por FailureDefinitionId (independiente del idioma)
+                # con recuento, ids y una sugerencia por tipo.
+                from navegacion import agrupar_avisos
+
+                grupos = agrupar_avisos(avisos)
+                return routes.make_response(data={
+                    "status": "success",
+                    "group_by": "description",
+                    "groups": grupos[:maximo],
+                    "count": min(len(grupos), maximo),
+                    "group_count": len(grupos),
+                    "total": len(avisos),
+                    "truncated": len(grupos) > maximo,
+                })
             lista = [_describir_aviso(a) for a in avisos[:maximo]]
             return routes.make_response(data={
                 "status": "success",
@@ -445,7 +471,11 @@ def register_consulta_routes(api):
     @api.route("/find_elements/", methods=["POST"])
     @requiere_token
     def find_elements(doc, request):
-        """Busca elementos por categoria, nombre, tipo, nivel y/o parametro."""
+        """Busca elementos por categoria, nombre, tipo, nivel y/o parametro.
+
+        Desde 0.3.0 es un alias de POST /query/ (navegacion.consultar_elementos)
+        y conserva sus campos: elements, ids, count, total_matched, scanned,
+        truncated y filters. `max` se limita a 500 (page_size de /query/)."""
         try:
             if not doc:
                 return _sin_documento()
@@ -464,75 +494,27 @@ def register_consulta_routes(api):
                     data={"error": "Give at least one filter: category, name_contains, type_name, level_name or parameter_name"},
                     status=400,
                 )
+            criterios = {
+                "category": category, "name_contains": name_contains, "type_name": type_name,
+                "level": level_name, "page": 1, "page_size": maximo, "ids_only": solo_ids,
+            }
+            if parameter_name:
+                criterios["filters"] = [{
+                    "parameter": parameter_name,
+                    "op": "=" if parameter_value is not None else "exists",
+                    "value": parameter_value,
+                }]
+            from navegacion import consultar_elementos
 
-            collector = DB.FilteredElementCollector(doc)
-            if category:
-                bic = _resolve_bic(category)
-                if bic is None:
-                    return routes.make_response(
-                        data={"error": "Invalid category '{}'. Use BuiltInCategory names like OST_Walls or aliases like 'walls', 'beams'".format(category)},
-                        status=400,
-                    )
-                collector = collector.OfCategory(bic)
-            collector = collector.WhereElementIsNotElementType()
-            if level_name and not category:
-                # Sin categoria, restringir a elementos con nivel para no recorrer todo
-                try:
-                    collector = collector.WherePasses(DB.ElementLevelFilter(_nivel_id(doc, level_name)))
-                except Exception:
-                    pass
-
-            valor_buscado = None
-            if parameter_name and parameter_value is not None:
-                valor_buscado = _texto_seguro(parameter_value).strip().lower()
-
-            encontrados = []
-            escaneados = 0
-            total = 0
-            for elem in collector:
-                escaneados += 1
-                try:
-                    if type_name or name_contains:
-                        tipo = _tipo_de(doc, elem)
-                        nombre_t = get_element_name(tipo) if tipo is not None else None
-                        nombre_e = get_element_name(elem)
-                        if type_name and nombre_t != type_name and nombre_e != type_name:
-                            continue
-                        if name_contains:
-                            textos = u" ".join([nombre_e or u"", nombre_t or u"", _nombre_familia(tipo) or u"" if tipo is not None else u""]).lower()
-                            if name_contains not in textos:
-                                continue
-                    if level_name and nombre_nivel(doc, elem) != level_name:
-                        continue
-                    if parameter_name:
-                        p = buscar_por_nombre(elem, parameter_name)
-                        if p is None:
-                            tipo = _tipo_de(doc, elem)
-                            p = buscar_por_nombre(tipo, parameter_name) if tipo is not None else None
-                        if p is None:
-                            continue
-                        if valor_buscado is not None:
-                            actual = _texto_seguro(valor_parametro(p, doc)).strip().lower()
-                            if actual != valor_buscado:
-                                continue
-                    total += 1
-                    if len(encontrados) >= maximo:
-                        continue
-                    if solo_ids:
-                        encontrados.append({"id": get_element_id_value(elem)})
-                    else:
-                        encontrados.append(describir_elemento(doc, elem))
-                except Exception:
-                    continue
-
+            resultado = consultar_elementos(doc, criterios)
             return routes.make_response(data={
                 "status": "success",
-                "elements": encontrados,
-                "ids": [e["id"] for e in encontrados],
-                "count": len(encontrados),
-                "total_matched": total,
-                "scanned": escaneados,
-                "truncated": total > len(encontrados),
+                "elements": resultado["elements"],
+                "ids": resultado["ids"],
+                "count": resultado["count"],
+                "total_matched": resultado["total_matched"],
+                "scanned": resultado["scanned"],
+                "truncated": resultado["truncated"],
                 "filters": {
                     "category": category, "name_contains": name_contains or None,
                     "type_name": type_name or None, "level_name": level_name or None,
@@ -541,7 +523,9 @@ def register_consulta_routes(api):
                 },
             })
         except EscrituraRechazada as rechazo:
-            return routes.make_response(data={"error": rechazo.mensaje}, status=rechazo.status)
+            cuerpo_error = {"error": rechazo.mensaje}
+            cuerpo_error.update(rechazo.extra)
+            return routes.make_response(data=cuerpo_error, status=rechazo.status)
         except Exception as e:
             return _respuesta_error(e)
 

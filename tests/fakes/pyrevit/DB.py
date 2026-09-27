@@ -1245,6 +1245,21 @@ class FilteredElementCollector(object):
         return iter(self._elementos())
 
 
+class WorksetId(object):
+    def __init__(self, valor):
+        self.IntegerValue = int(valor)
+        self.Value = int(valor)
+
+    def __eq__(self, otro):
+        return int(getattr(otro, "IntegerValue", otro)) == self.IntegerValue
+
+    def __ne__(self, otro):
+        return not self.__eq__(otro)
+
+    def __hash__(self):
+        return hash(self.IntegerValue)
+
+
 class FilteredWorksetCollector(object):
     def __init__(self, doc):
         self.doc = doc

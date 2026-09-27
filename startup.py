@@ -246,6 +246,10 @@ def register_routes():
 
         register_mantenimiento_routes(api)
 
+        from revit_mcp.navegacion import register_navegacion_routes
+
+        register_navegacion_routes(api)
+
         logger.info("All MCP routes registered successfully")
 
     except Exception as e:
