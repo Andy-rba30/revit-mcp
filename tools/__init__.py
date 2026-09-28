@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Registro de las herramientas MCP (0.4.0): 40 herramientas en cuatro modulos.
+"""Registro de las herramientas MCP (0.5.0): 52 herramientas en cuatro modulos.
 
-  lectura_tools        16 herramientas de lectura (estado, modelo, vistas, consulta,
-                       tipos, tablas, avisos, analisis, colisiones, instantaneas, log)
-  escritura_tools      19 herramientas de escritura (lotes, transformar, borrar,
+  lectura_tools        19 herramientas de lectura (estado, modelo, vistas, consulta,
+                       tipos, tablas, avisos, analisis, colisiones, instantaneas, log;
+                       0.5.0: perfiles de acero, cantidades de acero, estado analitico)
+  escritura_tools      28 herramientas de escritura (lotes, transformar, borrar,
                        tipos, uniones, subproyectos, coordenadas, vistas, planos,
                        tablas, anotar, colores, exportar, vincular, familias, MEP,
-                       mantenimiento)
+                       mantenimiento; 0.5.0: cargar perfiles, portico metalico,
+                       arriostres, cerchas, propiedades estructurales, conexiones,
+                       placas, dividir viga, alinear el modelo analitico)
   macro_tools           4 macros (rejilla y niveles, Civil 3D, macros propias)
   code_execution_tools  1 (execute_revit_code, ultimo recurso)
 
@@ -22,18 +25,22 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Las 40 herramientas de 0.4.0 (39 sin capture_view, que se mantiene aparte
-# porque devuelve una imagen y no un texto JSON).
+# Las 52 herramientas de 0.5.0: las 40 de 0.4.0 (39 sin capture_view, que se
+# mantiene aparte porque devuelve una imagen y no un texto JSON) mas las 12 de
+# la entrega 2b (estructuras metalicas y modelo analitico).
 HERRAMIENTAS = (
-    # lectura (16)
+    # lectura (16 + 2 de 0.5.0)
     "get_revit_status", "get_revit_model_info", "list_views", "describe_view", "capture_view",
     "query_elements", "describe_element", "dependency_graph", "list_types", "schedule_to_json",
     "list_warnings", "analyze_model", "check_clashes", "snapshot_model", "diff_snapshots", "read_log",
-    # escritura (19)
+    "list_steel_profiles", "steel_quantities", "analytical_status",
+    # escritura (19 + 8 de 0.5.0)
     "set_parameters", "create_elements", "transform_elements", "delete_elements",
     "change_element_type", "join_geometry", "set_workset", "set_project_location", "create_view",
     "set_active_view", "create_sheet_set", "create_schedule", "annotate", "color_elements", "export",
     "link_file", "load_family", "create_mep_system", "maintain_model",
+    "load_steel_profile", "create_steel_frame", "create_bracing", "create_truss", "set_structural_properties",
+    "create_steel_connection", "add_plate_or_stiffener", "split_beam", "fix_analytical_alignment",
     # macros (4)
     "create_grid_and_levels", "import_from_civil", "list_macros", "run_macro",
     # ultimo recurso (1)
@@ -169,7 +176,7 @@ def instalar_retiradas(mcp_server):
 
 
 def register_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func):
-    """Registra las 40 herramientas y la interceptacion de nombres retirados."""
+    """Registra las 52 herramientas y la interceptacion de nombres retirados."""
     from .lectura_tools import register_lectura_tools
     from .escritura_tools import register_escritura_tools
     from .macro_tools import register_macro_tools

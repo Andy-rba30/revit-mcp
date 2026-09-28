@@ -46,7 +46,19 @@ Con --fase cons se añaden (0.4.0, consolidación):
   cons.4  snapshot_model devuelve timings por etapa
   cons.5  una llamada al puente MCP con un nombre retirado (set_parameter) responde con
           el mensaje de sustitución (set_parameters)
-Las fases 2b y 2c se añadirán con sus entregas.
+Con --fase 2b se añaden (0.5.0, estructuras metálicas), sin nombres visibles en inglés:
+  2b.1  list_steel_profiles devuelve al menos un perfil de acero cargado o dice que no hay acero
+  2b.2  create_steel_frame(simular=true) sobre una rejilla 2x2 propia devuelve plan.counts.total
+        (8) y no crea nada
+  2b.3  create_steel_frame real crea 4 pilares y 4 vigas; analytical_status sobre ellos no reporta
+        nodos sueltos (o dice que no tienen modelo analítico); se borran al final
+  2b.4  set_structural_properties(start_release=pinned) sobre las 4 vigas y
+        describe_element(include_structural) lo refleja
+  2b.5  steel_quantities(group_by=type) devuelve peso > 0 para los perfiles creados o los lista en
+        sin_peso con motivo
+  Si el modelo no tiene perfiles de acero de pilar y de viga cargados, 2b.2 a 2b.5 se marcan
+  NO_APLICA con el motivo (no como fallo).
+La fase 2c se añadirá con su entrega.
 """
 import argparse
 import json
@@ -135,7 +147,8 @@ def main():
     parser.add_argument("--element-id", type=int, default=None, help="elemento para las pruebas 6 y 7 (por defecto, el primer muro)")
     parser.add_argument("--parameter", default="Comments", help="parámetro de texto editable (por defecto Comments)")
     parser.add_argument("--fase", choices=["2a", "2b", "2c", "cons"], default=None,
-                        help="añade las pruebas de esa entrega (2a: navegación y macros; cons: consolidación 0.4.0)")
+                        help="añade las pruebas de esa entrega (2a: navegación y macros; cons: consolidación 0.4.0; "
+                             "2b: estructuras metálicas 0.5.0)")
     args = parser.parse_args()
 
     resultados = []
@@ -322,6 +335,8 @@ def main():
         pruebas_2a(cliente, token, resultados)
     elif args.fase == "cons":
         pruebas_cons(cliente, token, resultados)
+    elif args.fase == "2b":
+        pruebas_2b(cliente, token, resultados)
     elif args.fase:
         print("=" * 70)
         print("Fase {}: sin pruebas todavía (entrega pendiente)".format(args.fase))
@@ -652,6 +667,170 @@ def pruebas_cons(cliente, token, resultados):
     except Exception as error:
         ok = resultado_manual("cons.5 nombre retirado en el puente", False, "   {}".format(error))
     resultados.append(ok)
+
+
+# ---------------------------------------------------------------------------
+# Entrega 2b (0.5.0): estructuras metálicas y modelo analítico
+# ---------------------------------------------------------------------------
+def _no_aplica(resultados, nombres, motivo):
+    """Marca las pruebas como NO_APLICA (cuentan como correctas) con el motivo."""
+    for nombre in nombres:
+        resultados.append(resultado_manual(nombre, True, "   NO_APLICA: {}".format(motivo)))
+
+
+def pruebas_2b(cliente, token, resultados):
+    marca = int(time.time()) % 10000
+    pendientes = ["2b.2 create_steel_frame simular=true", "2b.3 create_steel_frame real + analytical_status",
+                  "2b.4 set_structural_properties + describe_element(include_structural)", "2b.5 steel_quantities"]
+
+    # 2b.1 list_steel_profiles: al menos un perfil cargado, o dice que no hay acero
+    r = _post(cliente, "/steel_profiles/", token, {"loaded_only": True})
+    ok = mostrar("2b.1 POST /steel_profiles/ (perfiles de acero cargados)", 200, r, cuerpo_max=2500)
+    datos = _json(r)
+    perfiles = datos.get("loaded") if isinstance(datos.get("loaded"), list) else []
+    if ok:
+        ok = len(perfiles) > 0 or bool(datos.get("nota"))
+        print("   perfiles de acero cargados: {}{}".format(
+            len(perfiles), "" if perfiles else "; nota: {}".format(datos.get("nota"))))
+        if datos.get("no_disponibles"):
+            print("   BuiltInParameter no disponibles en esta version: {}".format(datos["no_disponibles"]))
+    resultados.append(ok)
+
+    pilares = [p for p in perfiles if p.get("category") == "OST_StructuralColumns"]
+    vigas = [p for p in perfiles if p.get("category") == "OST_StructuralFraming"]
+    if not pilares or not vigas:
+        _no_aplica(resultados, pendientes,
+                   "el modelo no tiene perfiles de acero cargados de pilar y de viga ({} pilares, {} vigas en "
+                   "list_steel_profiles); carga uno con load_steel_profile".format(len(pilares), len(vigas)))
+        return
+    tipo_pilar = u"{}: {}".format(pilares[0]["family"], pilares[0]["type"])
+    tipo_viga = u"{}: {}".format(vigas[0]["family"], vigas[0]["type"])
+    niveles = _json(cliente.get(REVIT + "/list_levels/", params={"token": token})).get("levels") or []
+    if not niveles:
+        _no_aplica(resultados, pendientes, "el modelo no tiene niveles")
+        return
+    nivel = niveles[0]["name"]
+
+    # rejilla 2x2 propia, lejos del modelo, para que el portico no dependa de las rejillas existentes
+    x_names = "MCP2B{}".format(marca)
+    y_names = "MCPY{}".format(marca)
+    r = _post(cliente, "/grid_levels/", token, {
+        "x_spacings_mm": [6000], "y_spacings_mm": [5000], "x_names": x_names, "y_names": y_names,
+        "origin_mm": {"x": 200000, "y": 200000, "z": 0}, "extension_mm": 1000})
+    rejillas = [g["name"] for g in (_json(r).get("grids") or [])]
+    ids_rejillas = [g["id"] for g in (_json(r).get("grids") or [])]
+    if r.status_code != 200 or len(rejillas) != 4:
+        print("=" * 70)
+        print("2b: no se pudo crear la rejilla auxiliar 2x2 ({}): {}".format(r.status_code, r.text[:400]))
+        _no_aplica(resultados, pendientes, "no se pudo crear la rejilla auxiliar 2x2 con /grid_levels/")
+        return
+    grids_x = [n for n in rejillas if n.startswith(x_names[:-len(str(marca))])]
+    grids_y = [n for n in rejillas if n.startswith(y_names[:-len(str(marca))])]
+    portico = {"grids_x": grids_x, "grids_y": grids_y, "levels": [nivel], "column_type": tipo_pilar,
+               "beam_type": tipo_viga, "mark_prefix": "MCP2B-"}
+    creados_ids = []
+    try:
+        # 2b.2 simulado: plan.counts.total y ningun elemento nuevo
+        pilares_antes, _ = _ids_query(cliente, token, "OST_StructuralColumns")
+        vigas_antes, _ = _ids_query(cliente, token, "OST_StructuralFraming")
+        r = _post(cliente, "/create_steel_frame/", token, dict(portico, simular=True))
+        ok = mostrar("2b.2 POST /create_steel_frame/ simular=true (2x2 rejillas, 1 nivel)", 200, r, cuerpo_max=2500)
+        datos = _json(r)
+        plan = datos.get("plan") or {}
+        if ok:
+            counts = plan.get("counts") or {}
+            ok = (datos.get("simulado") is True and "copia" not in datos and counts.get("total") == 8
+                  and counts.get("columns") == 4 and counts.get("beams") == 4)
+            if not ok:
+                print("   (se esperaba simulado=true, plan.counts {columns: 4, beams: 4, total: 8} y sin copia)")
+        if ok:
+            pilares_despues, _ = _ids_query(cliente, token, "OST_StructuralColumns")
+            vigas_despues, _ = _ids_query(cliente, token, "OST_StructuralFraming")
+            ok = pilares_despues == pilares_antes and vigas_despues == vigas_antes
+            print("   pilares {} -> {}, vigas {} -> {} [{}]".format(
+                len(pilares_antes), len(pilares_despues), len(vigas_antes), len(vigas_despues), "OK" if ok else "FALLO"))
+        resultados.append(ok)
+
+        # 2b.3 real: 4 pilares y 4 vigas; analytical_status sin nodos sueltos
+        r = _post(cliente, "/create_steel_frame/", token, portico)
+        ok = mostrar("2b.3a POST /create_steel_frame/ real", 200, r, cuerpo_max=2500)
+        datos = _json(r)
+        creados = datos.get("creados") or {}
+        columnas = creados.get("columns") or []
+        vigas_creadas = creados.get("beams") or []
+        creados_ids = list(datos.get("creados_ids") or [])
+        if ok:
+            ok = datos.get("ok") is True and len(columnas) == 4 and len(vigas_creadas) == 4
+            if not ok:
+                print("   (se esperaba ok=true con 4 pilares y 4 vigas)")
+            else:
+                print("   pilares: {} (nivel superior {}), vigas: {}, marcas: {}".format(
+                    [c["id"] for c in columnas], columnas[0].get("top_level"), [v["id"] for v in vigas_creadas],
+                    [c.get("mark") for c in columnas + vigas_creadas]))
+        if ok:
+            r = _post(cliente, "/analytical_status/", token, {"element_ids": creados_ids})
+            ok = mostrar("2b.3b POST /analytical_status/ de los 8 elementos", 200, r, cuerpo_max=2500)
+            estado = _json(r)
+            if ok:
+                ok = estado.get("loose_nodes_total") == 0
+                if estado.get("members", 0) == 0:
+                    print("   ningun elemento tiene modelo analitico asociado (sin_analitico = {}): "
+                          "Revit 2023+ no lo crea salvo con la automatizacion analitica activa".format(estado.get("sin_analitico")))
+                else:
+                    print("   miembros analiticos: {}, conectados: {}, nodos sueltos: {}".format(
+                        estado.get("members"), estado.get("connected_members"), estado.get("loose_nodes_total")))
+        resultados.append(ok)
+
+        # 2b.4 set_structural_properties(start_release=pinned) sobre las 4 vigas + describe include_structural
+        ids_vigas = [v["id"] for v in vigas_creadas]
+        if not ids_vigas:
+            resultados.append(resultado_manual("2b.4 set_structural_properties", False, "   sin vigas creadas en 2b.3"))
+        else:
+            r = _post(cliente, "/set_structural_properties/", token, {"element_ids": ids_vigas, "start_release": "pinned"})
+            ok = mostrar("2b.4a POST /set_structural_properties/ start_release=pinned ({} vigas)".format(len(ids_vigas)), 200, r, cuerpo_max=2500)
+            datos = _json(r)
+            if ok:
+                ok = datos.get("ok") is True and datos.get("count") == len(ids_vigas)
+                if datos.get("fallidos"):
+                    print("   fallidos: {}".format(datos["fallidos"]))
+                if datos.get("no_disponibles"):
+                    print("   no_disponibles: {}".format(datos["no_disponibles"]))
+                if not ok:
+                    print("   (se esperaba ok=true y count={})".format(len(ids_vigas)))
+            if ok:
+                r = _post(cliente, "/describe/", token, {"element_id": ids_vigas[0], "include_structural": True})
+                ok = mostrar("2b.4b POST /describe/ include_structural de la viga {}".format(ids_vigas[0]), 200, r, cuerpo_max=2500)
+                bloque = (_json(r).get("structural") or {})
+                inicio = (bloque.get("releases") or {}).get("start") or {}
+                if ok:
+                    ok = inicio.get("type") == "pinned"
+                    print("   liberacion inicial: {} (fuente {}) [{}]".format(inicio.get("type"), inicio.get("source"), "OK" if ok else "FALLO"))
+            resultados.append(ok)
+
+        # 2b.5 steel_quantities(group_by=type) sobre los creados
+        if not creados_ids:
+            resultados.append(resultado_manual("2b.5 steel_quantities", False, "   sin elementos creados en 2b.3"))
+        else:
+            r = _post(cliente, "/steel_quantities/", token, {"group_by": "type", "element_ids": creados_ids})
+            ok = mostrar("2b.5 POST /steel_quantities/ group_by=type", 200, r, cuerpo_max=2500)
+            datos = _json(r)
+            if ok:
+                grupos = datos.get("groups") or []
+                sin_peso = datos.get("sin_peso") or []
+                con_peso = [g for g in grupos if (g.get("weight_kg") or 0) > 0]
+                ok = (datos.get("totals") or {}).get("count") == len(creados_ids) and (
+                    (con_peso and not sin_peso) or all(s.get("motivo") for s in sin_peso))
+                print("   grupos: {}; con peso: {}; sin_peso: {} [{}]".format(
+                    [(g["group"], g["count"], g["weight_kg"]) for g in grupos], len(con_peso),
+                    [(s["element_id"], s.get("motivo")) for s in sin_peso], "OK" if ok else "FALLO"))
+            resultados.append(ok)
+    finally:
+        if creados_ids:
+            r = _post(cliente, "/delete_elements/", token, {"element_ids": creados_ids})
+            print("   limpieza: {} pilares y vigas borrados -> {}".format(len(creados_ids), r.status_code))
+        if ids_rejillas:
+            r = _post(cliente, "/delete_elements/", token, {"element_ids": ids_rejillas})
+            print("   limpieza: rejillas auxiliares {} borradas -> {}".format(rejillas, r.status_code))
 
 
 if __name__ == "__main__":

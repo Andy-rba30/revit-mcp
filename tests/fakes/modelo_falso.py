@@ -94,6 +94,10 @@ class Parametro(object):
         if self.IsReadOnly:
             return False
         self._valor = valor
+        # 0.5.0: como en Revit, el texto visible de una longitud refleja el valor nuevo
+        if self.StorageType is DB.StorageType.Double and self.Definition._spec is SpecTypeId.Length and valor is not None:
+            mm = float(valor) / MM_TO_FEET
+            self._visible = u"{} mm".format(int(round(mm)) if abs(mm - round(mm)) < 1e-6 else round(mm, 2))
         return True
 
 
@@ -449,6 +453,15 @@ class _Fabricas(object):
 
     def NewFamilyInstance(self, *args):
         self.llamadas.append(("NewFamilyInstance", args))
+        if isinstance(args[0], DB.Reference):
+            # 0.5.0: familia alojada en cara: (Reference, XYZ, XYZ refDir, FamilySymbol)
+            referencia, punto, direccion, symbol = args[0], args[1], args[2], args[3]
+            instancia = Instancia(self.doc, symbol)
+            instancia.Location = Ubicacion(punto=punto)
+            instancia.referencia_cara = referencia
+            instancia.direccion = direccion
+            instancia.Host = self.doc.GetElement(referencia.ElementId)
+            return instancia
         geometria, symbol = args[0], args[1]
         resto = list(args[2:])
         instancia = Instancia(self.doc, symbol)
@@ -461,6 +474,8 @@ class _Fabricas(object):
                 instancia.LevelId = extra.Id
             elif isinstance(extra, DB.Wall):
                 instancia.Host = extra
+            elif isinstance(extra, DB._Enum):
+                instancia.structural_type = extra
         return instancia
 
     def NewFootPrintRoof(self, curvas, nivel, tipo, ref_curvas):
@@ -501,11 +516,103 @@ class _Fabricas(object):
         return linea
 
 
+class Aplicacion(object):
+    """doc.Application: rutas de biblioteca de familias (0.5.0, list_steel_profiles)."""
+
+    def __init__(self):
+        self.bibliotecas = {}
+        self.Language = "Spanish"
+        self.VersionNumber = "2027"
+
+    def GetLibraryPaths(self):
+        return dict(self.bibliotecas)
+
+
+class Material(Elemento, DB.Material):
+    def __init__(self, doc, identificador, nombre, activo_id=None, **kw):
+        kw.setdefault("categoria", u"Materiales")
+        kw.setdefault("bic", DB.BuiltInCategory.OST_Materials)
+        Elemento.__init__(self, doc, identificador, nombre=nombre, **kw)
+        self.StructuralAssetId = DB.ElementId(activo_id) if activo_id is not None else DB.ElementId.InvalidElementId
+
+
+class ActivoEstructural(Elemento, DB.PropertySetElement):
+    """PropertySetElement con un StructuralAsset (densidad en kg/m3 y clase)."""
+
+    def __init__(self, doc, identificador, nombre, densidad_kg_m3, clase=None, **kw):
+        kw.setdefault("categoria", None)
+        Elemento.__init__(self, doc, identificador, nombre=nombre, **kw)
+        self.activo = DB.StructuralAsset(densidad_kg_m3, clase if clase is not None else DB.StructuralAssetClass.Metal)
+
+
+class MiembroAnalitico(Elemento, DB.Structure.AnalyticalMember):
+    """AnalyticalMember asociado a un elemento fisico (doc.asociar los enlaza)."""
+
+    def __init__(self, doc, identificador, inicio_mm, fin_mm, **kw):
+        kw.setdefault("categoria", u"Miembros analíticos")
+        kw.setdefault("categoria_tipo", DB.CategoryType.AnalyticalModel)
+        DB.Structure.AnalyticalMember.__init__(self)
+        Elemento.__init__(self, doc, identificador, **kw)
+        self.curva = DB.Line.CreateBound(
+            DB.XYZ(inicio_mm[0] * MM_TO_FEET, inicio_mm[1] * MM_TO_FEET, inicio_mm[2] * MM_TO_FEET),
+            DB.XYZ(fin_mm[0] * MM_TO_FEET, fin_mm[1] * MM_TO_FEET, fin_mm[2] * MM_TO_FEET),
+        )
+
+
+class TipoCercha(Elemento, DB.Structure.TrussType):
+    def __init__(self, doc, identificador, nombre, **kw):
+        kw.setdefault("categoria", u"Cerchas estructurales")
+        kw.setdefault("bic", DB.BuiltInCategory.OST_StructuralTruss)
+        Elemento.__init__(self, doc, identificador, nombre=nombre, **kw)
+        self.FamilyName = u"Cercha"
+
+
+def instalar_conexiones(monkeypatch):
+    """Anade a DB.Structure las clases del modulo de conexiones de acero (simulado).
+
+    Sin llamarla, DB.Structure no tiene StructuralConnectionHandler y las rutas de
+    conexiones responden 409 no_soportado, como en un Revit sin el modulo."""
+
+    class StructuralConnectionHandlerType(DB.ElementType):
+        @staticmethod
+        def GetDefaultConnectionHandlerType(doc):
+            for elemento in doc.elementos.values():
+                if isinstance(elemento, StructuralConnectionHandlerType):
+                    return elemento
+            return None
+
+    class StructuralConnectionApprovalType(DB.ElementType):
+        @staticmethod
+        def GetAllStructuralConnectionApprovalTypes(doc):
+            return [e.Id for e in doc.elementos.values() if isinstance(e, StructuralConnectionApprovalType)]
+
+    class StructuralConnectionHandler(DB.Element):
+        ApprovalStatus = DB.ElementId.InvalidElementId
+
+        @staticmethod
+        def Create(doc, ids, tipo_id):
+            if len(ids) < 1:
+                raise Exception("Revit: a connection needs at least one element")
+            conexion = StructuralConnectionHandler()
+            conexion.conectados = [i for i in ids]
+            return DB._registrar_creado(doc, conexion, u"Conexiones estructurales",
+                                        DB.BuiltInCategory.OST_StructConnections, tipo_id)
+
+        def GetConnectedElementIds(self):
+            return list(self.conectados)
+
+    monkeypatch.setattr(DB.Structure, "StructuralConnectionHandlerType", StructuralConnectionHandlerType, raising=False)
+    monkeypatch.setattr(DB.Structure, "StructuralConnectionApprovalType", StructuralConnectionApprovalType, raising=False)
+    monkeypatch.setattr(DB.Structure, "StructuralConnectionHandler", StructuralConnectionHandler, raising=False)
+    return StructuralConnectionHandlerType, StructuralConnectionApprovalType, StructuralConnectionHandler
+
+
 class Doc(object):
     """Documento simulado. `ruta` vacia = sin guardar (log y snapshots en %LOCALAPPDATA%)."""
 
     def __init__(self, ruta="", titulo=u"Modelo"):
         self.Create = _Fabricas(self)
+        self.Application = Aplicacion()
         self.PathName = ruta
         self.Title = titulo
         self.IsWorkshared = False
@@ -523,7 +630,81 @@ class Doc(object):
         self.vinculados = []
         self.coordenadas_adquiridas = []
         self.regeneraciones = 0
+        # 0.5.0: asociaciones fisico <-> analitico, familias que LoadFamily puede cargar y exportaciones
+        self.asociaciones = {}
+        self.familias_cargables = {}
+        self.cargas = []
+        self.exportaciones = []
         self._siguiente_id = 900000
+
+    # --- 0.5.0: modelo analitico, familias y exportacion -----------------
+    def asociar(self, fisico, analitico):
+        """Enlaza un elemento fisico con su miembro analitico (en los dos sentidos)."""
+        self.asociaciones[fisico.Id.Value] = analitico.Id.Value
+        self.asociaciones[analitico.Id.Value] = fisico.Id.Value
+
+    def _familia_por_nombre(self, nombre):
+        for elemento in self.elementos.values():
+            if isinstance(elemento, DB.Family) and elemento.Name == nombre:
+                return elemento
+        return None
+
+    def _cargar(self, ruta, tipos):
+        """Crea (o completa) la familia descrita en familias_cargables[ruta]. Devuelve (nueva, familia, simbolos)."""
+        if not self.IsModifiable:
+            raise Exception("Revit: Attempt to modify the model outside of transaction")
+        descripcion = self.familias_cargables.get(ruta)
+        if descripcion is None:
+            raise Exception("Revit: family file could not be loaded: {}".format(ruta))
+        nombre, categoria, bic = descripcion["nombre"], descripcion["categoria"], descripcion["bic"]
+        familia = self._familia_por_nombre(nombre)
+        nueva = familia is None
+        if nueva:
+            familia = Familia(None, 0, nombre=nombre, categoria=categoria, bic=bic)
+            familia.StructuralMaterialType = descripcion.get("material", DB.Structure.StructuralMaterialType.Steel)
+            self.agregar(familia)
+        simbolos = []
+        for tipo in tipos:
+            existente = [e for e in self.elementos.values()
+                         if isinstance(e, DB.FamilySymbol) and getattr(e, "Family", None) is familia and e.Name == tipo]
+            if existente:
+                simbolos.append((False, existente[0]))
+                continue
+            simbolo = TipoFamilia(None, 0, familia=familia, nombre=tipo, categoria=categoria, bic=bic)
+            simbolo.IsActive = False
+            self.agregar(simbolo)
+            simbolos.append((True, simbolo))
+        self.cargas.append((ruta, list(tipos)))
+        return nueva, familia, simbolos
+
+    def LoadFamily(self, ruta, referencia=None):
+        """LoadFamily(ruta, out Family): False si la familia ya estaba cargada (como en Revit)."""
+        descripcion = self.familias_cargables.get(ruta) or {}
+        nueva, familia, _ = self._cargar(ruta, descripcion.get("tipos", []))
+        if referencia is not None:
+            referencia.Value = familia
+            return nueva
+        return nueva, familia
+
+    def LoadFamilySymbol(self, ruta, nombre_tipo, referencia=None):
+        """LoadFamilySymbol(ruta, tipo, out symbol): carga un tipo del catalogo."""
+        descripcion = self.familias_cargables.get(ruta) or {}
+        if nombre_tipo not in descripcion.get("catalogo", descripcion.get("tipos", [])):
+            raise Exception("Revit: type '{}' not found in the type catalog".format(nombre_tipo))
+        _, _, simbolos = self._cargar(ruta, [nombre_tipo])
+        nuevo, simbolo = simbolos[0]
+        if referencia is not None:
+            referencia.Value = simbolo
+        return nuevo
+
+    def Export(self, carpeta, nombre, opciones):
+        import os
+
+        ruta = os.path.join(carpeta, nombre if nombre.lower().endswith(".ifc") else nombre + ".ifc")
+        with open(ruta, "wb") as archivo:
+            archivo.write(b"ISO-10303-21;\n")
+        self.exportaciones.append((ruta, opciones))
+        return True
 
     # --- elementos -----------------------------------------------------
     def GetElement(self, elem_id):

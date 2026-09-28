@@ -266,6 +266,14 @@ def register_routes():
 
         register_macros_usuario_routes(api)
 
+        from revit_mcp.acero import register_acero_routes
+
+        register_acero_routes(api)
+
+        from revit_mcp.analitico import register_analitico_routes
+
+        register_analitico_routes(api)
+
         logger.info("All MCP routes registered successfully")
 
     except Exception as e:

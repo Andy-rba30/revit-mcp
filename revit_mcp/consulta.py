@@ -619,6 +619,11 @@ def register_consulta_routes(api):
             maximo = _entero(data.get("max"), 200)
             if not category:
                 return routes.make_response(data={"error": "category is required"}, status=400)
+            if _texto_seguro(category).strip().lower() in ("connections", "conexiones", "steel_connections", "connection"):
+                # 0.5.0: tipos de conexion de acero (StructuralConnectionHandlerType); 409 no_soportado sin el modulo
+                from acero import tipos_conexion
+
+                return routes.make_response(data=tipos_conexion(doc, data))
             bic = _resolve_bic(category)
             if bic is None:
                 return routes.make_response(
@@ -681,7 +686,9 @@ def register_consulta_routes(api):
                 "truncated": total > len(tipos),
             })
         except EscrituraRechazada as rechazo:
-            return routes.make_response(data={"error": rechazo.mensaje}, status=rechazo.status)
+            cuerpo_error = {"error": rechazo.mensaje}
+            cuerpo_error.update(rechazo.extra)
+            return routes.make_response(data=cuerpo_error, status=rechazo.status)
         except Exception as e:
             return _respuesta_error(e)
 

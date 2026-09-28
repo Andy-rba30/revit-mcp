@@ -94,11 +94,11 @@ def servidor():
 # ---------------------------------------------------------------------------
 # Registro y nombres retirados
 # ---------------------------------------------------------------------------
-def test_se_registran_las_40_y_ninguna_retirada(servidor):
+def test_se_registran_todas_y_ninguna_retirada(servidor):
     mcp, _ = servidor
     nombres = sorted(t.name for t in mcp._tool_manager.list_tools())
     assert nombres == sorted(HERRAMIENTAS)
-    assert len(HERRAMIENTAS) == 40
+    assert len(HERRAMIENTAS) == 52
     assert not set(nombres) & set(HERRAMIENTAS_RETIRADAS)
     assert len(HERRAMIENTAS_RETIRADAS) == 51
     # cada sustituta empieza por una herramienta registrada
@@ -359,6 +359,14 @@ def test_export_formatos(tmp_path):
     with io.open(ruta, encoding="utf-8") as archivo:
         assert u"Baño,102," in archivo.read()
     assert "not supported" in _llamar(f, "export", format="xls")
+    # 0.5.0: exportacion estructural
+    puente.respuestas["/export_structural/"] = lambda d: {"data": d}
+    assert "file_path is required" in _llamar(f, "export", format="csv_nodes_members")
+    datos = _llamar(f, "export", format="csv_nodes_members", file_path="C:\\m.csv", element_ids=[1, 2])
+    assert puente.rutas()[-1] == "/export_structural/" and datos["data"] == {"format": "csv_nodes_members", "file_path": "C:\\m.csv",
+                                                                             "ifc_version": "IFC2x3", "element_ids": [1, 2]}
+    datos = _llamar(f, "export", format="IFC_structural", file_path="C:\\m.ifc", ifc_version="IFC4", view_name="3D")
+    assert datos["data"]["format"] == "ifc_structural" and datos["data"]["view_name"] == "3D" and puente.llamadas[-1][3] == 600.0
 
 
 def test_macros_de_usuario_y_codigo():
@@ -381,3 +389,83 @@ def test_set_project_location_acepta_forzar_y_snapshot_include_bbox():
     assert datos["data"] == {"simular": False, "forzar": True, "true_north_deg": 1.5}
     datos = _llamar(f, "snapshot_model", name="a", include_bbox=False)
     assert datos["data"]["include_bbox"] is False and datos["data"]["include_parameters"] is True
+
+
+# ---------------------------------------------------------------------------
+# 0.5.0 (entrega 2b): estructuras metalicas
+# ---------------------------------------------------------------------------
+def test_describe_element_include_structural_y_list_types_connections():
+    puente = Puente({"/describe/": lambda d: {"data": d}, "/element_types/": lambda d: {"types": [], "count": 0, "category": d["category"]},
+                     "/list_category_parameters/": {"parameters": []}})
+    f = _herramientas(puente)
+    datos = _llamar(f, "describe_element", element_id=10, include_structural=True)
+    assert datos["data"]["include_structural"] is True
+    datos = _llamar(f, "describe_element", element_id=10)
+    assert "include_structural" not in datos["data"]
+    puente.llamadas = []
+    datos = _llamar(f, "list_types", category="connections", with_parameters=True)
+    # con connections no se piden los parametros de categoria (no hay BuiltInCategory)
+    assert puente.rutas() == ["/element_types/"] and datos["category"] == "connections"
+    puente.llamadas = []
+    _llamar(f, "list_types", category="OST_Walls", with_parameters=True)
+    assert puente.rutas() == ["/element_types/", "/list_category_parameters/"]
+
+
+def test_list_steel_profiles_y_steel_quantities():
+    puente = Puente({"/steel_profiles/": lambda d: {"data": d}, "/steel_quantities/": lambda d: {"data": d}})
+    f = _herramientas(puente)
+    datos = _llamar(f, "list_steel_profiles")
+    assert datos["data"] == {"standard": "todos", "loaded_only": True} and puente.llamadas[-1][3] == 30.0
+    datos = _llamar(f, "list_steel_profiles", standard="EN", shape="W", loaded_only=False)
+    assert datos["data"] == {"standard": "EN", "loaded_only": False, "shape": "W"} and puente.llamadas[-1][3] == 600.0
+    assert "not supported" in _llamar(f, "list_steel_profiles", standard="DIN")
+    assert "not supported" in _llamar(f, "list_steel_profiles", shape="Z")
+    datos = _llamar(f, "steel_quantities", group_by="level", element_ids=[1, 2])
+    assert datos["data"] == {"group_by": "level", "max": 2000, "element_ids": [1, 2]}
+    datos = _llamar(f, "steel_quantities")
+    assert datos["data"] == {"group_by": "type", "max": 2000}
+    assert "not supported" in _llamar(f, "steel_quantities", group_by="peso")
+
+
+def test_herramientas_de_escritura_de_acero_despachan():
+    rutas = ["/load_steel_profile/", "/create_steel_frame/", "/create_bracing/", "/create_truss/",
+             "/set_structural_properties/", "/create_steel_connection/", "/add_plate/", "/split_beam/", "/join_geometry/"]
+    puente = Puente(dict((ruta, (lambda d: {"data": d})) for ruta in rutas))
+    f = _herramientas(puente)
+    datos = _llamar(f, "load_steel_profile", family_name="W-Wide Flange", type_names=["W12X26"])
+    assert datos["data"] == {"overwrite": False, "simular": False, "family_name": "W-Wide Flange", "type_names": ["W12X26"]}
+    assert puente.llamadas[-1][3] == 600.0
+    assert "required" in _llamar(f, "load_steel_profile")
+    datos = _llamar(f, "create_steel_frame", column_type="HEB300", beam_type="IPE300", levels=["Nivel 1"], mark_prefix="P", simular=True)
+    assert datos["data"]["levels"] == ["Nivel 1"] and datos["data"]["mark_prefix"] == "P" and datos["data"]["beam_directions"] == "both"
+    assert "grids_x" not in datos["data"] and puente.llamadas[-1][3] == 600.0
+    datos = _llamar(f, "create_bracing", bays=[{"pattern": "X"}], brace_type="L")
+    assert datos["data"] == {"bays": [{"pattern": "X"}], "brace_type": "L", "simular": False, "forzar": False}
+    datos = _llamar(f, "create_truss", trusses=[{"truss_type": "T"}])
+    assert datos["data"]["trusses"] == [{"truss_type": "T"}] and puente.llamadas[-1][3] == 120.0
+    datos = _llamar(f, "set_structural_properties", element_ids=[1, 2], start_release="pinned", end_release={"FX": True}, y_offset_mm=50)
+    assert datos["data"] == {"element_ids": [1, 2], "simular": False, "forzar": False, "start_release": "pinned",
+                             "end_release": {"FX": True}, "y_offset_mm": 50}
+    datos = _llamar(f, "create_steel_connection", connections=[{"element_ids": [1, 2], "connection_type": "x"}], approve=True, approval_status="Aprobada")
+    assert datos["data"]["approve"] is True and datos["data"]["approval_status"] == "Aprobada"
+    datos = _llamar(f, "add_plate_or_stiffener", host_id=1, family_name="R", type_name="PL10", positions=[0.5], face="web")
+    assert datos["data"] == {"host_id": 1, "family_name": "R", "type_name": "PL10", "face": "web", "simular": False, "positions": [0.5]}
+    datos = _llamar(f, "split_beam", element_id=1, at_mm=[2000])
+    assert datos["data"] == {"element_id": 1, "at_mm": [2000], "simular": False}
+    datos = _llamar(f, "join_geometry", element_ids=[1, 2, 3], coping=True)
+    assert datos["data"] == {"element_ids": [1, 2, 3], "unjoin": False, "coping": True, "simular": False, "forzar": False}
+    datos = _llamar(f, "join_geometry", element_id_a=1, element_id_b=2)
+    assert datos["data"] == {"element_id_a": 1, "element_id_b": 2, "unjoin": False, "simular": False}
+    assert "required" in _llamar(f, "join_geometry", element_id_a=1)
+
+
+def test_analytical_status_y_fix_analytical_alignment():
+    puente = Puente({"/analytical_status/": lambda d: {"data": d}, "/fix_analytical/": lambda d: {"data": d}})
+    f = _herramientas(puente)
+    datos = _llamar(f, "analytical_status")
+    assert datos["data"] == {"tolerance_mm": 10, "max": 500} and puente.llamadas[-1][3] == 30.0
+    datos = _llamar(f, "analytical_status", element_ids=[1, 2], tolerance_mm=25)
+    assert datos["data"] == {"tolerance_mm": 25, "max": 500, "element_ids": [1, 2]}
+    datos = _llamar(f, "fix_analytical_alignment", element_ids=[1], simular=True)
+    assert datos["data"] == {"element_ids": [1], "tolerance_mm": 50, "simular": True, "forzar": False}
+    assert puente.llamadas[-1][3] == 600.0

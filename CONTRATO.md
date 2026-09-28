@@ -3,7 +3,7 @@
 Este documento describe el servidor HTTP que la extensión de pyRevit levanta
 dentro de Revit, cómo se protege, cómo escribe en el modelo y qué rutas
 expone. Es la referencia para el puente `main.py` y para cualquier cliente que
-quiera hablar con Revit directamente. Versión del conector: **0.4.0**.
+quiera hablar con Revit directamente. Versión del conector: **0.5.0**.
 
 ## El servidor
 
@@ -14,7 +14,7 @@ quiera hablar con Revit directamente. Versión del conector: **0.4.0**.
 | Prefijo de las rutas | `http://127.0.0.1:48884/revit_mcp/...` |
 | Motor | IronPython 2.7 (los manejadores viven en `revit_mcp/`) |
 | Puente MCP | `main.py` (CPython 3.11+, SDK mcp 2.2) en `http://127.0.0.1:8000` |
-| Herramientas MCP | **40** (16 de lectura, 19 de escritura con `simular`, 4 macros, `execute_revit_code`); 0.4.0 consolida las 78 de 0.3.x en 40 sin cambiar las rutas HTTP, añade los lotes `/set_parameters/` y `/create_elements/` (una transacción por llamada) y las macros propias del usuario (`/macros/`, `/macros/run/`) |
+| Herramientas MCP | **52** (19 de lectura, 28 de escritura con `simular`, 4 macros, `execute_revit_code`); 0.4.0 consolida las 78 de 0.3.x en 40 sin cambiar las rutas HTTP, añade los lotes `/set_parameters/` y `/create_elements/` (una transacción por llamada) y las macros propias del usuario (`/macros/`, `/macros/run/`); 0.5.0 (entrega 2b) añade 12 herramientas de estructuras metálicas y modelo analítico (`revit_mcp/acero.py`, `revit_mcp/analitico.py`) y amplía `describe_element`, `list_types`, `join_geometry` y `export` |
 
 El servidor debe usarse **solo desde loopback**. pyRevit Routes escucha en
 todas las interfaces, así que el usuario aplica a mano esta regla de firewall
@@ -28,7 +28,7 @@ netsh advfirewall firewall add rule name="Block pyRevit Routes" dir=in action=bl
 La regla bloquea el tráfico entrante desde la red; las conexiones locales
 (`127.0.0.1`) del puente y de las pruebas siguen funcionando.
 
-## Herramientas MCP (0.4.0)
+## Herramientas MCP (0.5.0)
 
 La consolidación ocurre en el puente (`tools/`): cada herramienta que queda
 despacha a las rutas HTTP de 0.3.x (que siguen todas existiendo) o a las tres
@@ -41,6 +41,19 @@ dice por qué herramienta sustituirlo (`tools.HERRAMIENTAS_RETIRADAS`;
 porque el SDK no permite ocultar herramientas de `tools/list` y 51 entradas
 más en contexto es justo lo que se elimina).
 
+La entrega 2b (0.5.0) añade 12 herramientas (las 15 del bloque B original de
+`herramientas-dev/PROMPT_FASE2.md` menos las 3 absorbidas por ampliaciones:
+`get_structural_properties` → `describe_element(include_structural)`,
+`join_steel_elements` → `join_geometry(element_ids, coping)`,
+`export_structural_model` → `export(format="ifc_structural" | "csv_nodes_members")`;
+y `list_connection_types` → `list_types(category="connections")`). Ninguna de
+esas cuatro existió como herramienta MCP, así que no están en
+`HERRAMIENTAS_RETIRADAS`. Toda herramienta nueva de escritura que pueda tocar
+varios elementos es un **lote**: recibe una lista, valida todo antes de abrir la
+transacción, aplica en una sola transacción y responde con `fallidos[]` sin
+abortar por un elemento; `create_steel_frame` es una **macro** (valida, `plan`
+con `simular`, una transacción, `creados` agrupado).
+
 | Herramienta | Sustituye a | Ruta(s) HTTP | Cómo |
 |---|---|---|---|
 | `get_revit_status` | — | `GET /status/` | igual |
@@ -49,9 +62,9 @@ más en contexto es justo lo que se elimina).
 | `describe_view` | `get_view_extents`, `get_current_view_info` | `POST /view_extents/` (+ `GET /current_view_info/` sin `view_id`) | `view_id` opcional (activa) |
 | `capture_view` | `get_revit_view` | `GET /get_view/<view_name>` | devuelve la imagen PNG (por eso se mantiene aparte: 40 herramientas, 39 sin ella) |
 | `query_elements` | `find_elements`, `get_current_view_elements`, `ai_element_filter`, `get_selected_elements` | `POST /query/`, `GET /current_view_info/` (`current_view`), `GET /selected_elements/` (`selected`) | `current_view=true` resuelve la vista activa; `selected=true` devuelve la selección; `ai_element_filter` se traduce a `filters` (INSTRUCCIONES_AGENTE 2c) |
-| `describe_element` | `get_element_properties`, `get_element_geometry` | `POST /describe/` (una por id) | `element_ids[]` hasta 20, respuesta por id; `include_geometry` |
+| `describe_element` | `get_element_properties`, `get_element_geometry`; 0.5.0: `get_structural_properties` (bloque B original) | `POST /describe/` (una por id) | `element_ids[]` hasta 20, respuesta por id; `include_geometry`; `include_structural` (0.5.0) añade el bloque `structural` |
 | `dependency_graph` | — | `POST /dependency_graph/` | igual |
-| `list_types` | `list_element_types`, `list_families`, `list_family_categories`, `list_category_parameters` | `POST /element_types/`, `GET /list_families/`, `GET /list_family_categories/`, `POST /list_category_parameters/` | `category` → tipos; solo `family`/`contains` → familias; nada → categorías; `with_parameters`; `loaded_only` (tipos con ejemplares o `is_active`) |
+| `list_types` | `list_element_types`, `list_families`, `list_family_categories`, `list_category_parameters`; 0.5.0: `list_connection_types` (bloque B original) | `POST /element_types/`, `GET /list_families/`, `GET /list_family_categories/`, `POST /list_category_parameters/` | `category` → tipos; solo `family`/`contains` → familias; nada → categorías; `with_parameters`; `loaded_only` (tipos con ejemplares o `is_active`); `category="connections"` (0.5.0) → tipos de conexión de acero (`StructuralConnectionHandlerType`) y `approval_types`, `409` `no_soportado` sin el módulo |
 | `schedule_to_json` | — | `POST /schedule/` | igual |
 | `list_warnings` | — | `GET /warnings/` | igual (`group_by`) |
 | `set_parameters` | `set_parameter`, `set_type_parameter`, `modify_element` | **`POST /set_parameters/`** (nueva) | lote en una transacción; `type_parameters=true` acepta en `element_ids` el id del ejemplar o directamente el del tipo (como `set_type_parameter(type_id)`) |
@@ -59,7 +72,7 @@ más en contexto es justo lo que se elimina).
 | `transform_elements` | — | `POST /transform_elements/` | igual + `operation="array"` con `count` (0.4.0) |
 | `delete_elements` | — | `POST /delete_elements/` | igual |
 | `change_element_type` | — | `POST /change_type/` | igual, `element_ids[]` |
-| `join_geometry` | — | `POST /join_geometry/` | igual |
+| `join_geometry` | 0.5.0: `join_steel_elements` (bloque B original) | `POST /join_geometry/` | igual con `element_id_a`/`element_id_b`; 0.5.0: `element_ids[]` (cadena, parejas consecutivas) y `coping` (`FamilyInstance.AddCoping`) |
 | `set_workset` | — | `POST /set_workset/` | igual |
 | `set_project_location` | — | `POST /set_project_location/` | igual (+ `forzar`, que la herramienta de 0.3.x no exponía) |
 | `create_view` | — | `POST /create_view/` | igual |
@@ -68,7 +81,7 @@ más en contexto es justo lo que se elimina).
 | `create_schedule` | — | `POST /create_schedule/` | igual |
 | `annotate` | `create_dimensions`, `tag_walls`, `tag_elements` | `POST /create_dimensions/`, `/tag_elements/`, `/tag_walls/` | `kind="dimension"` / `"tag"`; `tag_walls` = `kind="tag"` con `category="OST_Walls"` y sin ids |
 | `color_elements` | `color_splash`, `clear_colors` | `POST /color_splash/`, `/clear_colors/` | `clear=true` limpia |
-| `export` | `export_document`, `export_ifc`, `export_room_data` | `POST /export_document/`, `/export_ifc/`, `GET /room_data/` | `format` = `pdf` / `png` / `jpg` / `dwg` / `ifc` / `rooms_json` / `rooms_csv` (el CSV lo escribe el puente en `file_path`) |
+| `export` | `export_document`, `export_ifc`, `export_room_data`; 0.5.0: `export_structural_model` (bloque B original) | `POST /export_document/`, `/export_ifc/`, `GET /room_data/`, **`POST /export_structural/`** (0.5.0) | `format` = `pdf` / `png` / `jpg` / `dwg` / `ifc` / `rooms_json` / `rooms_csv` (el CSV lo escribe el puente en `file_path`) / `ifc_structural` / `csv_nodes_members` |
 | `link_file` | — | `POST /link_file/` | igual |
 | `load_family` | — | `POST /load_family/` | igual |
 | `analyze_model` | `analyze_model_statistics`, `get_material_quantities` | `GET /model_statistics/`, `POST /material_quantities/` | `include=["statistics","materials"]` |
@@ -82,6 +95,18 @@ más en contexto es justo lo que se elimina).
 | `import_from_civil` | — | `POST /import_civil/` | igual |
 | `list_macros` | nuevo | **`GET /macros/`** (nueva) | catálogo de macros del usuario |
 | `run_macro` | nuevo | **`POST /macros/run/`** (nueva) | ejecuta una macro del usuario |
+| `list_steel_profiles` | nuevo (0.5.0) | **`POST /steel_profiles/`** | perfiles de acero cargados (`FamilySymbol` de armazón y pilares con `StructuralMaterialType.Steel`) con forma, norma y dimensiones; `loaded_only=false` añade los `.rfa` con catálogo de la biblioteca |
+| `steel_quantities` | nuevo (0.5.0) | **`POST /steel_quantities/`** | recuento, longitud (mm) y peso (kg) por `type` / `level` / `family` / `mark`; `sin_peso[]` con motivo |
+| `analytical_status` | nuevo (0.5.0) | **`POST /analytical_status/`** | `AnalyticalMember` asociado, nodos, conectados / tocando, `loose_nodes` |
+| `load_steel_profile` | nuevo (0.5.0) | **`POST /load_steel_profile/`** | `LoadFamilySymbol` por tipo (catálogo `.txt`) o `LoadFamily`; `409` si ya cargada salvo `overwrite` |
+| `create_steel_frame` | nuevo (0.5.0), **macro** | **`POST /create_steel_frame/`** | pilares en las intersecciones de rejillas y vigas entre pilares consecutivos, `IA: Portico metalico`; `plan.counts` con `simular` |
+| `create_bracing` | nuevo (0.5.0), lote | **`POST /create_bracing/`** | arriostres por vano: `single`, `X`, `V`, `inverted_V`, `K` |
+| `create_truss` | nuevo (0.5.0), lote | **`POST /create_truss/`** | `Truss.Create` sobre un `SketchPlane` del nivel |
+| `set_structural_properties` | nuevo (0.5.0), lote (sustituye a la versión por elemento del bloque B original) | **`POST /set_structural_properties/`** | liberaciones, justificaciones, desfases, rotación, extensiones, `analyze_as`, uso; sobre `lotes.resolver_parametros` |
+| `create_steel_connection` | nuevo (0.5.0), lote | **`POST /create_steel_connection/`** | `StructuralConnectionHandler.Create`; `409` `no_soportado` sin el módulo |
+| `add_plate_or_stiffener` | nuevo (0.5.0) | **`POST /add_plate/`** | familia alojada en cara (`top`, `bottom`, `web`) o de punto sobre una viga o pilar |
+| `split_beam` | nuevo (0.5.0) | **`POST /split_beam/`** | `CopyElement` por tramo y `LocationCurve`; `avisos` |
+| `fix_analytical_alignment` | nuevo (0.5.0), lote | **`POST /fix_analytical/`** | `AnalyticalMember.SetCurve` hacia el nodo ajeno más cercano dentro de `tolerance_mm` |
 | `execute_revit_code` | — | `POST /execute_code/` | igual, último recurso |
 
 Todas las de escritura devuelven `ms` (tiempo en Revit) y, desde 0.4.0,
@@ -119,7 +144,7 @@ las 4 macros y todas las rutas de escritura de 0.3.x que siguen existiendo:
 | **`simular`** | Parámetro booleano (por defecto `false`) en **todas** las rutas de escritura. Con `true` el manejador valida todo (elementos, tipos, niveles, unidades convertidas) y responde `{"simulado": true, "haria": [...]}` sin abrir transacción ni hacer copia. La llamada queda en el log con `"simulado": true`. |
 | **Transacción `IA:`** | `transaccion(doc, nombre)` abre `DB.Transaction(doc, "IA: <acción>")` con `suppress_warnings`, hace `Commit` al salir y `RollBack` ante excepción. Si Revit revierte por un fallo de validación, la ruta responde `500` en vez de un éxito falso. Todas las transacciones del conector se llaman `IA: ...` (`IA: Crear muros/vigas`, `IA: Borrar elementos`, `IA: Parametro Mark de 1234`...), así el usuario distingue en el historial de deshacer lo que hizo la IA. `execute_code` usa un `TransactionGroup` con el mismo prefijo. |
 | **Verificación** | Cada manejador vuelve a leer lo que cambió: creación → `"creados": [{"id", "categoria", "tipo", "nivel", "bbox_mm"}]`; parámetros → `"antes"` / `"despues"`; borrado → `"eliminados"` / `"en_cascada"`. La respuesta lleva `"ok"` y `"verificacion": {"coincide": bool, "detalle"}`. Si lo releído no coincide con lo pedido, `ok=false` con explicación y **nunca** se reintenta solo. |
-| **Límite de alcance** | `delete_elements`, `transform_elements` (en `array`, `elementos × (count-1)`), `change_type`, `set_workset`, las macros de 0.3.0 (`/grid_levels/`, `/sheet_set/`, `/import_civil/`, sobre el total de elementos que crean), los lotes de 0.4.0 (`/set_parameters/` sobre `elementos × parámetros`, `/create_elements/` sobre `elements`) y las macros del usuario (sobre `plan()["count"]`) rechazan (`400`, con `limite` y `cantidad`) más de 200 por llamada salvo `forzar=true`. `execute_code` exige `description` (`400` si falta) y rechaza código con `doc.Delete(<colección>)` salvo `forzar=true`. |
+| **Límite de alcance** | `delete_elements`, `transform_elements` (en `array`, `elementos × (count-1)`), `change_type`, `set_workset`, las macros de 0.3.0 (`/grid_levels/`, `/sheet_set/`, `/import_civil/`, sobre el total de elementos que crean), los lotes de 0.4.0 (`/set_parameters/` sobre `elementos × parámetros`, `/create_elements/` sobre `elements`), las macros del usuario (sobre `plan()["count"]`) y los lotes de 0.5.0 (`/create_steel_frame/` sobre pilares + vigas, `/create_bracing/` sobre las barras, `/create_truss/`, `/set_structural_properties/` sobre `elementos × propiedades`, `/create_steel_connection/`, `/add_plate/`, `/split_beam/` sobre los tramos, `/fix_analytical/` sobre los nodos a mover, `/join_geometry/` con `element_ids`) rechazan (`400`, con `limite` y `cantidad`) más de 200 por llamada salvo `forzar=true`. `execute_code` exige `description` (`400` si falta) y rechaza código con `doc.Delete(<colección>)` salvo `forzar=true`. |
 | **Respuesta** | Éxito: `200` con los datos, `ok`, `ms`, `copia` (o `simulado`/`haria`). Error controlado: `400`/`404`/`409` con `{"error", ...detalles}`. Excepción: `500` con `error`, `traceback` y `copia` si ya se había hecho. |
 
 Comandos de ejemplo (PowerShell; `$token` como arriba):
@@ -146,7 +171,11 @@ Tiempos de espera del puente: 30 s lectura; 120 s escritura (`create_*`,
 `export_document`, `check_clashes`, `get_material_quantities`, `link_file`,
 `load_family`, `save_document`, `execute_revit_code`, `create_toposolid`,
 `purge_unused`, `create_backup` y, desde 0.3.0, `snapshot_model`,
-`diff_snapshots` e `import_from_civil`. El tiempo de espera largo no sustituye
+`diff_snapshots` e `import_from_civil`; desde 0.5.0 también `create_steel_frame`,
+`load_steel_profile`, `fix_analytical_alignment`, `export(format="ifc_structural"
+| "csv_nodes_members")` y `list_steel_profiles(loaded_only=false)` (recorre la
+biblioteca en disco); el resto de herramientas de acero usan los 120 s de
+escritura o los 30 s de lectura. El tiempo de espera largo no sustituye
 al límite de elementos: Routes ejecuta cada llamada en el hilo de Revit, que
 queda bloqueado mientras dura, y por eso toda macro aplica `comprobar_alcance`
 al total de elementos que va a crear.
@@ -370,6 +399,56 @@ cambió el `mtime`, para editar sin reiniciar Revit; debe ser IronPython 2.7
 | `POST /list_category_parameters/` | `category_name` acepta `BuiltInCategory` (`OST_Walls`) o alias (`walls`) además del nombre visible |
 | `POST /create_surface/` | `element_type: "ceiling"` crea un techo con `DB.Ceiling.Create` y `CeilingType` (Revit 2022+); sin ellos, un suelo como en 0.3.x, y `haria.nota` lo dice |
 
+### Estructuras metálicas y modelo analítico (0.5.0)
+
+Entrega 2b (bloque B de `herramientas-dev/PROMPT_FASE2.md`, adaptado por
+`PROMPT_FASE2B.md`). Manejadores en `revit_mcp/acero.py` y
+`revit_mcp/analitico.py`. Todo lo estructural se lee y escribe por
+`BuiltInParameter`, las categorías por `BuiltInCategory` y el material por
+`StructuralMaterialType` / `StructuralAssetClass`; los nombres devueltos
+conservan las tildes. La **norma** (`AISC`, `EN`) y la **forma** (`W`, `HSS`,
+`L`, `C`, `WT`, `Pipe`) de un perfil se deducen de la designación del tipo
+(`W12X26`, `HSS6X6X1/4`, `IPE300`, `HEB200`, `L100x100x10`), que es la misma en
+todos los idiomas de Revit: la API no expone la norma; la forma se lee de
+`FamilySymbol.GetStructuralSection().StructuralSectionShape` cuando la familia
+la define. Los `BuiltInParameter` que no existan en la versión de Revit se
+omiten y se anotan en `no_disponibles[]`; los que el elemento no tenga (un
+pilar sin extensiones) van a `no_aplica[]` o a `fallidos[]`. Las
+**liberaciones** se leen y fijan por `STRUCTURAL_START/END_RELEASE_*` cuando el
+elemento físico los tiene y, si no (Revit 2023+, donde viven en el modelo
+analítico), en el `AnalyticalMember` asociado (`GetReleaseType` /
+`SetReleaseType`, `GetReleaseConditions` / `SetReleaseConditions`), con
+`source` en la respuesta. Las **conexiones de acero** dependen del módulo Steel
+Connections for Revit: sin `StructuralConnectionHandler` en la API o sin tipos
+cargados, `409` con `no_soportado: true` y `motivo` (`api` / `sin_tipos`), sin
+transacción ni copia.
+
+Lectura (sin transacción):
+
+| Método | Ruta | Parámetros | Respuesta |
+|--------|------|------------|-----------|
+| POST | `/steel_profiles/` | `standard` (`AISC`, `EN`, `todos`), `shape` (`W`, `HSS`, `L`, `C`, `WT`, `Pipe`), `loaded_only` (true) | `loaded[]` (`FamilySymbol` de `OST_StructuralFraming` y `OST_StructuralColumns` cuyo `Family.StructuralMaterialType` es `Steel`, o cuyo material tiene un activo estructural de clase `Metal`): `type_id`, `family`, `type`, `category` (`OST_...`), `categoria` (visible), `is_active`, `instances`, `material`, `material_type`, `steel_by`, `shape`, `shape_source`, `standard`, `dimensions_mm` (`height`, `width`, `web_thickness`, `flange_thickness` de `STRUCTURAL_SECTION_COMMON_*`); `count`, `not_steel`, `unknown_material`, `no_disponibles[]`, `metodo`, `nota` si no hay acero. Con `loaded_only=false`, además `library[]` (`.rfa` de `Application.GetLibraryPaths()` con un `.txt` de catálogo al lado cuyos tipos tienen designación de perfil, sin suponer nombres de carpeta): `family`, `path`, `catalog_path`, `types[]` (hasta 60), `types_total`, `shapes`, `standards`, `is_loaded`; `library_paths`, `library_scanned_files`, `library_truncated` (5000 archivos / 100 familias) |
+| POST | `/steel_quantities/` | `group_by` (`type`, `level`, `family`, `mark`), `element_ids[]` (vacío = todo el acero), `max` (2000) | `groups[]` (`group`, `count`, `length_mm`, `weight_kg`, `with_weight`, `element_ids` (50), `methods`), `totals`, `sin_peso[]` (`element_id`, `type`, `material`, `motivo`), `metodo`, `not_found`, `not_steel`, `scanned`, `truncated`. Longitud: `INSTANCE_LENGTH_PARAM`, la curva de ubicación o la caja envolvente. Peso: volumen (`HOST_VOLUME_COMPUTED`, m³) × densidad del activo estructural del material (`Material.StructuralAssetId` → `PropertySetElement.GetStructuralAsset().Density`, a kg/m³ con `UnitUtils`); si el material no tiene activo, masa lineal del tipo (`STRUCTURAL_SECTION_NOMINAL_WEIGHT`, kg/m) × longitud, y `methods` lo dice; el resto a `sin_peso` con el motivo |
+| POST | `/describe/` | nuevo `include_structural` | bloque `structural`: `structural_usage` (`INSTANCE_STRUCT_USAGE_PARAM`: `value`, `index`, `enum`), `structural_material` (+ `_id`), `structural_material_type`, `is_steel`, `steel_by`, `releases` (`start` / `end`: `type` = `fixed` / `pinned` / `bending_moment` / `user_defined`, `FX`..`MZ`, `source` = `BuiltInParameter` o `AnalyticalMember`), `y_justification`, `z_justification` (`Y_JUSTIFICATION`, `Z_JUSTIFICATION`: `value`, `index`), `y_offset_mm`, `z_offset_mm` (`Y_OFFSET_VALUE`, `Z_OFFSET_VALUE`), `section_rotation_deg` (`STRUCTURAL_BEND_DIR_ANGLE`), `start_extension_mm`, `end_extension_mm` (`START_EXTENSION`, `END_EXTENSION`), `analyze_as` (`STRUCTURAL_ANALYZES_AS`), `analytical_member_id`, `no_disponibles[]`, `no_aplica[]` |
+| POST | `/element_types/` | `category="connections"` (o `conexiones`) | `types[]` (`id`, `tipo`, `ejemplares`; `StructuralConnectionHandlerType`), `class`, `approval_types[]` (`id`, `nombre`); `409` `no_soportado` (`motivo` `api` o `sin_tipos`) |
+| POST | `/analytical_status/` | `element_ids[]` (vacío = todo el acero), `tolerance_mm` (10), `max` (500) | `elements[]`: `element_id`, `categoria`, `tipo`, `analytical_member_id` (`AnalyticalToPhysicalAssociationManager.GetAssociatedElementId`), `analytical_class`, `nodes.start` / `nodes.end` (`point_mm` de `GetCurve().GetEndPoint`, `connected[]` = miembros con un extremo a menos de `tolerance_mm`, `touching[]` = miembros cuya curva pasa por el nodo, `is_connected`), `loose_nodes[]`, `is_connected`, `releases`; o `nota` "sin modelo analítico asociado". Resumen: `members`, `connected_members`, `sin_analitico`, `loose_nodes_total`, `analytical_members_in_model`, `not_found`, `truncated`; `409` `no_soportado` sin la API analítica |
+| POST | `/export_structural/` | `format`* (`ifc_structural` \| `csv_nodes_members`), `file_path`*, `ifc_version` (`IFC2x3`), `view_name`, `element_ids[]`, `max` (500) | IFC (transacción `IA: Exportar IFC estructural`, `interop.opciones_ifc` / `exportar_ifc` extraídos de `/export_ifc/`): `ExportBaseQuantities` y como filtro `view_name` o la vista activa si muestra el modelo analítico (`View.AreAnalyticalModelCategoriesHidden` falso); `file_path`, `file_size_kb`, `filter_view`, `filter_view_reason`. CSV (sin transacción): una fila por elemento con `element_id`, `analytical_member_id`, `categoria`, `familia`, `tipo`, `material`, `nivel`, `xi_mm`..`zj_mm`, `length_mm`, `start_release`, `start_released` (`FX+MZ`), `end_release`, `end_released`; `rows`, `columns`, `sin_analitico[]` |
+
+Escritura (todas con `simular`, patrón `escritura.ejecutar`):
+
+| Método | Ruta | Parámetros | Respuesta |
+|--------|------|------------|-----------|
+| POST | `/load_steel_profile/` | `file_path` (`.rfa`) o `family_name` (`<nombre>.rfa` buscado en `GetLibraryPaths()`), `type_names[]`, `overwrite`, `simular` | Con catálogo `.txt` al lado: `doc.LoadFamilySymbol(ruta, tipo)` por cada tipo pedido (`400` con `available_types` si no se dan `type_names`; `404` si un tipo no está en el catálogo). Sin catálogo: `doc.LoadFamily` y activar los tipos pedidos (o todos). Familia ya cargada (con esos tipos): `409` `already_loaded` salvo `overwrite=true`; un tipo nuevo del catálogo sí se carga (`ya_existian[]`). Transacción `IA: Cargar perfil <familia>`. `creados[]` (los símbolos), `types[]` (`type_id`, `type`, `loaded`), `family_id`, `catalog_path`, `avisos` |
+| POST | `/create_steel_frame/` | `grids_x[]`, `grids_y[]` (vacío = todas las rejillas rectas de esa dirección: X constante / Y constante), `levels[]` (vacío = todos), `column_type`*, `beam_type`*, `beam_directions` (`x`, `y`, `both`), `column_orientation_deg`, `skip_columns_at[]` (`"A-1"`), `skip_beams_at[]` (`"A-1/A-2"`), `mark_prefix`, `simular`, `forzar` | **Macro.** Un pilar por intersección (etiqueta `"<Y>-<X>"`) y nivel con `estructural.crear_pilar` (`FAMILY_TOP_LEVEL_PARAM` al siguiente nivel de la lista o del proyecto; `null` y aviso si no hay), vigas entre intersecciones consecutivas de cada rejilla con `structure.crear_viga` (z = elevación interna del nivel), marcas correlativas `<prefix>01`.. (`ALL_MODEL_MARK`), rejillas curvas ignoradas con aviso. Una transacción `IA: Portico metalico`; `comprobar_alcance` sobre pilares + vigas. `plan` (`counts` {`columns`, `beams`, `total`}, `grids_x`, `grids_y`, `levels`, `intersections`, `columns[]` {`label`, `point_mm`, `base_level`, `top_level`, `mark`}, `beams[]` {`from`, `to`, `level`, `direction`, `start_mm`, `end_mm`, `length_mm`, `mark`}, `skipped`, `warnings`); `creados` = {`columns[]`, `beams[]`}, `creados_ids`, `count`, `avisos`. `404` con `available_types` / `available_grids` / `available_levels`; `400` con `available_labels` |
+| POST | `/create_bracing/` | `bays[]` de {`start_point_mm`*, `end_point_mm`*, `level_bottom`*, `level_top`*, `pattern`} (`single`, `X`, `V`, `inverted_V`, `K`), `brace_type`*, `simular`, `forzar` | **Lote.** Todos los vanos se validan antes (`400`/`404` con `index`); la z de los puntos se ignora: las cotas salen de `utils.elevacion_interna` de los niveles. Barras: `single` A→D; `X` A→D y B→C; `V` de los apoyos inferiores al centro superior; `inverted_V` de los extremos superiores al centro inferior; `K` de los dos extremos del lado final al centro del lado inicial. `NewFamilyInstance(Line, symbol, level_bottom, StructuralType.Brace)` en una transacción `IA: Crear <n> arriostres`. `creados[]` por vano (`bay`, `pattern`, `braces[]` con `start_mm`, `end_mm`, `length_mm`), `plan.bays`, `plan.counts` |
+| POST | `/create_truss/` | `trusses[]` de {`truss_type`*, `start_point_mm`*, `end_point_mm`*, `level`*}, `simular`, `forzar` | **Lote.** `DB.Structure.Truss.Create(doc, trussTypeId, sketchPlaneId, Line)` con un `SketchPlane.Create(doc, level.Id)` por nivel; z = elevación interna del nivel + z del punto. `404` con `available_types` si el tipo no existe (o no hay ninguno). Transacción `IA: Crear <n> cerchas`; `creados[]` con `index`, `truss_type`, `start_mm`, `end_mm` |
+| POST | `/set_structural_properties/` | `element_ids`* y cualquiera de: `start_release` / `end_release` (`pinned`, `fixed`, `bending_moment`, `user_defined` o `{"FX": true, ...}` parcial), `y_justification` (`origin`/`left`/`center`/`right` o índice), `z_justification` (`origin`/`top`/`center`/`bottom`), `y_offset_mm`, `z_offset_mm`, `section_rotation_deg`, `start_extension_mm`, `end_extension_mm`, `analyze_as` (nombre de `AnalyzeAs` o índice), `structural_usage` (nombre de `StructuralInstanceUsage` o índice); `simular`, `forzar` | **Lote sobre `/set_parameters/`**: cada propiedad se traduce a su `BuiltInParameter` y pasa por `lotes.resolver_parametros`; una transacción `IA: Propiedades estructurales (<n> elementos)` en dos fases (primero el tipo de liberación, después los componentes `FX`..`MZ`, que Revit solo deja editar con el tipo "definido por el usuario"). Un elemento sin los parámetros de liberación usa su `AnalyticalMember` (`source: AnalyticalMember`); sin miembro, `fallidos`. `count`, `elements`, `properties_set`, `changes[]` (`property`, `builtin`, `parameter_label`, `antes`, `despues`, `coincide`), `antes` / `despues` por elemento y propiedad (`end_release.FX`), `fallidos[]` (`property`, `builtin`, `motivo`), `no_disponibles[]` (`property`, `builtin`, por versión), `ok`, `verificacion`. `400` con `available_properties` si no hay propiedades; `400` con `fallidos` si nada se puede fijar |
+| POST | `/create_steel_connection/` | `connections[]` de {`element_ids`*, `connection_type`* (nombre o id)}, `approve`, `approval_status` (nombre visible o id de `approval_types`), `simular`, `forzar` | **Lote.** `409` `no_soportado` antes de nada si faltan `StructuralConnectionHandler` / `StructuralConnectionHandlerType` o no hay tipos (ni `GetDefaultConnectionHandlerType`). `StructuralConnectionHandler.Create(doc, ids, typeId)` por conexión en una transacción `IA: Crear <n> conexiones`; con `approve`, `ApprovalStatus = <StructuralConnectionApprovalType>` (`400` con `available_approval_types` si falta `approval_status`, porque el nombre depende del idioma). `creados[]` con `index`, `element_ids`, `connection_type`, `approval_status`; `404` con `available_types` |
+| POST | `/add_plate/` | `host_id`*, `family_name`*, `type_name`*, `positions[]` (mm desde el inicio; un valor ≤ 1 es fracción 0-1; por defecto `[0.5]`), `face` (`top`, `bottom`, `web`), `simular` | Familia alojada en cara (`Family.FamilyPlacementType` `WorkPlaneBased`): caras de `get_Geometry` con `ComputeReferences=True` (sólidos directos o `GeometryInstance.GetSymbolGeometry()` con su `Transform`), `top` = normal +Z, `bottom` = -Z, `web` = la vertical perpendicular al eje de mayor área; punto de la curva proyectado a la cara y `NewFamilyInstance(reference, point, refDir en el plano de la cara, symbol)`. Familia de punto: `NewFamilyInstance(point, symbol, nivel del anfitrión, StructuralType.NonStructural)`. Un anfitrión (viga, arriostre o pilar por su caja), varias posiciones, una transacción `IA: Colocar <n> <familia> en <id>`. `creados[]` con `position_mm`, `point_mm`; `host`, `face`, `hosted_on_face`. `400` "No <face> face with a reference" si no hay cara con referencia |
+| POST | `/split_beam/` | `element_id`*, `at_mm[]`* (0 < at < longitud, sin repetidos), `simular` | `ElementTransformUtils.CopyElement` por cada tramo nuevo y `LocationCurve.Curve` ajustada; el original se recorta al primer tramo. Transacción `IA: Dividir viga <id>`. `creados[]` (`segment`, `start_mm`, `end_mm`, `length_mm`), `original` (`antes` / `despues`), `segments[]`, `avisos` (se pierden uniones, recortes y conexiones del original; Revit puede reajustar extremos por la unión automática). Solo curvas rectas (`Line`) |
+| POST | `/join_geometry/` | nuevo: `element_ids[]` (≥ 2, parejas consecutivas), `coping`, `unjoin`, `simular`, `forzar` (`element_id_a` / `element_id_b` siguen igual) | `JoinGeometryUtils.JoinGeometry` (o `Unjoin`) por pareja consecutiva en una transacción `IA: Unir geometria en cadena (<n> elementos)`; las parejas ya unidas van a `skipped_pairs` y no abortan; con `coping=true`, `FamilyInstance.AddCoping(a, b)` por pareja (`coping.applied` / `coping.failed` con el error). `pairs[]` (`antes` / `despues` `joined`), `joined_pairs`, `ok`, `verificacion` |
+| POST | `/fix_analytical/` | `element_ids`*, `tolerance_mm` (50), `simular`, `forzar` | **Lote.** Para cada nodo de cada `AnalyticalMember` asociado: el nodo ajeno más cercano; a menos de 1 mm ya está unido (`already_joined`), a menos de `tolerance_mm` se mueve con `AnalyticalMember.SetCurve` (los dos extremos del miembro en una sola llamada), más lejos va a `sin_objetivo[]` (`nearest_mm`). Una transacción `IA: Alinear analitico`. `moves[]` (`end`, `from_mm`, `to_mm`, `distance_mm`, `target_analytical_id`, `target_element_id`, `coincide`, `despues_mm`), `antes` / `despues` por nodo (`"<id>.start"`), `fallidos[]` (`SetCurve`), `sin_analitico[]`, `plan.counts`; sin movimientos, `count: 0` y ninguna transacción. Con `simular`, `haria` = los movimientos previstos |
+
 ### Ejecución de código
 
 | Método | Ruta | Parámetros | Respuesta |
@@ -474,6 +553,27 @@ curl -X POST $R/macros/run/ -H "Content-Type: application/json" -d '{"token":"TO
 # 0.4.0: matriz de 4 copias y snapshot con timings sin bbox
 curl -X POST $R/transform_elements/ -H "Content-Type: application/json" -d '{"token":"TOKEN","element_ids":[1234],"operation":"array","vector":{"x":3000,"y":0,"z":0},"count":4}'
 curl -X POST $R/snapshot/ -H "Content-Type: application/json" -d '{"token":"TOKEN","name":"rapido","include_bbox":false,"overwrite":true}'
+# 0.5.0: perfiles de acero (lectura) y carga de dos tipos de un catalogo .txt
+curl -X POST $R/steel_profiles/ -H "Content-Type: application/json" -d '{"token":"TOKEN","standard":"EN","shape":"W","loaded_only":false}'
+curl -X POST $R/load_steel_profile/ -H "Content-Type: application/json" -d '{"token":"TOKEN","family_name":"IPE","type_names":["IPE300","IPE400"],"simular":true}'
+# 0.5.0: portico metalico (macro): primero con simular para ver plan.counts
+curl -X POST $R/create_steel_frame/ -H "Content-Type: application/json" -d '{"token":"TOKEN","grids_x":["1","2","3"],"grids_y":["A","B"],"levels":["Nivel 1","Nivel 2"],"column_type":"HEB: HEB300","beam_type":"IPE: IPE300","beam_directions":"both","skip_columns_at":["A-1"],"skip_beams_at":["A-2/A-3"],"mark_prefix":"P","simular":true}'
+# 0.5.0: arriostres en X y cercha (lotes)
+curl -X POST $R/create_bracing/ -H "Content-Type: application/json" -d '{"token":"TOKEN","bays":[{"start_point_mm":{"x":0,"y":0},"end_point_mm":{"x":6000,"y":0},"level_bottom":"Nivel 1","level_top":"Nivel 2","pattern":"X"}],"brace_type":"L: L100x100x10"}'
+curl -X POST $R/create_truss/ -H "Content-Type: application/json" -d '{"token":"TOKEN","trusses":[{"truss_type":"Cercha 12 m","start_point_mm":{"x":0,"y":0},"end_point_mm":{"x":12000,"y":0},"level":"Cubierta"}]}'
+# 0.5.0: propiedades estructurales en lote (liberaciones, justificacion, desfase, rotacion)
+curl -X POST $R/set_structural_properties/ -H "Content-Type: application/json" -d '{"token":"TOKEN","element_ids":[1234,1235],"start_release":"pinned","end_release":{"FX":true,"MZ":true},"y_justification":"center","z_offset_mm":-50,"section_rotation_deg":90}'
+# 0.5.0: conexiones de acero (409 no_soportado sin el modulo), placas en la cara superior y division de una viga
+curl -X POST $R/create_steel_connection/ -H "Content-Type: application/json" -d '{"token":"TOKEN","connections":[{"element_ids":[1234,1235],"connection_type":"Conexión genérica"}],"approve":true,"approval_status":"Aprobada"}'
+curl -X POST $R/add_plate/ -H "Content-Type: application/json" -d '{"token":"TOKEN","host_id":1234,"family_name":"Rigidizador","type_name":"PL10","positions":[0.25,0.75],"face":"top"}'
+curl -X POST $R/split_beam/ -H "Content-Type: application/json" -d '{"token":"TOKEN","element_id":1234,"at_mm":[2000,4000],"simular":true}'
+# 0.5.0: union en cadena con coping, estado analitico y alineacion de nodos sueltos
+curl -X POST $R/join_geometry/ -H "Content-Type: application/json" -d '{"token":"TOKEN","element_ids":[1234,1235,1236],"coping":true}'
+curl -X POST $R/analytical_status/ -H "Content-Type: application/json" -d '{"token":"TOKEN","element_ids":[1234,1235],"tolerance_mm":10}'
+curl -X POST $R/fix_analytical/ -H "Content-Type: application/json" -d '{"token":"TOKEN","element_ids":[1234,1235],"tolerance_mm":50,"simular":true}'
+# 0.5.0: exportacion estructural (IFC con la vista analitica activa; CSV de nodos y miembros)
+curl -X POST $R/export_structural/ -H "Content-Type: application/json" -d '{"token":"TOKEN","format":"ifc_structural","file_path":"C:\\\\Proyectos\\\\estructura.ifc","ifc_version":"IFC4"}'
+curl -X POST $R/export_structural/ -H "Content-Type: application/json" -d '{"token":"TOKEN","format":"csv_nodes_members","file_path":"C:\\\\Proyectos\\\\miembros.csv"}'
 ```
 
 ### Add-ins en C# y comandos de pyRevit existentes
@@ -559,6 +659,23 @@ copia las macros de ejemplo a `%LOCALAPPDATA%\RevitMcp\macros` (o
 Termina con `Resultado: 15/15 pruebas correctas` (14/14 si `plan.count` de la
 macro supera 200 y solo se simula).
 
+Con `--fase 2b` (0.5.0) se añaden las pruebas de estructuras metálicas, sin
+nombres visibles en inglés (los tipos se toman de `list_steel_profiles` y la
+rejilla 2×2 la crea el propio script con `/grid_levels/`, lejos del modelo, y la
+borra al final). Si el modelo no tiene perfiles de acero de pilar y de viga
+cargados, 2b.2 a 2b.5 se marcan `NO_APLICA` con el motivo y cuentan como
+correctas:
+
+| Prueba | Petición | Esperado |
+|--------|----------|----------|
+| 2b.1 | `POST .../steel_profiles/` con `loaded_only: true` | `200` con `loaded[]` no vacío, o `nota` que dice que no hay acero cargado |
+| 2b.2 | `POST .../create_steel_frame/` con `simular: true` sobre las 2×2 rejillas auxiliares y el nivel más bajo | `simulado: true`, `plan.counts` = `{columns: 4, beams: 4, total: 8}`, sin `copia`; el número de pilares y vigas del modelo no cambia |
+| 2b.3 | La misma llamada sin `simular`, y `POST .../analytical_status/` sobre los 8 ids | `ok: true`, 4 `creados.columns` y 4 `creados.beams`; `loose_nodes_total: 0` (si `members` es 0 se anota que no hay modelo analítico); los 8 elementos y las rejillas se borran al final |
+| 2b.4 | `POST .../set_structural_properties/` con `start_release: "pinned"` sobre las 4 vigas y `POST .../describe/` con `include_structural` de la primera | `ok: true`, `count: 4`; `structural.releases.start.type` = `pinned` (fuente `BuiltInParameter` o `AnalyticalMember`) |
+| 2b.5 | `POST .../steel_quantities/` con `group_by: "type"` sobre los 8 ids | `totals.count: 8`; `weight_kg > 0` en los grupos o los ids en `sin_peso` con `motivo` |
+
+Termina con `Resultado: 14/14 pruebas correctas`.
+
 Sin Revit, en CPython: `uv run pytest` ejecuta las pruebas de
 `tests/` (formato JSON de `format_response`, gestor `transaccion` simulado,
 rotación del log, rutas de escritura contra un `pyrevit` simulado, lector CSV,
@@ -566,11 +683,20 @@ guarda de compatibilidad IronPython 2.7 y, desde 0.3.0, una prueba de extremo
 a extremo por ruta de navegación, instantáneas y macros sobre el modelo
 simulado de `tests/fakes/modelo_falso.py`: `test_navegacion.py`,
 `test_instantaneas.py` y `test_macros.py`; desde 0.4.0, `test_herramientas.py`
-(las 40 herramientas registradas en un `MCPServer` real, ninguna retirada, un
+(las 52 herramientas registradas en un `MCPServer` real, ninguna retirada, un
 nombre retirado responde con su sustituta, despacho de cada herramienta
 combinada), `test_lotes.py` (`/set_parameters/`, `/create_elements/`, `array`),
 `test_macros_usuario.py` (`/macros/`, `/macros/run/`, macros de ejemplo,
-recarga por `mtime`) y `test_rendimiento.py` (copia diferida y `timings`)).
+recarga por `mtime`) y `test_rendimiento.py` (copia diferida y `timings`);
+desde 0.5.0, `test_acero.py` (perfiles, cantidades con un material sin activo
+estructural, `describe` con `include_structural` y `no_disponibles`,
+`list_types` de conexiones con y sin el módulo), `test_acero_escritura.py`
+(cada ruta de escritura de acero: 401, `simular` sin transacción, 400/404,
+`creados` / `antes`-`despues`; el parseo de `start_release` en `pinned`,
+`fixed` y diccionario parcial; `create_bracing` con cada `pattern` y un nivel
+cuya elevación mostrada difiere de la interna; `create_steel_connection` sin el
+módulo) y `test_analitico.py` (`analytical_status` con dos miembros cuyos nodos
+distan menos y más que la tolerancia, `fix_analytical`, `export_structural`)).
 
 ## Deshacer
 

@@ -19,11 +19,11 @@ This implementation uses a **modular architecture** that separates concerns and 
 ```
 revit-mcp-python/
 ├── main.py                                    # MCP Server (FastMCP implementation)
-├── tools/                                     # MCP Tool definitions (0.4.0: 40 tools in 4 modules)
-│   ├── __init__.py                           # HERRAMIENTAS (40), HERRAMIENTAS_RETIRADAS (51 old names -> replacement), instalar_retiradas(), register_tools()
+├── tools/                                     # MCP Tool definitions (0.5.0: 52 tools in 4 modules)
+│   ├── __init__.py                           # HERRAMIENTAS (52), HERRAMIENTAS_RETIRADAS (51 old names -> replacement), instalar_retiradas(), register_tools()
 │   ├── utils.py                              # format_response (+ ms_puente), Cronometro, timeouts
-│   ├── lectura_tools.py                      # 16 read tools (status, model info with include, views, query, describe, types, schedule, warnings, analyze, clashes, snapshots, log)
-│   ├── escritura_tools.py                    # 19 write tools (set_parameters, create_elements, transform, delete, types, joins, worksets, location, views, sheets, schedules, annotate, colors, export, link, family, MEP, maintain)
+│   ├── lectura_tools.py                      # 19 read tools (status, model info with include, views, query, describe, types, schedule, warnings, analyze, clashes, snapshots, log; 0.5.0: list_steel_profiles, steel_quantities, analytical_status)
+│   ├── escritura_tools.py                    # 28 write tools (set_parameters, create_elements, transform, delete, types, joins, worksets, location, views, sheets, schedules, annotate, colors, export, link, family, MEP, maintain; 0.5.0: load_steel_profile, create_steel_frame, create_bracing, create_truss, set_structural_properties, create_steel_connection, add_plate_or_stiffener, split_beam, fix_analytical_alignment)
 │   ├── macro_tools.py                        # 4 macros: create_grid_and_levels, import_from_civil, list_macros, run_macro
 │   └── code_execution_tools.py               # execute_revit_code (last resort)
 ├── INSTRUCCIONES_AGENTE.md                    # Sent to the client as MCPServer(instructions=...)
@@ -59,7 +59,9 @@ revit-mcp-python/
 │       ├── instantaneas.py                   # 0.3.0: snapshot / diff_snapshots (snapshots\<name>.json); 0.4.0: timings, include_bbox, name caches
 │       ├── macros.py                         # 0.3.0: grid_levels, sheet_set, import_civil (reuse the phase-1 helpers)
 │       ├── lotes.py                          # 0.4.0: /set_parameters/ and /create_elements/ (one transaction per batch; reuse planificar_*/crear_* helpers)
-│       └── macros_usuario.py                 # 0.4.0: /macros/ and /macros/run/ (user macros: macro.json + macro.py, reload by mtime)
+│       ├── macros_usuario.py                 # 0.4.0: /macros/ and /macros/run/ (user macros: macro.json + macro.py, reload by mtime)
+│       ├── acero.py                          # 0.5.0: steel: /steel_profiles/, /steel_quantities/, /load_steel_profile/, /create_steel_frame/ (macro), /create_bracing/, /create_truss/, /set_structural_properties/, /create_steel_connection/, /add_plate/, /split_beam/; bloque_estructural() for /describe/, tipos_conexion() for /element_types/
+│       └── analitico.py                      # 0.5.0: analytical model: /analytical_status/, /fix_analytical/, /export_structural/ (IFC via interop.opciones_ifc/exportar_ifc, CSV of nodes and members)
 ├── tests/                                    # CPython tests (fake pyrevit + fake model in tests/fakes) — `uv run pytest`
 ├── pruebas/probar_revit.py                   # Smoke tests against a running Revit
 ├── requirements.txt                          # Python dependencies
@@ -436,18 +438,19 @@ It contains:
 
 ## **Available Tools** |
 
-0.4.0 consolidates the 78 tools of 0.3.x into **40** (`tools.HERRAMIENTAS`);
+0.4.0 consolidates the 78 tools of 0.3.x into **40** and 0.5.0 adds 12 steel /
+analytical tools, **52** in total (`tools.HERRAMIENTAS`);
 the 51 retired names live in `tools.HERRAMIENTAS_RETIRADAS` and a client that
 calls one gets an `is_error` result naming the replacement (the SDK's
 `ToolManager.call_tool` is wrapped by `tools.instalar_retiradas`). Every
 tool description is under 60 words with an example. Every write tool accepts
 `simular` and returns `ok`, `verificacion`, `copia`, `ms` and `ms_puente`.
 
-### **Read (16)** — `tools/lectura_tools.py`
-`get_revit_status`, `get_revit_model_info(include=[levels, worksets, phases, links, location])`, `list_views(current_only, view_type, on_sheet)`, `describe_view(view_id?)`, `capture_view` (image), `query_elements(... current_view, selected)`, `describe_element(element_id | element_ids[<=20], depth, include_geometry)`, `dependency_graph`, `list_types(category | family | contains, with_parameters, loaded_only)`, `schedule_to_json`, `list_warnings(group_by)`, `analyze_model(include=[statistics, materials])`, `check_clashes`, `snapshot_model(include_bbox, timings in the answer)`, `diff_snapshots`, `read_log`.
+### **Read (19)** — `tools/lectura_tools.py`
+`get_revit_status`, `get_revit_model_info(include=[levels, worksets, phases, links, location])`, `list_views(current_only, view_type, on_sheet)`, `describe_view(view_id?)`, `capture_view` (image), `query_elements(... current_view, selected)`, `describe_element(element_id | element_ids[<=20], depth, include_geometry, include_structural)`, `dependency_graph`, `list_types(category | family | contains, with_parameters, loaded_only; category="connections")`, `schedule_to_json`, `list_warnings(group_by)`, `analyze_model(include=[statistics, materials])`, `check_clashes`, `snapshot_model(include_bbox, timings in the answer)`, `diff_snapshots`, `read_log`; 0.5.0: `list_steel_profiles(standard, shape, loaded_only)`, `steel_quantities(group_by, element_ids)`, `analytical_status(element_ids, tolerance_mm)`.
 
-### **Write (19)** — `tools/escritura_tools.py`
-`set_parameters(changes[], type_parameters)` → `POST /set_parameters/` (one transaction, `fallidos` for read-only / missing parameters); `create_elements(elements[] with kind)` → `POST /create_elements/` (one transaction, all validated first, one failure rolls back everything); `transform_elements` (+ `array`), `delete_elements`, `change_element_type`, `join_geometry`, `set_workset`, `set_project_location(forzar)`, `create_view`, `set_active_view`, `create_sheet_set`, `create_schedule`, `annotate(kind=dimension|tag)`, `color_elements(clear)`, `export(format=pdf|png|jpg|dwg|ifc|rooms_json|rooms_csv)`, `link_file`, `load_family`, `create_mep_system`, `maintain_model(action=purge|backup|save)`.
+### **Write (28)** — `tools/escritura_tools.py`
+`set_parameters(changes[], type_parameters)` → `POST /set_parameters/` (one transaction, `fallidos` for read-only / missing parameters); `create_elements(elements[] with kind)` → `POST /create_elements/` (one transaction, all validated first, one failure rolls back everything); `transform_elements` (+ `array`), `delete_elements`, `change_element_type`, `join_geometry(element_id_a, element_id_b | element_ids[] chain, coping)`, `set_workset`, `set_project_location(forzar)`, `create_view`, `set_active_view`, `create_sheet_set`, `create_schedule`, `annotate(kind=dimension|tag)`, `color_elements(clear)`, `export(format=pdf|png|jpg|dwg|ifc|rooms_json|rooms_csv|ifc_structural|csv_nodes_members)`, `link_file`, `load_family`, `create_mep_system`, `maintain_model(action=purge|backup|save)`; 0.5.0 steel (all batches, `simular`, one transaction, `fallidos`): `load_steel_profile(file_path | family_name, type_names, overwrite)`, `create_steel_frame(column_type, beam_type, grids_x, grids_y, levels, beam_directions, skip_columns_at, skip_beams_at, mark_prefix)` (macro, `IA: Portico metalico`), `create_bracing(bays[], brace_type)`, `create_truss(trusses[])`, `set_structural_properties(element_ids, start_release, end_release, y/z_justification, y/z_offset_mm, section_rotation_deg, start/end_extension_mm, analyze_as, structural_usage)`, `create_steel_connection(connections[], approve, approval_status)`, `add_plate_or_stiffener(host_id, family_name, type_name, positions, face)`, `split_beam(element_id, at_mm)`, `fix_analytical_alignment(element_ids, tolerance_mm)`.
 
 ### **Macros (4)** — `tools/macro_tools.py`
 `create_grid_and_levels`, `import_from_civil` (0.3.0) and the user's own macros: `list_macros` (`GET /macros/`) and `run_macro(name, args, simular, forzar, timeout_s)` (`POST /macros/run/`). A macro is `%LOCALAPPDATA%\RevitMcp\macros\<name>\macro.json` + `macro.py` (`run(doc, uidoc, args, api)`, optional `plan(doc, args, api)`); `writes: true` macros run inside `IA: Macro <name>` with the full safe-write pattern; files reload when their mtime changes.
@@ -526,6 +529,12 @@ The pyRevit extension exposes these HTTP endpoints under `http://localhost:48884
 - Batches (one transaction per call): `POST /set_parameters/` (`changes[]`, `type_parameters`, `fallidos`), `POST /create_elements/` (`elements[]` with `kind`; all validated first, `400` with `index`/`kind`; one Revit failure → `500` and full rollback; `creados` grouped by kind)
 - User macros: `GET /macros/` (catalogue with invalid manifests), `POST /macros/run/` (`name`, `args`, `simular`, `forzar`)
 - Extended: `POST /transform_elements/` `operation=array` + `count`; `POST /snapshot/` `include_bbox` + `timings`; `POST /query/` adds `nombre` per element; `POST /list_category_parameters/` accepts `OST_...`; `POST /create_surface/` ceilings via `Ceiling.Create` (2022+)
+
+### **Endpoints added in 0.5.0** (delivery 2b: steel structures and analytical model; every earlier route still exists)
+- Read (`revit_mcp/acero.py`, `revit_mcp/analitico.py`, no transaction): `POST /steel_profiles/` (`standard`, `shape`, `loaded_only`: loaded steel `FamilySymbol`s with shape / standard / `dimensions_mm`, plus the library `.rfa` files with a `.txt` type catalog), `POST /steel_quantities/` (`group_by`, `element_ids`: count, length, weight = volume x structural asset density or nominal weight x length, `sin_peso`), `POST /analytical_status/` (`AnalyticalMember` per element, nodes, `connected` / `touching`, `loose_nodes`), `POST /export_structural/` (`ifc_structural` with base quantities and the active analytical view as filter, or `csv_nodes_members`)
+- Write (`simular`, one transaction, `fallidos`): `POST /load_steel_profile/` (`LoadFamilySymbol` per catalog type / `LoadFamily`; 409 if already loaded unless `overwrite`), `POST /create_steel_frame/` (macro: columns at grid intersections with `FAMILY_TOP_LEVEL_PARAM`, beams between consecutive columns, marks; `IA: Portico metalico`), `POST /create_bracing/` (`bays[]`, patterns single / X / V / inverted_V / K, `StructuralType.Brace`), `POST /create_truss/` (`Truss.Create` on a `SketchPlane` per level), `POST /set_structural_properties/` (releases, justifications, offsets, rotation, extensions, `analyze_as`, usage by `BuiltInParameter` through `lotes.resolver_parametros`; releases fall back to `AnalyticalMember.SetReleaseType/SetReleaseConditions`; `no_disponibles` per Revit version), `POST /create_steel_connection/` (`StructuralConnectionHandler.Create`; 409 `no_soportado` without the module), `POST /add_plate/` (face-based family on top / bottom / web with `ComputeReferences`, or point-based), `POST /split_beam/` (`CopyElement` per segment + `LocationCurve`), `POST /fix_analytical/` (`AnalyticalMember.SetCurve` towards the nearest foreign node within `tolerance_mm`)
+- Extended: `POST /describe/` `include_structural` (block `structural`); `POST /element_types/` `category="connections"`; `POST /join_geometry/` `element_ids[]` chain + `coping` (`AddCoping`); the MCP `export` tool routes `ifc_structural` / `csv_nodes_members` to `/export_structural/`
+- Language rule kept: everything structural by `BuiltInParameter` / `BuiltInCategory` / `StructuralMaterialType`; standard and shape deduced from the type designation (W12X26, IPE300...), never from folder or display names. Pending API checks in `herramientas-dev/miembros_por_verificar_revit.md` (section 2b); validation prompt in `herramientas-dev/VALIDACION_2B.md`; smoke tests `pruebas/probar_revit.py --fase 2b`; CPython tests `tests/test_acero.py`, `tests/test_acero_escritura.py`, `tests/test_analitico.py`
 
 The complete route table (parameters, responses, curl examples) is in CONTRATO.md.
 

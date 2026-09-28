@@ -17,6 +17,7 @@ _KIND_COTA = ("dimension", "dimensions", "cota", "cotas", "dim")
 _KIND_ETIQUETA = ("tag", "tags", "etiqueta", "etiquetas")
 _MUROS = ("ost_walls", "walls", "muros", "wall", "muro")
 _FORMATOS_DOCUMENTO = ("pdf", "png", "jpg", "jpeg", "dwg")
+_FORMATOS_ESTRUCTURALES = ("ifc_structural", "csv_nodes_members")
 _ACCIONES = ("purge", "backup", "save")
 _KINDS_LARGOS = ("toposolid",)
 
@@ -204,23 +205,36 @@ def register_escritura_tools(mcp, revit_get, revit_post, revit_image=None):
 
     @mcp.tool()
     async def join_geometry(
-        element_id_a: int,
-        element_id_b: int,
+        element_id_a: int = None,
+        element_id_b: int = None,
+        element_ids: list[int] = None,
         unjoin: bool = False,
+        coping: bool = False,
         simular: bool = False,
+        forzar: bool = False,
         ctx: Context = None,
     ) -> str:
-        """Join or unjoin the geometry of two elements (wall and floor, column and beam).
-        Returns joined antes/despues. Example: join_geometry(element_id_a=1234, element_id_b=5678).
+        """Join or unjoin the geometry of two elements, or of a chain (`element_ids`, joined
+        in consecutive pairs; `coping=true` also cuts steel members with AddCoping). Returns
+        joined antes/despues. Example: join_geometry(element_ids=[1234, 5678, 9012], coping=true).
 
         Args:
-            element_id_a: First element
-            element_id_b: Second element
+            element_id_a: First element (two-element form)
+            element_id_b: Second element (two-element form)
+            element_ids: Chain of 2+ elements joined pair by pair (alternative)
             unjoin: true to separate elements already joined
+            coping: With element_ids: FamilyInstance.AddCoping on each pair (steel beams/columns)
             simular: Only validate
+            forzar: Required above 200 elements in a chain
         """
         crono = Cronometro()
-        data = {"element_id_a": element_id_a, "element_id_b": element_id_b, "unjoin": unjoin, "simular": simular}
+        if element_ids:
+            data = {"element_ids": element_ids, "unjoin": unjoin, "coping": coping, "simular": simular, "forzar": forzar}
+        else:
+            if element_id_a is None or element_id_b is None:
+                return format_response(_texto_error(
+                    "element_id_a and element_id_b are required (or element_ids for a chain)"), ms_puente=crono.ms())
+            data = {"element_id_a": element_id_a, "element_id_b": element_id_b, "unjoin": unjoin, "simular": simular}
         response = await revit_post("/join_geometry/", data, ctx, timeout=TIMEOUT_ESCRITURA)
         return format_response(response, ms_puente=crono.ms())
 
@@ -470,23 +484,36 @@ def register_escritura_tools(mcp, revit_get, revit_post, revit_image=None):
         resolution: int = 300,
         ifc_version: str = "IFC2x3",
         export_base_quantities: bool = True,
+        element_ids: list[int] = None,
         ctx: Context = None,
     ) -> str:
-        """Export a view or sheet (pdf, png, jpg, dwg), the model to IFC, or the room data
-        (rooms_json, rooms_csv). Example: export(format="pdf", view_name="E-101");
-        export(format="ifc", file_path="C:\\\\Proyectos\\\\modelo.ifc");
-        export(format="rooms_csv", file_path="C:\\\\Proyectos\\\\habitaciones.csv").
+        """Export a view or sheet (pdf, png, jpg, dwg), the model to IFC, the room data
+        (rooms_json, rooms_csv) or the structural model (ifc_structural: IFC with base
+        quantities filtered by the active analytical view; csv_nodes_members: one row per
+        analytical member with nodes and releases). Example: export(format="pdf", view_name="E-101");
+        export(format="csv_nodes_members", file_path="C:\\\\Proyectos\\\\miembros.csv").
 
         Args:
-            format: "pdf", "png", "jpg", "dwg", "ifc", "rooms_json" or "rooms_csv"
-            file_path: Output path (required for ifc; optional for rooms_csv, written by the bridge)
+            format: "pdf", "png", "jpg", "dwg", "ifc", "rooms_json", "rooms_csv", "ifc_structural" or "csv_nodes_members"
+            file_path: Output path (required for ifc, ifc_structural and csv_nodes_members; optional for rooms_csv)
             view_name: View or sheet to export (default: active view; ifc: only its visible elements)
             resolution: DPI for png/jpg
             ifc_version: "IFC2x3" or "IFC4"
             export_base_quantities: IFC base quantities
+            element_ids: csv_nodes_members only: elements to export (empty = every steel element)
         """
         crono = Cronometro()
         formato = str(format or "").strip().lower()
+        if formato in _FORMATOS_ESTRUCTURALES:
+            if not file_path:
+                return format_response(_texto_error("file_path is required for format={}".format(formato)), ms_puente=crono.ms())
+            data = {"format": formato, "file_path": file_path, "ifc_version": ifc_version}
+            if view_name is not None:
+                data["view_name"] = view_name
+            if element_ids:
+                data["element_ids"] = element_ids
+            response = await revit_post("/export_structural/", data, ctx, timeout=TIMEOUT_LARGO)
+            return format_response(response, ms_puente=crono.ms())
         if formato in _FORMATOS_DOCUMENTO:
             data = {"view_name": view_name, "format": formato, "resolution": resolution}
             response = await revit_post("/export_document/", data, ctx, timeout=TIMEOUT_LARGO)
@@ -519,8 +546,8 @@ def register_escritura_tools(mcp, revit_get, revit_post, revit_image=None):
                 resultado["csv"] = texto
             return format_response(resultado, ms_puente=crono.ms())
         return format_response(_texto_error(
-            "format '{}' not supported: use pdf, png, jpg, dwg, ifc, rooms_json or rooms_csv".format(format)),
-            ms_puente=crono.ms())
+            "format '{}' not supported: use pdf, png, jpg, dwg, ifc, rooms_json, rooms_csv, ifc_structural or "
+            "csv_nodes_members".format(format)), ms_puente=crono.ms())
 
     @mcp.tool()
     async def link_file(
@@ -583,6 +610,285 @@ def register_escritura_tools(mcp, revit_get, revit_post, revit_image=None):
         if element_ids is not None:
             data["element_ids"] = element_ids
         response = await revit_post("/create_mep_system/", data, ctx, timeout=TIMEOUT_ESCRITURA)
+        return format_response(response, ms_puente=crono.ms())
+
+    # ---- 0.5.0 (entrega 2b): estructuras metalicas -----------------------------
+    @mcp.tool()
+    async def load_steel_profile(
+        file_path: str = None,
+        family_name: str = None,
+        type_names: list[str] = None,
+        overwrite: bool = False,
+        simular: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Load steel profile types: LoadFamilySymbol per type when the .rfa has a .txt type
+        catalog (type_names required), LoadFamily otherwise. 409 if already loaded unless
+        overwrite. Example: load_steel_profile(family_name="W-Wide Flange", type_names=["W12X26"]).
+
+        Args:
+            file_path: Full path of the .rfa on the Revit machine
+            family_name: Alternative: <name>.rfa searched in Application.GetLibraryPaths()
+            type_names: Catalog types to load (or the family types to activate)
+            overwrite: Reload a family that is already loaded
+            simular: Only validate; returns plan
+        """
+        crono = Cronometro()
+        if not file_path and not family_name:
+            return format_response(_texto_error("file_path or family_name is required"), ms_puente=crono.ms())
+        data = {"overwrite": overwrite, "simular": simular}
+        for clave, valor in (("file_path", file_path), ("family_name", family_name), ("type_names", type_names)):
+            if valor is not None:
+                data[clave] = valor
+        response = await revit_post("/load_steel_profile/", data, ctx, timeout=TIMEOUT_LARGO)
+        return format_response(response, ms_puente=crono.ms())
+
+    @mcp.tool()
+    async def create_steel_frame(
+        column_type: str,
+        beam_type: str,
+        grids_x: list[str] = None,
+        grids_y: list[str] = None,
+        levels: list[str] = None,
+        beam_directions: str = "both",
+        column_orientation_deg: float = 0,
+        skip_columns_at: list[str] = None,
+        skip_beams_at: list[str] = None,
+        mark_prefix: str = None,
+        simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """MACRO: steel frame in ONE transaction: a column at every grid intersection of each
+        level (top = next level) and beams between consecutive columns. Run with simular=true
+        first and show `plan.counts`. Example: create_steel_frame(column_type="HEB300",
+        beam_type="IPE300", levels=["Nivel 1"], mark_prefix="P").
+
+        Args:
+            column_type: Structural column type (or "Family: Type")
+            beam_type: Structural framing type
+            grids_x: Grid names with constant X (1, 2, 3...); empty = all
+            grids_y: Grid names with constant Y (A, B, C...); empty = all
+            levels: Level names; empty = all
+            beam_directions: "x", "y" or "both"
+            column_orientation_deg: Column rotation
+            skip_columns_at: Intersections without column ("A-1")
+            skip_beams_at: Bays without beam ("A-1/A-2")
+            mark_prefix: Sequential marks (ALL_MODEL_MARK) with this prefix
+            simular: Only validate; returns plan
+            forzar: Required above 200 elements
+        """
+        crono = Cronometro()
+        data = {"column_type": column_type, "beam_type": beam_type, "beam_directions": beam_directions,
+                "column_orientation_deg": column_orientation_deg, "simular": simular, "forzar": forzar}
+        for clave, valor in (("grids_x", grids_x), ("grids_y", grids_y), ("levels", levels),
+                             ("skip_columns_at", skip_columns_at), ("skip_beams_at", skip_beams_at), ("mark_prefix", mark_prefix)):
+            if valor is not None:
+                data[clave] = valor
+        response = await revit_post("/create_steel_frame/", data, ctx, timeout=TIMEOUT_LARGO)
+        return format_response(response, ms_puente=crono.ms())
+
+    @mcp.tool()
+    async def create_bracing(
+        bays: list[dict],
+        brace_type: str,
+        simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Braces (StructuralType.Brace) per bay in ONE transaction; pattern single, X, V,
+        inverted_V or K, heights from the levels (internal elevation), points in mm.
+        Example: create_bracing(bays=[{"start_point_mm": {"x": 0, "y": 0}, "end_point_mm":
+        {"x": 6000, "y": 0}, "level_bottom": "Nivel 1", "level_top": "Nivel 2", "pattern": "X"}], brace_type="L100x100x10").
+
+        Args:
+            bays: [{"start_point_mm", "end_point_mm", "level_bottom", "level_top", "pattern"}]
+            brace_type: Structural framing type used as brace
+            simular: Only validate; returns plan
+            forzar: Required above 200 braces
+        """
+        crono = Cronometro()
+        data = {"bays": bays, "brace_type": brace_type, "simular": simular, "forzar": forzar}
+        response = await revit_post("/create_bracing/", data, ctx, timeout=TIMEOUT_ESCRITURA)
+        return format_response(response, ms_puente=crono.ms())
+
+    @mcp.tool()
+    async def create_truss(
+        trusses: list[dict],
+        simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Trusses (Truss.Create on a sketch plane at the level) in ONE transaction; 404 with
+        the available types if truss_type does not exist. Example: create_truss(trusses=[
+        {"truss_type": "Cercha 12 m", "start_point_mm": {"x": 0, "y": 0}, "end_point_mm":
+        {"x": 12000, "y": 0}, "level": "Cubierta"}]).
+
+        Args:
+            trusses: [{"truss_type", "start_point_mm", "end_point_mm", "level"}]
+            simular: Only validate; returns plan
+            forzar: Required above 200 trusses
+        """
+        crono = Cronometro()
+        data = {"trusses": trusses, "simular": simular, "forzar": forzar}
+        response = await revit_post("/create_truss/", data, ctx, timeout=TIMEOUT_ESCRITURA)
+        return format_response(response, ms_puente=crono.ms())
+
+    @mcp.tool()
+    async def set_structural_properties(
+        element_ids: list[int],
+        start_release: str | dict = None,
+        end_release: str | dict = None,
+        y_justification: str | int = None,
+        z_justification: str | int = None,
+        y_offset_mm: float = None,
+        z_offset_mm: float = None,
+        section_rotation_deg: float = None,
+        start_extension_mm: float = None,
+        end_extension_mm: float = None,
+        analyze_as: str | int = None,
+        structural_usage: str | int = None,
+        simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Structural properties of beams, braces and columns in ONE transaction, by
+        BuiltInParameter (releases fall back to the AnalyticalMember in Revit 2023+). Returns
+        antes/despues per element, `fallidos` and `no_disponibles` per Revit version.
+        Example: set_structural_properties(element_ids=[10, 11], start_release="pinned",
+        end_release={"FX": true, "MZ": true}, y_justification="center").
+
+        Args:
+            element_ids: Elements to change
+            start_release: "pinned", "fixed", "bending_moment" or {"FX": bool, ... "MZ": bool}
+            end_release: Same for the end
+            y_justification: "origin", "left", "center", "right" or the enum index
+            z_justification: "origin", "top", "center", "bottom" or the enum index
+            y_offset_mm: Y offset
+            z_offset_mm: Z offset
+            section_rotation_deg: Cross-section rotation
+            start_extension_mm: Start extension
+            end_extension_mm: End extension
+            analyze_as: AnalyzeAs name ("gravity", "lateral", "not_for_analysis") or index
+            structural_usage: StructuralInstanceUsage name ("girder", "joist", "column"...) or index
+            simular: Only validate; returns haria
+            forzar: Required above 200 element x property pairs
+        """
+        crono = Cronometro()
+        data = {"element_ids": element_ids, "simular": simular, "forzar": forzar}
+        for clave, valor in (("start_release", start_release), ("end_release", end_release),
+                             ("y_justification", y_justification), ("z_justification", z_justification),
+                             ("y_offset_mm", y_offset_mm), ("z_offset_mm", z_offset_mm),
+                             ("section_rotation_deg", section_rotation_deg), ("start_extension_mm", start_extension_mm),
+                             ("end_extension_mm", end_extension_mm), ("analyze_as", analyze_as),
+                             ("structural_usage", structural_usage)):
+            if valor is not None:
+                data[clave] = valor
+        response = await revit_post("/set_structural_properties/", data, ctx, timeout=TIMEOUT_ESCRITURA)
+        return format_response(response, ms_puente=crono.ms())
+
+    @mcp.tool()
+    async def create_steel_connection(
+        connections: list[dict],
+        approve: bool = False,
+        approval_status: str = None,
+        simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Steel connections (StructuralConnectionHandler.Create) in ONE transaction; pick the
+        type from list_types(category="connections"). 409 no_soportado without the Steel
+        Connections module. Example: create_steel_connection(connections=[{"element_ids":
+        [10, 12], "connection_type": "Conexión genérica"}]).
+
+        Args:
+            connections: [{"element_ids": [...], "connection_type": name or id}]
+            approve: Also set the approval status (needs approval_status)
+            approval_status: Approval type name as Revit shows it (list_types connections -> approval_types) or id
+            simular: Only validate
+            forzar: Required above 200 connections
+        """
+        crono = Cronometro()
+        data = {"connections": connections, "approve": approve, "simular": simular, "forzar": forzar}
+        if approval_status is not None:
+            data["approval_status"] = approval_status
+        response = await revit_post("/create_steel_connection/", data, ctx, timeout=TIMEOUT_ESCRITURA)
+        return format_response(response, ms_puente=crono.ms())
+
+    @mcp.tool()
+    async def add_plate_or_stiffener(
+        host_id: int,
+        family_name: str,
+        type_name: str,
+        positions: list[float] = None,
+        face: str = "top",
+        simular: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Place plates or stiffeners along a beam or column in one transaction: a face-based
+        family goes on the top, bottom or web face (references from get_Geometry); a
+        point-based family on the axis. Positions in mm from the start, or fractions 0-1.
+        Example: add_plate_or_stiffener(host_id=1234, family_name="Rigidizador", type_name="PL10", positions=[0.25, 0.75]).
+
+        Args:
+            host_id: Beam, brace or column
+            family_name: Loaded family
+            type_name: Its type
+            positions: mm from the start, or fractions (<= 1); default [0.5]
+            face: "top", "bottom" or "web" (face-based families)
+            simular: Only validate
+        """
+        crono = Cronometro()
+        data = {"host_id": host_id, "family_name": family_name, "type_name": type_name, "face": face, "simular": simular}
+        if positions is not None:
+            data["positions"] = positions
+        response = await revit_post("/add_plate/", data, ctx, timeout=TIMEOUT_ESCRITURA)
+        return format_response(response, ms_puente=crono.ms())
+
+    @mcp.tool()
+    async def split_beam(
+        element_id: int,
+        at_mm: list[float],
+        simular: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Split a straight beam at distances from its start: the original keeps the first
+        segment and each further segment is a copy (CopyElement + LocationCurve). `avisos`
+        warns that joins and connections of the original are lost.
+        Example: split_beam(element_id=1234, at_mm=[2000, 4000]).
+
+        Args:
+            element_id: Beam or brace with a straight location curve
+            at_mm: Cut positions in mm from the start (inside the beam)
+            simular: Only validate
+        """
+        crono = Cronometro()
+        data = {"element_id": element_id, "at_mm": at_mm, "simular": simular}
+        response = await revit_post("/split_beam/", data, ctx, timeout=TIMEOUT_ESCRITURA)
+        return format_response(response, ms_puente=crono.ms())
+
+    @mcp.tool()
+    async def fix_analytical_alignment(
+        element_ids: list[int],
+        tolerance_mm: float = 50,
+        simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Snap the loose analytical nodes of these elements to the nearest foreign node within
+        tolerance_mm (AnalyticalMember.SetCurve) in ONE transaction; antes/despues per node,
+        `sin_objetivo` for nodes with nothing near. Run analytical_status first and simular=true.
+        Example: fix_analytical_alignment(element_ids=[1234], tolerance_mm=50, simular=true).
+
+        Args:
+            element_ids: Physical elements whose analytical members are aligned
+            tolerance_mm: Maximum distance a node is moved (default 50)
+            simular: Only list the planned moves
+            forzar: Required above 200 node moves
+        """
+        crono = Cronometro()
+        data = {"element_ids": element_ids, "tolerance_mm": tolerance_mm, "simular": simular, "forzar": forzar}
+        response = await revit_post("/fix_analytical/", data, ctx, timeout=TIMEOUT_LARGO)
         return format_response(response, ms_puente=crono.ms())
 
     @mcp.tool()
