@@ -182,7 +182,7 @@ def register_lectura_tools(mcp, revit_get, revit_post, revit_image=None):
 
     @mcp.tool()
     async def query_elements(
-        category: str = None,
+        category: str | list[str] = None,
         family: str = None,
         type_name: str = None,
         level: str = None,

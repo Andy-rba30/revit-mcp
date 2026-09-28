@@ -127,6 +127,16 @@ def test_nombre_retirado_responde_con_la_sustituta(servidor):
     assert instalar_retiradas(mcp) == "_tool_manager.call_tool"
 
 
+def test_query_elements_acepta_lista_de_categorias_en_el_esquema(servidor):
+    """0.4.1: la descripcion decia que category acepta una lista, pero el tipo era
+    str y la validacion del servidor MCP la rechazaba antes de llegar a Revit."""
+    mcp, puente = servidor
+    asyncio.run(mcp._tool_manager.call_tool(
+        "query_elements", {"category": ["OST_Walls", "OST_Floors"], "page_size": 5}, None))
+    _, ruta, datos, _ = puente.llamadas[-1]
+    assert ruta == "/query/" and datos["category"] == ["OST_Walls", "OST_Floors"]
+
+
 def test_las_herramientas_registradas_siguen_llamandose(servidor):
     mcp, puente = servidor
     puente.respuestas["/status/"] = {"status": "active", "health": "healthy", "document_title": "Casa"}

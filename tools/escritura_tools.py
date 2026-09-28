@@ -441,7 +441,7 @@ def register_escritura_tools(mcp, revit_get, revit_post, revit_image=None):
         color_elements(category_name="Walls", clear=true).
 
         Args:
-            category_name: Category to colour (as the route expects it)
+            category_name: BuiltInCategory ("OST_Walls"), alias ("walls") or visible name
             parameter_name: Parameter whose values pick the colours (required unless clear)
             use_gradient: Gradient instead of distinct colours
             custom_colors: Hex colours to use
