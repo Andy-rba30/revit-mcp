@@ -2,7 +2,8 @@
 
 Este texto se envía como `instructions` del servidor MCP (`main.py`) y se
 mantiene aquí para poder leerlo y revisarlo. Habla al agente en segunda
-persona. Versión del conector: **0.4.0** (40 herramientas; las 51 retiradas
+persona. Versión del conector: **0.5.0** (52 herramientas: las 40 de 0.4.0 más
+las 12 de estructuras metálicas y modelo analítico; las 51 retiradas en 0.4.0
 responden con el nombre de su sustituta si las llamas).
 
 ## 1. Precedencia de herramientas
@@ -35,9 +36,10 @@ responden con el nombre de su sustituta si las llamas).
    `list_views`, `describe_view`, `capture_view`, `query_elements`,
    `describe_element`, `dependency_graph`, `list_types`, `schedule_to_json`,
    `list_warnings`, `analyze_model`, `check_clashes`, `snapshot_model`,
-   `diff_snapshots`, `read_log`, `list_macros`) no cambian nada en el modelo:
+   `diff_snapshots`, `read_log`, `list_macros`, `list_steel_profiles`,
+   `steel_quantities`, `analytical_status`) no cambian nada en el modelo:
    úsalas sin pedir permiso (`snapshot_model` solo escribe un `.json` en
-   `snapshots\`).
+   `snapshots\`; `export` con `csv_nodes_members` solo escribe el CSV).
 
 ## 2. Flujo obligatorio para cualquier cambio en el modelo
 
@@ -136,6 +138,62 @@ al `.rvt` (léelo con `read_log`).
    confirmación. `import_from_civil` con `use_shared_coordinates=true` cambia
    las coordenadas compartidas del proyecto: pide confirmación expresa y no
    uses `forzar` sin que el usuario lo diga.
+
+## 2d. Flujo de estructura metálica (0.5.0)
+
+1. Niveles con `get_revit_model_info(include=["levels"])` y rejillas con
+   `query_elements(category="OST_Grids")`: toma los nombres exactos que
+   devuelven (nunca supongas "1, 2, 3 / A, B, C"). Si no hay rejillas rectas,
+   créalas con `create_grid_and_levels`.
+2. `list_steel_profiles(loaded_only=true)`: perfiles de acero cargados con su
+   forma (`W`, `HSS`, `L`, `C`, `WT`, `Pipe`), norma deducida (`AISC`, `EN`) y
+   dimensiones en mm. Si falta el perfil, `list_steel_profiles(loaded_only=false)`
+   lista los `.rfa` con catálogo de la biblioteca y `load_steel_profile(family_name=...,
+   type_names=[...])` carga solo los tipos que hacen falta (con catálogo `.txt`
+   hay que nombrar los tipos; la familia ya cargada responde `409` salvo
+   `overwrite=true`).
+3. `create_steel_frame(column_type, beam_type, grids_x, grids_y, levels,
+   simular=true)`: muestra al usuario `plan.counts` (`columns`, `beams`,
+   `total`), las intersecciones (`"A-1"`) y los `warnings` (rejillas curvas,
+   nivel sin nivel superior). `skip_columns_at=["A-1"]` y
+   `skip_beams_at=["A-1/A-2"]` quitan pilares y vanos; `mark_prefix` numera.
+4. Tras su confirmación, ejecuta sin `simular`: una sola entrada
+   `IA: Portico metalico`; `creados.columns` y `creados.beams` traen ids, nivel
+   superior y marcas. Arriostres con `create_bracing` (patrón por vano) y
+   cerchas con `create_truss`, siempre en lote.
+5. `set_structural_properties(element_ids=[...], start_release="pinned",
+   end_release={"FX": true, "MZ": true}, y_justification="center", ...)` para
+   liberaciones, justificaciones, desfases (mm), rotación (grados),
+   extensiones y `analyze_as`: todo en una llamada por lote de elementos.
+   `fallidos` dice qué par elemento × propiedad no se pudo fijar y
+   `no_disponibles` qué `BuiltInParameter` no existe en esa versión de Revit
+   (las liberaciones van al `AnalyticalMember` cuando el elemento físico no
+   las tiene, Revit 2023+). Comprueba con `describe_element(element_id,
+   include_structural=true)`.
+6. `analytical_status(element_ids=[...])`: `members`, `sin_analitico` y
+   `loose_nodes_total`; con nodos sueltos, `fix_analytical_alignment(element_ids,
+   tolerance_mm=50, simular=true)`, muestra los movimientos (`from_mm`,
+   `to_mm`, `distance_mm`) y ejecuta tras confirmar. Un nodo sin nada a menos
+   de la tolerancia queda en `sin_objetivo`: no subas la tolerancia sin decirlo.
+7. `steel_quantities(group_by="type")` como comprobación: recuento, longitud
+   y peso por grupo; los ids de `sin_peso` traen el motivo (material sin
+   activo estructural, tipo sin masa lineal). `export(format="csv_nodes_members",
+   file_path=...)` o `export(format="ifc_structural", file_path=...)` para
+   entregar el modelo analítico.
+8. **Un lote, no una llamada por elemento**: `set_structural_properties`,
+   `create_bracing`, `create_truss`, `create_steel_connection`,
+   `fix_analytical_alignment` y `join_geometry(element_ids=[...])` reciben
+   listas y aplican todo en una transacción con `fallidos[]`; no repitas la
+   herramienta por cada viga.
+9. Conexiones de acero: `list_types(category="connections")` lista los tipos
+   (y `approval_types`); `create_steel_connection(connections=[{"element_ids":
+   [...], "connection_type": ...}])`. Un `409` `no_soportado` significa que el
+   módulo Steel Connections for Revit no está instalado o no hay tipos
+   cargados: díselo al usuario, no lo rodees con `execute_revit_code`.
+10. `add_plate_or_stiffener` coloca una familia alojada en cara (`top`,
+    `bottom`, `web`) o de punto sobre una viga o pilar; `split_beam` divide
+    una viga recta y avisa de que se pierden uniones y conexiones del
+    original; `join_geometry(element_ids=[...], coping=true)` une en cadena.
 
 ## 3. Reglas de dominio
 
@@ -236,6 +294,22 @@ al `.rvt` (léelo con `read_log`).
 | Superficie de Civil 3D | `LandXML` (`Surface/Definition/Pnts`, puntos en orden norte-este-cota) |
 | Adquirir coordenadas | `Acquire Coordinates` (`doc.AcquireCoordinates`) |
 | Filtro de parámetro nativo | `ElementParameterFilter` (`ParameterValueProvider` + `FilterRule`) |
+| Perfil de acero | `FamilySymbol` de `OST_StructuralFraming` / `OST_StructuralColumns` con `StructuralMaterialType.Steel` (`list_steel_profiles`, `load_steel_profile`) |
+| Catálogo de tipos | `Type catalog` (`.txt` junto al `.rfa`; `LoadFamilySymbol` por tipo) |
+| Pórtico metálico | `create_steel_frame` (`NewFamilyInstance` con `StructuralType.Column` / `Beam`) |
+| Arriostre | `Brace` (`StructuralType.Brace`, `create_bracing`) |
+| Cercha | `Truss` (`Truss.Create`, `TrussType`, `create_truss`) |
+| Rigidizador | `Stiffener` (familia alojada en cara, `add_plate_or_stiffener(face="web")`) |
+| Placa base | `Base plate` (`add_plate_or_stiffener`, familia de punto o de cara) |
+| Liberación | `Release` (`STRUCTURAL_START_RELEASE_*` / `STRUCTURAL_END_RELEASE_*`, `AnalyticalMember.SetReleaseType`) |
+| Justificación | `Justification` (`Y_JUSTIFICATION`, `Z_JUSTIFICATION`) |
+| Desfase / rotación de sección / extensión | `Y_OFFSET_VALUE`, `Z_OFFSET_VALUE` / `STRUCTURAL_BEND_DIR_ANGLE` / `START_EXTENSION`, `END_EXTENSION` |
+| Uso estructural | `Structural usage` (`INSTANCE_STRUCT_USAGE_PARAM`, `StructuralInstanceUsage`) |
+| Conexión de acero | `Steel connection` (`StructuralConnectionHandler`, tipos `StructuralConnectionHandlerType`) |
+| Modelo analítico | `Analytical model` (`AnalyticalMember`, `AnalyticalToPhysicalAssociationManager`) |
+| Nodo | `Analytical node` (extremos de `AnalyticalMember.GetCurve()`; `fix_analytical_alignment` los mueve con `SetCurve`) |
+| Recorte de viga (coping) | `Coping` (`FamilyInstance.AddCoping`, `join_geometry(coping=true)`) |
+| Peso del acero | volumen (`HOST_VOLUME_COMPUTED`) × densidad del activo estructural (`StructuralAsset.Density`) |
 
 ## 5. Errores típicos y qué hacer
 
@@ -270,3 +344,14 @@ al `.rvt` (léelo con `read_log`).
 | `404` "Views not found" con `missing_views` | Una vista de `create_sheet_set` no existe con ese nombre exacto | Toma el nombre de `list_views`. |
 | `409` "The project already has shared coordinates" | `import_from_civil` con `use_shared_coordinates` sobrescribiría las coordenadas compartidas | Confirma con el usuario y repite con `forzar=true` solo si lo pide. |
 | `400` "op '...' not supported" | `filters[].op` desconocido | Usa `=`, `!=`, `>`, `<`, `>=`, `<=`, `contains`, `starts`, `empty`, `not_empty` o `exists`. |
+| `409` con `no_soportado: true` en `list_types(category="connections")` o `create_steel_connection` | La API no expone `StructuralConnectionHandler` (falta Steel Connections for Revit) o no hay tipos de conexión cargados | Informa al usuario; no crees conexiones con `execute_revit_code`. |
+| `409` con `no_soportado: true` en `analytical_status` / `fix_analytical_alignment` | La API no expone `AnalyticalToPhysicalAssociationManager` (Revit anterior a 2023) | Informa; el conector no lee el modelo analítico antiguo. |
+| `nota` "No hay perfiles de acero cargados" en `list_steel_profiles` | El proyecto no tiene familias de acero | `list_steel_profiles(loaded_only=false)` y `load_steel_profile` con los tipos que hagan falta. |
+| `400` "has a type catalog: give type_names" con `available_types` | La familia tiene catálogo `.txt` y `LoadFamilySymbol` carga un tipo cada vez | Repite con `type_names=[...]` elegidos de `available_types`. |
+| `409` "already loaded" en `load_steel_profile` | La familia (y los tipos pedidos) ya están en el proyecto | No hace falta cargar; usa `overwrite=true` solo si el usuario quiere recargarla. |
+| `404` "grids not found" / `400` "unknown intersections" con `available_grids` / `available_labels` | Nombres de rejilla o etiquetas (`"A-1"`) que no existen | Usa los nombres de `query_elements(category="OST_Grids")` y las etiquetas de `available_labels`. |
+| `fallidos[]` con `motivo: parameter not found and no analytical member associated` en `set_structural_properties` | El elemento no tiene ese parámetro (un pilar sin extensiones) ni miembro analítico para las liberaciones | Informa; el resto del lote sí se aplicó. |
+| `no_disponibles[]` en `set_structural_properties` / `describe_element(include_structural)` | Ese `BuiltInParameter` no existe en la versión de Revit | Informa; anótalo en `herramientas-dev/miembros_por_verificar_revit.md`. |
+| `400` "approve=true needs approval_status" con `available_approval_types` | El estado de aprobación se elige por su nombre visible (depende del idioma) o su id | Repite con `approval_status` tomado de la lista. |
+| `sin_peso[]` en `steel_quantities` | Material sin activo estructural o tipo sin masa lineal | Informa el motivo; no inventes densidades. |
+| `sin_objetivo[]` en `fix_analytical_alignment` | Nodo suelto sin ningún nodo ajeno a menos de `tolerance_mm` | Muéstralo con `nearest_mm`; sube la tolerancia solo si el usuario lo pide. |

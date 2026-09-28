@@ -141,3 +141,55 @@ funciona y aparece en `referenced_by`; el filtro por fase devuelve los 68 muros 
 | método | `Category.Id` comparado con `int(BuiltInCategory)` para resolver `OST_...` en `/list_category_parameters/` | 2011 | herramienta `list_types(with_parameters=true)` | verificado (0.4.0: `list_types(category="OST_Walls", with_parameters=true)` con `category_parameters`) |
 | módulo | `io.open(ruta, "r", encoding="utf-8")` en IronPython 2.7 | IronPython 2.7 | antes: `/log/` (`read_log`), `/diff_snapshots/`, manifiestos de macros, CSV y LandXML | no fiable: falla con `UnicodeDecodeError` si un carácter de dos bytes cae entre dos trozos (0.4.1, `read_log` con la ruta `Antón`); sustituido por `utils.leer_texto_utf8` (bytes + `decode` en bloque), por verificar en Revit |
 | método | `HostObjectUtils.GetSideFaces(Wall, ShellLayerType.Exterior)` como referencia de cota | 2011 | `/create_dimensions/` (`annotate(kind="dimension")`, `annotation._referencia`) | verificado (0.4.3 en Revit 2027 es: cota entre los muros 165465 y 165592, valor 6.50) |
+
+## Entrega 2b (0.5.0): estructuras metálicas y modelo analítico
+
+Sin probar aún en Revit (28/09/2026): todo lo de esta sección entra como `por verificar` salvo lo ya
+verificado en la fase 1. Se prueba con `herramientas-dev/VALIDACION_2B.md` y `pruebas/probar_revit.py --fase 2b`.
+Regla de la entrega: cada miembro que cambie entre Revit 2024 y 2027 va con `try/except` y la ruta
+alternativa se anota en la columna "Ruta que lo usa".
+
+Nota sobre la 0.2.x: `/load_family/` (`placement.py`) llama a `Document.LoadFamily` **sin** transacción porque
+el comentario de la fase 1 dice que LoadFamily abre la suya; en la documentación de la API LoadFamily modifica
+el documento y necesita una transacción abierta. Las rutas nuevas (`/load_steel_profile/`) la abren
+(`IA: Cargar perfil <familia>`). Queda por comprobar en Revit cuál de las dos formas es la correcta; si
+`/load_family/` falla con "outside of transaction", es un fallo real de 0.2.x que corregir en su commit.
+
+| Tipo | Miembro | Versión mínima | Ruta que lo usa | Estado |
+|---|---|---|---|---|
+| método | `Document.Create.NewFamilyInstance(XYZ, FamilySymbol, Level, StructuralType.Column)` | 2011 | `/create_steel_frame/` (`estructural.crear_pilar`) | verificado (fase 1, `/create_column/`) |
+| método | `Document.Create.NewFamilyInstance(Line, FamilySymbol, Level, StructuralType.Beam)` | 2011 | `/create_steel_frame/` (`structure.crear_viga`) | verificado (fase 1, `/create_framing/`) |
+| parámetro | `BuiltInParameter.FAMILY_TOP_LEVEL_PARAM` (nivel superior del pilar) | 2011 | `/create_steel_frame/`, `/create_column/` | por verificar |
+| método | `Document.Create.NewFamilyInstance(Line, FamilySymbol, Level, StructuralType.Brace)` | 2011 | `/create_bracing/` | por verificar |
+| propiedad | `Family.StructuralMaterialType` (`StructuralMaterialType.Steel`) | 2013 | `/steel_profiles/`, `/steel_quantities/`, `describe include_structural` (`acero.es_acero`; reserva: clase `Metal` del activo estructural del material) | por verificar |
+| propiedad | `FamilyInstance.StructuralMaterialType`, `FamilyInstance.StructuralUsage` | 2013 | `describe include_structural` (`acero.bloque_estructural`) | por verificar |
+| propiedad | `Material.StructuralAssetId` → `PropertySetElement.GetStructuralAsset()` → `StructuralAsset.Density`, `StructuralAsset.StructuralAssetClass` | 2013 | `/steel_quantities/` (peso), `acero.es_acero` (reserva) | por verificar |
+| método | `UnitUtils.ConvertFromInternalUnits(valor, UnitTypeId.KilogramsPerCubicMeter)` y `UnitTypeId.KilogramsPerMeter` | 2021 | `/steel_quantities/` (densidad y masa lineal; reserva: interno kg/ft³ × 35,31 y kg/ft × 3,28) | por verificar (confirmar que la densidad interna es kg/ft³) |
+| parámetro | `BuiltInParameter.HOST_VOLUME_COMPUTED`, `INSTANCE_LENGTH_PARAM` en vigas y pilares | 2011 | `/steel_quantities/` (reserva: `Location.Curve.Length`, caja envolvente) | por verificar |
+| parámetro | `BuiltInParameter.STRUCTURAL_SECTION_COMMON_HEIGHT`, `_WIDTH`, `_WEB_THICKNESS`, `_FLANGE_THICKNESS` (tipo) | 2017 | `/steel_profiles/` (`dimensions_mm`; los que no existan van a `no_disponibles`) | por verificar |
+| parámetro | `BuiltInParameter.STRUCTURAL_SECTION_NOMINAL_WEIGHT` (masa lineal del tipo) | 2017 | `/steel_quantities/` (reserva sin activo estructural) | por verificar |
+| método | `FamilySymbol.GetStructuralSection()` → `StructuralSection.StructuralSectionShape` | 2017 | `/steel_profiles/` (`shape`; reserva: designación del tipo) | por verificar |
+| método | `Application.GetLibraryPaths()` (`IDictionary<string,string>`; se leen `.Values`) | 2011 | `/steel_profiles/` con `loaded_only=false`, `/load_steel_profile/` con `family_name` | por verificar |
+| método | `Document.LoadFamilySymbol(string ruta, string tipo, out FamilySymbol)` (catálogo `.txt`) dentro de `IA: Cargar perfil` | 2011 | `/load_steel_profile/` | por verificar |
+| método | `Document.LoadFamily(string ruta, out Family)` dentro de una transacción | 2011 | `/load_steel_profile/` (sin catálogo) | por verificar (ver la nota sobre `/load_family/`) |
+| método | `Family.GetFamilySymbolIds()` | 2015 | `/load_steel_profile/` (tipos de la familia cargada) | por verificar |
+| propiedad | `Grid.Curve` (`Line`; los `Arc` se ignoran con aviso) | 2011 | `/create_steel_frame/` (`acero.rejillas_clasificadas`) | por verificar |
+| parámetro | `BuiltInParameter.ALL_MODEL_MARK` fijado en pilares y vigas (`mark_prefix`) | 2011 | `/create_steel_frame/` | por verificar (verificado en muros en la 2a) |
+| método | `SketchPlane.Create(Document, ElementId nivel)` | 2014 | `/create_truss/` | por verificar |
+| método | `Structure.Truss.Create(Document, ElementId trussTypeId, ElementId sketchPlaneId, Curve)` + clase `Structure.TrussType` | 2015 | `/create_truss/` (404 con `available_types` si no hay tipos) | por verificar |
+| parámetro | `BuiltInParameter.INSTANCE_STRUCT_USAGE_PARAM`, `Y_JUSTIFICATION`, `Z_JUSTIFICATION`, `Y_OFFSET_VALUE`, `Z_OFFSET_VALUE`, `STRUCTURAL_BEND_DIR_ANGLE`, `START_EXTENSION`, `END_EXTENSION`, `STRUCTURAL_ANALYZES_AS` | 2011-2013 | `/set_structural_properties/`, `describe include_structural` (los que no existan → `no_disponibles`; los que el elemento no tenga → `no_aplica` / `fallidos`) | por verificar |
+| parámetro | `BuiltInParameter.STRUCTURAL_START_RELEASE_TYPE`, `STRUCTURAL_END_RELEASE_TYPE` y `STRUCTURAL_START/END_RELEASE_FX/FY/FZ/MX/MY/MZ` en el elemento físico | 2011 | `/set_structural_properties/`, `describe include_structural` | por verificar; en 2023+ las liberaciones viven en el `AnalyticalMember` y el elemento físico probablemente no las tiene (el código cae a la reserva analítica) |
+| enumeración | `int(Structure.YJustification.Left)`, `Structure.ZJustification`, `Structure.StructuralInstanceUsage`, `Structure.AnalyzeAs` (nombre → índice) | 2011 | `/set_structural_properties/` (`acero._indice_enum`) | por verificar |
+| método | `Structure.AnalyticalToPhysicalAssociationManager.GetAnalyticalToPhysicalAssociationManager(doc).GetAssociatedElementId(ElementId)` (en los dos sentidos) | 2023 | `/analytical_status/`, `/fix_analytical/`, `/export_structural/`, liberaciones de reserva | por verificar |
+| método | `Structure.AnalyticalMember.GetCurve()`, `SetCurve(Curve)` | 2023 | `/analytical_status/`, `/fix_analytical/` | por verificar |
+| método | `AnalyticalMember.GetReleaseType/SetReleaseType(AnalyticalElementSelector, ReleaseType)`, `GetReleaseConditions/SetReleaseConditions(ReleaseConditions)`, constructor `ReleaseConditions(bool start, fx, fy, fz, mx, my, mz)` | 2023 | `/set_structural_properties/` (reserva), `describe include_structural`, CSV de `/export_structural/` | por verificar |
+| método | `Curve.Distance(XYZ)` (nodo sobre otro miembro: `touching`) | 2011 | `/analytical_status/` | por verificar |
+| clase | `Structure.StructuralConnectionHandler.Create(Document, IList<ElementId>, ElementId tipo)`, `StructuralConnectionHandlerType` (+ `GetDefaultConnectionHandlerType(doc)`), `StructuralConnectionApprovalType.GetAllStructuralConnectionApprovalTypes(doc)`, `StructuralConnectionHandler.ApprovalStatus` | 2017 / 2019 | `/create_steel_connection/`, `/element_types/` con `category="connections"` (409 `no_soportado` si faltan las clases o no hay tipos) | por verificar; depende de que Steel Connections for Revit esté instalado |
+| método | `Options.ComputeReferences = True` → `Face.Reference`, `PlanarFace.FaceNormal`, `Face.Area`, `Face.Project(XYZ).XYZPoint`; `GeometryInstance.GetSymbolGeometry()` + `Transform` para las referencias de una instancia | 2011 | `/add_plate/` (`acero._caras_con_referencia`) | por verificar (las referencias de `GetInstanceGeometry` suelen ser nulas: se usa la geometría del símbolo) |
+| método | `Document.Create.NewFamilyInstance(Reference, XYZ, XYZ refDir, FamilySymbol)` (familia alojada en cara) | 2011 | `/add_plate/` | por verificar |
+| método | `Document.Create.NewFamilyInstance(XYZ, FamilySymbol, Level, StructuralType.NonStructural)` y la sobrecarga sin nivel `(XYZ, FamilySymbol, StructuralType)` | 2011 | `/add_plate/` (familia de punto) | por verificar |
+| propiedad | `Family.FamilyPlacementType` (`WorkPlaneBased` = alojada en cara) | 2011 | `/add_plate/` | por verificar |
+| método | `ElementTransformUtils.CopyElement(doc, id, XYZ.Zero)` + `LocationCurve.Curve = Line` en una viga (original y copias) | 2012 | `/split_beam/` | por verificar (Revit puede reajustar los extremos por la unión automática de vigas) |
+| método | `FamilyInstance.AddCoping(FamilyInstance)` | 2011 | `/join_geometry/` con `coping=true` | por verificar |
+| propiedad | `View.AreAnalyticalModelCategoriesHidden` (vista analítica activa como filtro del IFC) | 2011 | `/export_structural/` (`ifc_structural`) | por verificar |
+| método | `Document.Export(carpeta, nombre, IFCExportOptions)` con `FilterViewId` = vista analítica y `ExportBaseQuantities` | 2011 | `/export_structural/` (`interop.exportar_ifc`, extraído de `/export_ifc/`) | por verificar |

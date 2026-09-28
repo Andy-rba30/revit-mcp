@@ -1,6 +1,6 @@
 # Revit MCP Server
 
-MCP server for Autodesk Revit 2024/2025/2026/2027 via pyRevit — **40 tools** (consolidated from 78 in 0.4.0) for building design, structure, coordinates, editing, analysis, clash detection, MEP, interop, documentation, model persistence, deep navigation (element relations, parameter queries, schedules, snapshots), project macros (grids + levels, sheet sets, Civil 3D import) and **the user's own macros**, with **batch routes** (many parameters or many elements in ONE transaction) and a safe-write layer (backups, action log, dry-run `simular`, verification and `IA:` undo entries). Version **0.4.0**.
+MCP server for Autodesk Revit 2024/2025/2026/2027 via pyRevit — **52 tools** (40 consolidated from 78 in 0.4.0, plus 12 for steel structures and the analytical model in 0.5.0) for building design, structure, coordinates, editing, analysis, clash detection, MEP, interop, documentation, model persistence, deep navigation (element relations, parameter queries, schedules, snapshots), project macros (grids + levels, sheet sets, Civil 3D import, steel frames), **steel structures** (profiles, quantities, bracing, trusses, releases, connections, plates, analytical model) and **the user's own macros**, with **batch routes** (many parameters or many elements in ONE transaction) and a safe-write layer (backups, action log, dry-run `simular`, verification and `IA:` undo entries). Version **0.5.0**.
 
 Why 0.4.0: in the 0.3.1 validation Revit answered each call in under a second and simple tasks still took minutes, because the time went to the agent layer: 78 tools in context, one call per element and repetitive tasks driven step by step. 0.4.0 attacks that without changing the existing HTTP routes: the consolidation lives in `tools/`, and only two batch routes and the user-macro routes are new.
 
@@ -130,6 +130,12 @@ and a simulated create_grid_and_levels); expected `13/13`.
 against 20 `set_parameter` calls, a mixed `create_elements` dry run, the
 `comentarios_por_nivel` example macro, a snapshot with `timings` and a retired
 tool name answered by the bridge); expected `15/15`.
+`--fase 2b` adds the 0.5.0 steel checks (loaded steel profiles, a simulated
+and a real `create_steel_frame` on a 2x2 auxiliary grid with
+`analytical_status` on the result, `set_structural_properties` reflected by
+`describe_element(include_structural=true)` and `steel_quantities`); expected
+`14/14`, with 2b.2-2b.5 marked `NO_APLICA` when the model has no steel profiles
+loaded.
 
 Without Revit, `uv run pytest` runs the CPython tests in `tests/` (JSON
 formatting, simulated transactions, log rotation, write routes against a fake
@@ -182,7 +188,7 @@ mcp dev main.py
 
 Then open `http://127.0.0.1:6274` in your browser.
 
-## Supported Tools (40)
+## Supported Tools (52)
 
 Rule: **a usual task takes one or two calls.** Every write tool accepts
 `simular` (dry run: validates and returns `haria`, and `plan` in batches and
@@ -192,7 +198,7 @@ seen from the bridge). Calling one of the 51 names retired in 0.4.0 answers
 with the replacement tool and its arguments (see the full table with the
 "Sustituye a" column in [CONTRATO.md](CONTRATO.md#herramientas-mcp-040)).
 
-### Read (16)
+### Read (19)
 
 | Tool | Description | Replaces |
 |------|-------------|----------|
@@ -202,9 +208,9 @@ with the replacement tool and its arguments (see the full table with the
 | `describe_view` | Crop, view range, scale, level, template, sheet of a view (active view without arguments) | `get_view_extents`, `get_current_view_info` |
 | `capture_view` | A view as a PNG image | `get_revit_view` |
 | `query_elements` | Paginated query with `filters`; `current_view=true`, `selected=true` | `find_elements`, `get_current_view_elements`, `ai_element_filter`, `get_selected_elements` |
-| `describe_element` | Everything about one element, or up to 20 with `element_ids` | `get_element_properties`, `get_element_geometry` |
+| `describe_element` | Everything about one element, or up to 20 with `element_ids`; `include_structural` adds usage, material, releases, justifications, offsets, rotation, extensions and `analyze_as` (0.5.0) | `get_element_properties`, `get_element_geometry`, `get_structural_properties` (original block B) |
 | `dependency_graph` | `hosts` / `joins` / `depends` edges around an element | — |
-| `list_types` | Types of a category, family types by text, or the family categories; `with_parameters`, `loaded_only` | `list_element_types`, `list_families`, `list_family_categories`, `list_category_parameters` |
+| `list_types` | Types of a category, family types by text, or the family categories; `with_parameters`, `loaded_only`; `category="connections"` lists the steel connection types (409 `no_soportado` without the module) (0.5.0) | `list_element_types`, `list_families`, `list_family_categories`, `list_category_parameters`, `list_connection_types` (original block B) |
 | `schedule_to_json` | A schedule as Revit shows it | — |
 | `list_warnings` | Warnings, grouped by failure type with `group_by` | — |
 | `analyze_model` | `include=["statistics","materials"]` | `analyze_model_statistics`, `get_material_quantities` |
@@ -212,8 +218,11 @@ with the replacement tool and its arguments (see the full table with the
 | `snapshot_model` | Snapshot to `snapshots\<name>.json` with `timings` per stage and `include_bbox` | — |
 | `diff_snapshots` | Added / removed / modified between snapshots or against the live model | — |
 | `read_log` | Last entries of `mcp_log.jsonl` | — |
+| `list_steel_profiles` | Steel profiles loaded (family, type, shape W/HSS/L/C/WT/Pipe, standard AISC/EN, section dimensions in mm) and, with `loaded_only=false`, the library `.rfa` files with a type catalog (0.5.0) | new |
+| `steel_quantities` | Count, length (mm) and weight (kg = volume x structural asset density, or nominal weight x length) by type / level / family / mark; `sin_peso` with the reason (0.5.0) | new |
+| `analytical_status` | Associated `AnalyticalMember`, end nodes in mm, connected members per node, `loose_nodes` (0.5.0) | new |
 
-### Write (19)
+### Write (28)
 
 | Tool | Description | Replaces |
 |------|-------------|----------|
@@ -222,7 +231,7 @@ with the replacement tool and its arguments (see the full table with the
 | `transform_elements` | Move, copy, rotate, mirror or `array` (`count` copies) | — |
 | `delete_elements` | Delete by id, cascaded elements reported | — |
 | `change_element_type` | `ChangeTypeId` on several elements | — |
-| `join_geometry` | Join / unjoin two elements | — |
+| `join_geometry` | Join / unjoin two elements, or a chain (`element_ids`, consecutive pairs) with `coping` (0.5.0) | `join_steel_elements` (original block B) |
 | `set_workset` | Move elements to a workset | — |
 | `set_project_location` | Base/survey point, true north, acquire coordinates (`forzar` for pinned points) | — |
 | `create_view` | Plans, sections, elevations, 3D | — |
@@ -231,11 +240,20 @@ with the replacement tool and its arguments (see the full table with the
 | `create_schedule` | Schedule for a category | — |
 | `annotate` | `kind="dimension"` or `kind="tag"` (`category="OST_Walls"` tags every wall in view) | `create_dimensions`, `tag_walls`, `tag_elements` |
 | `color_elements` | Colour by parameter, `clear=true` resets | `color_splash`, `clear_colors` |
-| `export` | `format` = pdf / png / jpg / dwg / ifc / rooms_json / rooms_csv | `export_document`, `export_ifc`, `export_room_data` |
+| `export` | `format` = pdf / png / jpg / dwg / ifc / rooms_json / rooms_csv / ifc_structural / csv_nodes_members (0.5.0) | `export_document`, `export_ifc`, `export_room_data`, `export_structural_model` (original block B) |
 | `link_file` | Link or import DWG/DXF/DGN/RVT | — |
 | `load_family` | Load an `.rfa` | — |
 | `create_mep_system` | Group ducts/pipes into a system | — |
 | `maintain_model` | `action` = purge / backup / save | `purge_unused`, `create_backup`, `save_document` |
+| `load_steel_profile` | Load steel profile types: `LoadFamilySymbol` per catalog type or `LoadFamily`; 409 if already loaded unless `overwrite` (0.5.0) | new |
+| `create_steel_frame` | **Macro**: a column at every grid intersection per level and beams between consecutive columns in ONE transaction (`IA: Portico metalico`); `plan.counts` with `simular`, `skip_columns_at`, `skip_beams_at`, `mark_prefix` (0.5.0) | new |
+| `create_bracing` | Braces per bay (`single`, `X`, `V`, `inverted_V`, `K`) in ONE transaction, heights from the levels' internal elevation (0.5.0) | new |
+| `create_truss` | Trusses (`Truss.Create` on a sketch plane at the level) in ONE transaction; 404 with the available types (0.5.0) | new |
+| `set_structural_properties` | Releases (`pinned`, `fixed`, `{"FX": true, ...}`), Y/Z justification and offsets, section rotation, extensions, `analyze_as`, structural usage by `BuiltInParameter` in ONE transaction; releases fall back to the `AnalyticalMember` (2023+); `fallidos`, `no_disponibles` (0.5.0) | new (batch version of the original block B tool) |
+| `create_steel_connection` | `StructuralConnectionHandler.Create` per connection; 409 `no_soportado` without Steel Connections for Revit (0.5.0) | new |
+| `add_plate_or_stiffener` | Face-based family on the top / bottom / web face (references from `get_Geometry`) or point-based family along a beam or column (0.5.0) | new |
+| `split_beam` | Split a straight beam: the original keeps the first segment, each further segment is a copy; `avisos` about lost joins and connections (0.5.0) | new |
+| `fix_analytical_alignment` | Snap loose analytical nodes to the nearest foreign node within `tolerance_mm` (`AnalyticalMember.SetCurve`) in ONE transaction (0.5.0) | new |
 
 ### Macros (4)
 
@@ -268,6 +286,28 @@ changes, so you edit without restarting Revit. Two examples with tests live in
 `herramientas-dev/macros-ejemplo/` (`numerar_planos`, `comentarios_por_nivel`).
 Existing C# add-ins or pyRevit buttons can be wrapped with `PostCommand` in a
 `writes: false` macro (no arguments, no verification); see CONTRATO.md.
+
+### Steel structures and the analytical model (0.5.0)
+
+Delivery 2b (block B of `herramientas-dev/PROMPT_FASE2.md`, adapted by
+`PROMPT_FASE2B.md`): 12 new tools and 4 extensions, all in
+`revit_mcp/acero.py` and `revit_mcp/analitico.py`, registered in
+`tools/lectura_tools.py` and `tools/escritura_tools.py`. Everything structural
+goes through `BuiltInParameter`, `BuiltInCategory` and
+`StructuralMaterialType` / `StructuralAssetClass`, so it works in a Spanish
+Revit; the profile standard (AISC / EN) and shape (W, HSS, L, C, WT, Pipe) are
+deduced from the type designation, which is the same in every language.
+Every write tool that can touch several elements is a **batch** (one list, all
+validated first, one transaction, `fallidos[]`), and `create_steel_frame` is a
+**macro** (`plan.counts` with `simular`, one `IA: Portico metalico` undo
+entry). The agent flow is in `INSTRUCCIONES_AGENTE.md` (section 2d): levels and
+grids → `list_steel_profiles` → `load_steel_profile` if needed →
+`create_steel_frame(simular=true)` → confirm → run →
+`set_structural_properties` → `analytical_status` /
+`fix_analytical_alignment` → `steel_quantities`. Steel connections need the
+Steel Connections for Revit module (409 `no_soportado` otherwise), and the
+analytical routes need Revit 2023+ (`AnalyticalMember`). Validation prompt:
+`herramientas-dev/VALIDACION_2B.md`.
 
 ## Seguridad de escritura
 
@@ -358,7 +398,7 @@ This server supports Revit 2024, 2025, 2026, and 2027 through centralized helper
 
 No configuration needed — version detection is automatic via try/except at runtime.
 
-> **Revit 2027 note:** Revit 2027 runs on **.NET 10** (vs .NET 8 in 2025/2026). This MCP server is pyRevit-based, so .NET compatibility is handled by pyRevit itself — ensure you run a **pyRevit build with Revit 2027 support**. None of the 40 tools use APIs removed in 2027 (AXM/FormIt import, `Mechanical.Zone` members, legacy rebar creation, or the dropped `EnergyDataSettings` properties). `create_elements(kind="toposolid")` and `import_from_civil` (LandXML/CSV) need Revit 2024+ (`DB.Toposolid`); `kind="ceiling"` uses `DB.Ceiling.Create` (2022+) and falls back to a floor. The API members added in 0.3.0 and 0.4.0 that are still pending a check inside Revit are listed in `herramientas-dev/miembros_por_verificar_revit.md`.
+> **Revit 2027 note:** Revit 2027 runs on **.NET 10** (vs .NET 8 in 2025/2026). This MCP server is pyRevit-based, so .NET compatibility is handled by pyRevit itself — ensure you run a **pyRevit build with Revit 2027 support**. None of the 52 tools use APIs removed in 2027 (AXM/FormIt import, `Mechanical.Zone` members, legacy rebar creation, or the dropped `EnergyDataSettings` properties). `create_elements(kind="toposolid")` and `import_from_civil` (LandXML/CSV) need Revit 2024+ (`DB.Toposolid`); `kind="ceiling"` uses `DB.Ceiling.Create` (2022+) and falls back to a floor. The API members added in 0.3.0, 0.4.0 and 0.5.0 that are still pending a check inside Revit are listed in `herramientas-dev/miembros_por_verificar_revit.md`; the 0.5.0 steel routes read releases from the `AnalyticalMember` (2023+) when the physical element has no release parameters, and report any `BuiltInParameter` missing in the running version in `no_disponibles`.
 
 ## Unit Handling
 
