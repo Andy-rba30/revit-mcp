@@ -1049,11 +1049,30 @@ def list_category_parameters(doc, category_name):
         dict: List of available parameters with their types
     """
     try:
-        # Find the category
+        # Find the category: by BuiltInCategory name or alias ("OST_Walls", "walls";
+        # 0.4.0, independiente del idioma de Revit) or by its visible name.
         categories = doc.Settings.Categories
         target_category = None
+        bic = None
+        try:
+            from clash import _resolve_bic
+            bic = _resolve_bic(category_name)
+        except Exception:
+            bic = None
+        bic_id = None
+        if bic is not None:
+            try:
+                bic_id = int(bic)
+            except Exception:
+                bic_id = None
 
         for cat in categories:
+            try:
+                if bic_id is not None and get_element_id_value(cat.Id) == bic_id:
+                    target_category = cat
+                    break
+            except Exception:
+                pass
             if cat.Name == category_name:
                 target_category = cat
                 break

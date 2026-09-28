@@ -258,6 +258,14 @@ def register_routes():
 
         register_macros_routes(api)
 
+        from revit_mcp.lotes import register_lotes_routes
+
+        register_lotes_routes(api)
+
+        from revit_mcp.macros_usuario import register_macros_usuario_routes
+
+        register_macros_usuario_routes(api)
+
         logger.info("All MCP routes registered successfully")
 
     except Exception as e:

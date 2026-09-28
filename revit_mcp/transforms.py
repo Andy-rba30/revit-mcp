@@ -1,7 +1,7 @@
 # -*- coding: UTF-8 -*-
 """
 Transforms Module for Revit MCP
-Handles move, copy, rotate, and mirror operations on elements.
+Handles move, copy, rotate, mirror and (0.4.0) array operations on elements.
 
 Pasa por escritura.ejecutar: copia, log, `simular`, transaccion "IA: ...",
 limite de 200 elementos salvo `forzar` y verificacion antes/despues (bbox).
@@ -44,12 +44,23 @@ def register_transform_routes(api):
             if not element_ids:
                 raise EscrituraRechazada("element_ids is required and must not be empty", 400)
             if not operation:
-                raise EscrituraRechazada("operation is required (move, copy, rotate, mirror)", 400)
-            if operation not in ("move", "copy", "rotate", "mirror"):
+                raise EscrituraRechazada("operation is required (move, copy, rotate, mirror, array)", 400)
+            if operation not in ("move", "copy", "rotate", "mirror", "array"):
                 raise EscrituraRechazada(
-                    "Invalid operation '{}'. Use: move, copy, rotate, mirror".format(operation), 400
+                    "Invalid operation '{}'. Use: move, copy, rotate, mirror, array".format(operation), 400
                 )
-            comprobar_alcance(data, len(element_ids), "elementos a transformar")
+            count = 1
+            if operation == "array":
+                # 0.4.0: matriz lineal = count-1 copias a vector, 2*vector, ... en una transaccion
+                try:
+                    count = int(data.get("count") or 0)
+                except (TypeError, ValueError):
+                    raise EscrituraRechazada("count must be an integer (total copies, >= 2)", 400)
+                if count < 2:
+                    raise EscrituraRechazada("array needs count >= 2 (total copies including the original)", 400)
+                comprobar_alcance(data, len(element_ids) * (count - 1), "elementos a crear en la matriz")
+            else:
+                comprobar_alcance(data, len(element_ids), "elementos a transformar")
 
             # Resolve the operation parameters first
             translation = None
@@ -57,12 +68,15 @@ def register_transform_routes(api):
             angle_rad = None
             plane = None
             detalle = {"operation": operation}
-            if operation in ("move", "copy"):
+            if operation in ("move", "copy", "array"):
                 vector = data.get("vector")
                 if not vector:
                     raise EscrituraRechazada("vector is required for {} operation".format(operation), 400)
                 translation = xyz_desde_mm(vector)
                 detalle["vector_mm"] = punto_a_mm(translation)
+                if operation == "array":
+                    detalle["count"] = count
+                    detalle["copies"] = count - 1
             elif operation == "rotate":
                 axis_point = data.get("axis_point")
                 angle = data.get("angle")
@@ -114,7 +128,8 @@ def register_transform_routes(api):
                     haria.append(accion)
                 return simulacion(haria, count=len(haria))
 
-            nombres = {"move": "Mover", "copy": "Copiar", "rotate": "Girar", "mirror": "Simetria de"}
+            nombres = {"move": "Mover", "copy": "Copiar", "rotate": "Girar", "mirror": "Simetria de",
+                       "array": "Matriz de"}
             new_element_ids = []
             with transaccion(doc, "{} {} elementos".format(nombres[operation], len(elem_id_list))):
                 for eid in elem_id_list:
@@ -125,6 +140,13 @@ def register_transform_routes(api):
                         if copied:
                             for cid in copied:
                                 new_element_ids.append(get_element_id_value(cid))
+                    elif operation == "array":
+                        for paso in range(1, count):
+                            desplazamiento = DB.XYZ(translation.X * paso, translation.Y * paso, translation.Z * paso)
+                            copied = DB.ElementTransformUtils.CopyElement(doc, eid, desplazamiento)
+                            if copied:
+                                for cid in copied:
+                                    new_element_ids.append(get_element_id_value(cid))
                     elif operation == "rotate":
                         DB.ElementTransformUtils.RotateElement(doc, eid, axis_line, angle_rad)
                     else:
@@ -160,23 +182,25 @@ def register_transform_routes(api):
                 "despues": despues,
                 "ok": not desajustes,
                 "message": "{} {} element{}".format(
-                    {"move": "Moved", "copy": "Copied", "rotate": "Rotated", "mirror": "Mirrored"}[operation],
+                    {"move": "Moved", "copy": "Copied", "rotate": "Rotated", "mirror": "Mirrored",
+                     "array": "Arrayed"}[operation],
                     len(elem_id_list),
                     "s" if len(elem_id_list) != 1 else "",
                 ),
             }
             resultado.update(detalle)
-            if operation == "copy":
+            if operation in ("copy", "array"):
+                esperadas = len(elem_id_list) * (count - 1 if operation == "array" else 1)
                 creados = resultado_creacion(doc, new_element_ids)
                 resultado["new_element_ids"] = new_element_ids
                 resultado["creados"] = creados["creados"]
-                resultado["ok"] = creados["ok"] and len(new_element_ids) == len(elem_id_list)
+                resultado["ok"] = creados["ok"] and len(new_element_ids) == esperadas
                 resultado["verificacion"] = creados["verificacion"]
-                if len(new_element_ids) != len(elem_id_list):
+                if len(new_element_ids) != esperadas:
                     resultado["verificacion"] = {
                         "coincide": False,
                         "detalle": "Requested {} copies, Revit returned {}".format(
-                            len(elem_id_list), len(new_element_ids)
+                            esperadas, len(new_element_ids)
                         ),
                     }
             elif desajustes:

@@ -1,0 +1,14 @@
+{
+  "name": "numerar_planos",
+  "description": "Renumera los planos del proyecto con un prefijo y un paso (E-01, E-02, ...). Sin sheet_ids toma todos los planos ordenados por su número actual.",
+  "version": "1.0",
+  "args": {
+    "prefix": {"type": "str", "required": true, "description": "Prefijo del número de plano, p. ej. \"E-\""},
+    "start": {"type": "int", "required": false, "default": 1, "description": "Primer número"},
+    "step": {"type": "int", "required": false, "default": 1, "description": "Incremento entre planos"},
+    "digits": {"type": "int", "required": false, "default": 2, "description": "Cifras del número (2 -> 01, 02)"},
+    "sheet_ids": {"type": "element_ids", "required": false, "default": [], "description": "Solo estos planos, en este orden (vacío = todos)"}
+  },
+  "writes": true,
+  "timeout_s": 120
+}

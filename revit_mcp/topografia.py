@@ -151,6 +151,74 @@ def crear_toposolido(doc, puntos, tipo, nivel, contorno=None):
     return DB.Toposolid.Create(doc, lista, tipo.Id, nivel.Id)
 
 
+def planificar_toposolido(doc, data):
+    """Valida {points | csv_path, level_name, type_name, units, boundary}. Lanza EscrituraRechazada.
+
+    Devuelve el plan: puntos (XYZ), tipo, nivel, contorno, resumen (para `haria`)
+    y avisos. Lo reutiliza lotes.create_elements (kind toposolid)."""
+    comprobar_toposolido_disponible()
+    level_name = data.get("level_name") or data.get("level")
+    if not level_name:
+        raise EscrituraRechazada("level_name is required", 400)
+    level_map = mapa_niveles(doc)
+    nivel = level_map.get(level_name)
+    if nivel is None:
+        raise EscrituraRechazada(
+            "Level '{}' not found".format(level_name), 404,
+            {"available_levels": sorted(level_map.keys())},
+        )
+
+    unidades = (data.get("units") or "m").lower()
+    puntos_mm = data.get("points") or []
+    csv_path = data.get("csv_path")
+    formato = "points (mm)"
+    avisos = []
+    if csv_path:
+        if not os.path.isfile(csv_path):
+            raise EscrituraRechazada("CSV file not found: {}".format(csv_path), 404)
+        try:
+            puntos_mm, formato, avisos = leer_csv_puntos(csv_path, unidades)
+        except ValueError as error:
+            raise EscrituraRechazada(str(error), 400)
+    if not puntos_mm or len(puntos_mm) < 3:
+        raise EscrituraRechazada("At least 3 points are required (points[] in mm or csv_path)", 400)
+    if len(puntos_mm) > MAX_PUNTOS:
+        raise EscrituraRechazada("Too many points ({}); max {}".format(len(puntos_mm), MAX_PUNTOS), 400)
+
+    try:
+        puntos = [xyz_desde_mm(p) for p in puntos_mm]
+    except ValueError as error:
+        raise EscrituraRechazada(str(error), 400)
+
+    tipo = tipo_toposolido(doc, data.get("type_name"))
+
+    boundary = data.get("boundary") or []
+    contorno = None
+    if boundary:
+        try:
+            esquinas = [xyz_desde_mm(p) for p in boundary]
+        except ValueError as error:
+            raise EscrituraRechazada("boundary: {}".format(error), 400)
+        if len(esquinas) < 3:
+            raise EscrituraRechazada("boundary needs at least 3 points", 400)
+        if esquinas[0].DistanceTo(esquinas[-1]) < 0.001:
+            esquinas = esquinas[:-1]
+        contorno = esquinas
+
+    xs = [p["x"] for p in puntos_mm]
+    ys = [p["y"] for p in puntos_mm]
+    zs = [p["z"] for p in puntos_mm]
+    resumen = {
+        "accion": "crear", "element_type": "toposolid", "type": get_element_name(tipo),
+        "level": level_name, "points": len(puntos), "source": csv_path or "points",
+        "format": formato, "units_assumed": unidades if csv_path else "mm",
+        "extent_mm": {"x": [min(xs), max(xs)], "y": [min(ys), max(ys)], "z": [min(zs), max(zs)]},
+        "boundary_points": len(contorno) if contorno else 0,
+    }
+    return {"kind": "toposolid", "puntos": puntos, "tipo": tipo, "nivel": nivel, "contorno": contorno,
+            "haria": resumen, "warnings": avisos}
+
+
 def register_topografia_routes(api):
     """Register toposolid routes with the API."""
 
@@ -161,77 +229,20 @@ def register_topografia_routes(api):
 
         def cuerpo(ctx):
             data = ctx["data"]
-            comprobar_toposolido_disponible()
-            level_name = data.get("level_name")
-            if not level_name:
-                raise EscrituraRechazada("level_name is required", 400)
-            level_map = mapa_niveles(doc)
-            nivel = level_map.get(level_name)
-            if nivel is None:
-                raise EscrituraRechazada(
-                    "Level '{}' not found".format(level_name), 404,
-                    {"available_levels": sorted(level_map.keys())},
-                )
-
-            unidades = (data.get("units") or "m").lower()
-            puntos_mm = data.get("points") or []
-            csv_path = data.get("csv_path")
-            formato = "points (mm)"
-            avisos = []
-            if csv_path:
-                if not os.path.isfile(csv_path):
-                    raise EscrituraRechazada("CSV file not found: {}".format(csv_path), 404)
-                try:
-                    puntos_mm, formato, avisos = leer_csv_puntos(csv_path, unidades)
-                except ValueError as error:
-                    raise EscrituraRechazada(str(error), 400)
-            if not puntos_mm or len(puntos_mm) < 3:
-                raise EscrituraRechazada("At least 3 points are required (points[] in mm or csv_path)", 400)
-            if len(puntos_mm) > MAX_PUNTOS:
-                raise EscrituraRechazada("Too many points ({}); max {}".format(len(puntos_mm), MAX_PUNTOS), 400)
-
-            try:
-                puntos = [xyz_desde_mm(p) for p in puntos_mm]
-            except ValueError as error:
-                raise EscrituraRechazada(str(error), 400)
-
-            tipo = tipo_toposolido(doc, data.get("type_name"))
-
-            boundary = data.get("boundary") or []
-            contorno = None
-            if boundary:
-                try:
-                    esquinas = [xyz_desde_mm(p) for p in boundary]
-                except ValueError as error:
-                    raise EscrituraRechazada("boundary: {}".format(error), 400)
-                if len(esquinas) < 3:
-                    raise EscrituraRechazada("boundary needs at least 3 points", 400)
-                if esquinas[0].DistanceTo(esquinas[-1]) < 0.001:
-                    esquinas = esquinas[:-1]
-                contorno = esquinas
-
-            xs = [p["x"] for p in puntos_mm]
-            ys = [p["y"] for p in puntos_mm]
-            zs = [p["z"] for p in puntos_mm]
-            resumen = {
-                "accion": "crear", "element_type": "toposolid", "type": get_element_name(tipo),
-                "level": level_name, "points": len(puntos), "source": csv_path or "points",
-                "format": formato, "units_assumed": unidades if csv_path else "mm",
-                "extent_mm": {"x": [min(xs), max(xs)], "y": [min(ys), max(ys)], "z": [min(zs), max(zs)]},
-                "boundary_points": len(contorno) if contorno else 0,
-            }
+            plan = planificar_toposolido(doc, data)
+            resumen = plan["haria"]
             if ctx["simular"]:
-                return simulacion([resumen], warnings=avisos)
+                return simulacion([resumen], warnings=plan["warnings"])
 
-            with transaccion(doc, "Crear toposolido {}".format(get_element_name(tipo))):
-                topo = crear_toposolido(doc, puntos, tipo, nivel, contorno)
+            with transaccion(doc, "Crear toposolido {}".format(get_element_name(plan["tipo"]))):
+                topo = crear_toposolido(doc, plan["puntos"], plan["tipo"], plan["nivel"], plan["contorno"])
                 topo_id = get_element_id_value(topo)
 
             resultado = resultado_creacion(doc, [topo_id])
             resultado["toposolid_id"] = topo_id
             resultado["source"] = resumen
-            resultado["warnings"] = avisos
-            resultado["message"] = "Created toposolid {} from {} points".format(topo_id, len(puntos))
+            resultado["warnings"] = plan["warnings"]
+            resultado["message"] = "Created toposolid {} from {} points".format(topo_id, len(plan["puntos"]))
             return resultado
 
         return ejecutar(doc, "/create_toposolid/", request, cuerpo)

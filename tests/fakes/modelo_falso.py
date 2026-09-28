@@ -241,6 +241,7 @@ class VistaPlanta(Elemento, DB.ViewPlan):
         self.DetailLevel = DB.ViewDetailLevel.Medium
         self.ViewTemplateId = DB.ElementId.InvalidElementId
         self.rango = DB.PlanViewRange()
+        self.SketchPlane = None
 
 
 class Vista3D(Elemento, DB.View3D):
@@ -399,10 +400,112 @@ class _Fases(list):
         return self[indice]
 
 
+class Instancia(Elemento, DB.FamilyInstance):
+    """FamilyInstance creada por doc.Create.NewFamilyInstance."""
+
+    def __init__(self, doc, symbol, **kw):
+        kw.setdefault("categoria", symbol.Category.Name if symbol.Category else u"Modelos genéricos")
+        kw.setdefault("bic", symbol.Category.BuiltInCategory if symbol.Category else None)
+        Elemento.__init__(self, None, 0, nombre=None, tipo_id=symbol.Id.Value, **kw)
+        self.symbol = symbol
+        self.Host = None
+        self.SuperComponent = None
+        self.Parameters = [
+            texto(u"Comentarios", u"", bip=DB.BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS),
+            texto(u"Marca", u"", bip=DB.BuiltInParameter.ALL_MODEL_MARK),
+            referencia(u"Nivel superior", None, bip=DB.BuiltInParameter.FAMILY_TOP_LEVEL_PARAM),
+            longitud_mm(u"Desfase superior", 0, bip=DB.BuiltInParameter.FAMILY_TOP_LEVEL_OFFSET_PARAM),
+        ]
+        doc.agregar(self)
+
+
+class Hueco(Elemento):
+    pass
+
+
+class Habitacion(Elemento):
+    def __init__(self, doc, nivel, **kw):
+        kw.setdefault("categoria", u"Habitaciones")
+        kw.setdefault("bic", DB.BuiltInCategory.OST_Rooms)
+        Elemento.__init__(self, None, 0, nivel_id=nivel.Id.Value if nivel is not None else None, **kw)
+        self.Parameters = [
+            texto(u"Nombre", u"Habitación", bip=DB.BuiltInParameter.ROOM_NAME),
+            texto(u"Número", u"1", bip=DB.BuiltInParameter.ROOM_NUMBER),
+            Parametro(u"Área", 200.0, "Double", bip=DB.BuiltInParameter.HOST_AREA_COMPUTED, solo_lectura=True),
+        ]
+        doc.agregar(self)
+
+
+class LineaDetalle(Elemento):
+    LineStyle = None
+
+
+class _Fabricas(object):
+    """doc.Create: las fabricas de Autodesk.Revit.Creation.Document que usan los helpers."""
+
+    def __init__(self, doc):
+        self.doc = doc
+        self.llamadas = []
+
+    def NewFamilyInstance(self, *args):
+        self.llamadas.append(("NewFamilyInstance", args))
+        geometria, symbol = args[0], args[1]
+        resto = list(args[2:])
+        instancia = Instancia(self.doc, symbol)
+        if isinstance(geometria, DB.Line):
+            instancia.Location = Ubicacion(curva=geometria)
+        else:
+            instancia.Location = Ubicacion(punto=geometria)
+        for extra in resto:
+            if isinstance(extra, DB.Level):
+                instancia.LevelId = extra.Id
+            elif isinstance(extra, DB.Wall):
+                instancia.Host = extra
+        return instancia
+
+    def NewFootPrintRoof(self, curvas, nivel, tipo, ref_curvas):
+        self.llamadas.append(("NewFootPrintRoof", (curvas, nivel, tipo)))
+        cubierta = DB.FootPrintRoof()
+        cubierta.curvas = list(curvas)
+        return DB._registrar_creado(self.doc, cubierta, u"Cubiertas", DB.BuiltInCategory.OST_Roofs, tipo.Id, nivel.Id)
+
+    def NewOpening(self, host, *args):
+        self.llamadas.append(("NewOpening", (host,) + args))
+        hueco = Hueco(None, 0, categoria=u"Huecos", bic=None)
+        hueco.host_id = host.Id
+        hueco.argumentos = args
+        self.doc.agregar(hueco)
+        return hueco
+
+    def NewRoom(self, *args):
+        self.llamadas.append(("NewRoom", args))
+        nivel = args[0] if isinstance(args[0], DB.Level) else None
+        return Habitacion(self.doc, nivel)
+
+    def NewRoomBoundaryLines(self, plano, curvas, vista):
+        self.llamadas.append(("NewRoomBoundaryLines", (plano, curvas, vista)))
+        lineas = []
+        for curva in curvas:
+            linea = Elemento(None, 0, categoria=u"Separación de habitación", bic=DB.BuiltInCategory.OST_Lines)
+            linea.Curve = curva
+            self.doc.agregar(linea)
+            lineas.append(linea)
+        return lineas
+
+    def NewDetailCurve(self, vista, curva):
+        self.llamadas.append(("NewDetailCurve", (vista, curva)))
+        linea = LineaDetalle(None, 0, categoria=u"Líneas", bic=DB.BuiltInCategory.OST_Lines)
+        linea.Curve = curva
+        linea.vista_id = vista.Id
+        self.doc.agregar(linea)
+        return linea
+
+
 class Doc(object):
     """Documento simulado. `ruta` vacia = sin guardar (log y snapshots en %LOCALAPPDATA%)."""
 
     def __init__(self, ruta="", titulo=u"Modelo"):
+        self.Create = _Fabricas(self)
         self.PathName = ruta
         self.Title = titulo
         self.IsWorkshared = False

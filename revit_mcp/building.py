@@ -6,6 +6,14 @@ elements (floors, roofs, ceilings), and levels.
 
 Todas las rutas pasan por escritura.ejecutar: copia de seguridad, log,
 `simular`, transaccion "IA: ..." y verificacion de lo creado.
+
+0.4.0: la validacion y la creacion de cada elemento estan en helpers
+(mapas_lineales / planificar_lineal / crear_lineal, mapas_superficies /
+planificar_superficie / crear_superficie, planificar_nivel / crear_nivel) que
+reutiliza lotes.py (/create_elements/) para crear varios tipos de elemento en
+una sola transaccion. Cada `planificar_*` valida y resuelve sin abrir
+transaccion (lanza ValueError con un mensaje claro) y cada `crear_*` se llama
+dentro de una.
 """
 
 from utils import (
@@ -24,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 def _nivel_de(elem, level_map, idx):
     """Nivel pedido (o el mas bajo). Lanza ValueError si no existe."""
-    level_name = elem.get("level_name")
+    level_name = elem.get("level_name") or elem.get("level")
     if level_name:
         level = level_map.get(level_name)
         if not level:
@@ -96,16 +104,259 @@ def _segmentos(boundary, idx):
     return boundary
 
 
+# ---------------------------------------------------------------------------
+# Niveles
+# ---------------------------------------------------------------------------
 def crear_nivel(doc, elevation_mm, name=None):
     """DB.Level.Create a la cota en mm y, si se da, el nombre. Devuelve el nivel.
 
-    Lo reutiliza macros.create_grid_and_levels."""
+    Lo reutilizan macros.create_grid_and_levels y lotes.create_elements."""
     nivel = DB.Level.Create(doc, float(elevation_mm) * MM_TO_FEET)
     if name:
         nivel.Name = name
     return nivel
 
 
+def planificar_nivel(lv, idx, existentes):
+    """Valida {name, elevation | elevation_mm}. Lanza ValueError. Devuelve el plan."""
+    elevation_mm = lv.get("elevation_mm")
+    if elevation_mm is None:
+        elevation_mm = lv.get("elevation")
+    if elevation_mm is None:
+        raise ValueError("Level {}: elevation_mm is required".format(idx))
+    try:
+        elevation_mm = float(elevation_mm)
+    except (TypeError, ValueError):
+        raise ValueError("Level {}: elevation_mm must be a number".format(idx))
+    name = lv.get("name")
+    if name and name in existentes:
+        raise ValueError("Level {}: a level named '{}' already exists".format(idx, name))
+    return {"idx": idx, "kind": "level", "elevation_mm": elevation_mm, "name": name if name else None}
+
+
+def haria_nivel(plan):
+    return {"accion": "crear", "element_type": "level", "name": plan["name"], "elevation_mm": plan["elevation_mm"]}
+
+
+def describir_nivel(doc, creado):
+    """Anade name, elevation_mm (origen interno) y elevation_shown_mm a un `creado`."""
+    try:
+        nivel = doc.GetElement(make_element_id(creado["id"]))
+        creado["elevation_mm"] = round(elevacion_interna(nivel) / MM_TO_FEET, 1)
+        creado["elevation_shown_mm"] = round(elevacion_mostrada(nivel) / MM_TO_FEET, 1)
+        creado["name"] = get_element_name(nivel)
+    except Exception:
+        pass
+    return creado
+
+
+# ---------------------------------------------------------------------------
+# Muros y vigas (linea)
+# ---------------------------------------------------------------------------
+def mapas_lineales(doc):
+    """Niveles y tipos de muro y de viga del documento (una lectura por lote)."""
+    return {
+        "levels": mapa_niveles(doc),
+        "walls": elementos_por_nombre(DB.FilteredElementCollector(doc).OfClass(DB.WallType).ToElements()),
+        "beams": elementos_por_nombre(
+            DB.FilteredElementCollector(doc)
+            .OfCategory(DB.BuiltInCategory.OST_StructuralFraming)
+            .OfClass(DB.FamilySymbol)
+            .ToElements()
+        ),
+    }
+
+
+def planificar_lineal(elem, idx, mapas):
+    """Valida un muro o una viga ({element_type | kind, start_point, end_point, type_name,
+    level_name, height, offset, structural}). Lanza ValueError."""
+    if not mapas["levels"]:
+        raise ValueError("Element {}: No levels found in the project — create levels first".format(idx))
+    element_type = elem.get("element_type") or elem.get("kind")
+    if not element_type:
+        raise ValueError("Element {}: element_type is required".format(idx))
+    if element_type not in ("wall", "beam"):
+        raise ValueError(
+            "Element {}: element_type '{}' not supported — use 'wall' or 'beam'".format(idx, element_type)
+        )
+    start = elem.get("start_point")
+    end = elem.get("end_point")
+    if not start or not end:
+        raise ValueError("Element {}: start_point and end_point are required".format(idx))
+    sp = xyz_desde_mm(start)
+    ep = xyz_desde_mm(end)
+    if sp.DistanceTo(ep) < 0.001:
+        raise ValueError(
+            "Element {}: Start and end points must be different (zero-length element)".format(idx)
+        )
+    level = _nivel_de(elem, mapas["levels"], idx)
+    plan = {
+        "idx": idx,
+        "kind": element_type,
+        "element_type": element_type,
+        "name": elem.get("name", ""),
+        "sp": sp,
+        "ep": ep,
+        "level": level,
+    }
+    if element_type == "wall":
+        plan["tipo"] = _tipo_de(elem, mapas["walls"], idx, "Wall")
+        plan["height"] = float(elem.get("height", 3000)) * MM_TO_FEET
+        plan["offset"] = float(elem.get("offset", 0)) * MM_TO_FEET
+        plan["structural"] = bool(elem.get("structural", False))
+    else:
+        plan["tipo"] = _tipo_de(elem, mapas["beams"], idx, "Beam")
+    return plan
+
+
+def haria_lineal(plan):
+    return {
+        "accion": "crear",
+        "element_type": plan["element_type"],
+        "type": get_element_name(plan["tipo"]),
+        "level": get_element_name(plan["level"]),
+        "start_mm": punto_a_mm(plan["sp"]),
+        "end_mm": punto_a_mm(plan["ep"]),
+        "height_mm": round(plan["height"] / MM_TO_FEET, 1) if "height" in plan else None,
+    }
+
+
+def crear_lineal(doc, plan):
+    """Crea el muro (DB.Wall.Create) o la viga (NewFamilyInstance) del plan. Dentro de una transaccion."""
+    line = DB.Line.CreateBound(plan["sp"], plan["ep"])
+    if plan["element_type"] == "wall":
+        return DB.Wall.Create(
+            doc, line, plan["tipo"].Id, plan["level"].Id,
+            plan["height"], plan["offset"], False, plan["structural"],
+        )
+    symbol = plan["tipo"]
+    if not symbol.IsActive:
+        symbol.Activate()
+        doc.Regenerate()
+    return doc.Create.NewFamilyInstance(line, symbol, plan["level"], DB.Structure.StructuralType.Beam)
+
+
+# ---------------------------------------------------------------------------
+# Suelos, cubiertas y techos (superficie)
+# ---------------------------------------------------------------------------
+def mapas_superficies(doc):
+    """Niveles y tipos de suelo, cubierta y techo (una lectura por lote)."""
+    floor_type_map = elementos_por_nombre(DB.FilteredElementCollector(doc).OfClass(DB.FloorType).ToElements())
+    # Prefer a real (non-foundation) floor type as default: the raw first
+    # type often lands on "Foundation Slab" (a Structural Foundation).
+    floor_por_defecto = None
+    for ft in floor_type_map.values():
+        try:
+            if not getattr(ft, "IsFoundationSlab", False):
+                floor_por_defecto = ft
+                break
+        except Exception:
+            continue
+    ceiling_type_map = {}
+    try:
+        ceiling_type_map = elementos_por_nombre(
+            DB.FilteredElementCollector(doc).OfClass(DB.CeilingType).ToElements()
+        )
+    except Exception:
+        ceiling_type_map = {}
+    return {
+        "levels": mapa_niveles(doc),
+        "floors": floor_type_map,
+        "floor_default": floor_por_defecto,
+        "roofs": elementos_por_nombre(DB.FilteredElementCollector(doc).OfClass(DB.RoofType).ToElements()),
+        "ceilings": ceiling_type_map,
+    }
+
+
+def planificar_superficie(elem, idx, mapas):
+    """Valida un suelo, cubierta o techo ({element_type | kind, boundary, type_name,
+    level_name, offset}). Lanza ValueError."""
+    if not mapas["levels"]:
+        raise ValueError("Element {}: No levels found — create levels first".format(idx))
+    element_type = elem.get("element_type") or elem.get("kind")
+    if not element_type:
+        raise ValueError("Element {}: element_type is required".format(idx))
+    if element_type not in ("floor", "roof", "ceiling"):
+        raise ValueError(
+            "Element {}: element_type must be 'floor', 'roof', or 'ceiling'".format(idx)
+        )
+    boundary = _segmentos(elem.get("boundary", []), idx)
+    level = _nivel_de(elem, mapas["levels"], idx)
+    puntos = []
+    for seg in boundary:
+        puntos.append((xyz_desde_mm(seg.get("p0", {})), xyz_desde_mm(seg.get("p1", {}))))
+    plan = {
+        "idx": idx,
+        "kind": element_type,
+        "element_type": element_type,
+        "name": elem.get("name", ""),
+        "level": level,
+        "puntos": puntos,
+        "offset": float(elem.get("offset", 0)),
+    }
+    if element_type == "roof":
+        plan["tipo"] = _tipo_de(elem, mapas["roofs"], idx, "Roof")
+    elif element_type == "ceiling" and mapas.get("ceilings") and hasattr(DB, "Ceiling") and hasattr(DB.Ceiling, "Create"):
+        plan["tipo"] = _tipo_de(elem, mapas["ceilings"], idx, "Ceiling")
+        plan["ceiling_api"] = True
+    else:
+        # Techo sin DB.Ceiling.Create (Revit < 2022) o sin CeilingType: se crea como suelo
+        # (comportamiento de 0.3.x); la respuesta lo dice en `nota`.
+        plan["tipo"] = _tipo_de(elem, mapas["floors"], idx, "Floor", mapas.get("floor_default"))
+        plan["ceiling_api"] = False
+    return plan
+
+
+def haria_superficie(plan):
+    haria = {
+        "accion": "crear",
+        "element_type": plan["element_type"],
+        "type": get_element_name(plan["tipo"]),
+        "level": get_element_name(plan["level"]),
+        "segmentos": len(plan["puntos"]),
+        "primer_punto_mm": punto_a_mm(plan["puntos"][0][0]),
+        "offset_mm": plan["offset"],
+    }
+    if plan["element_type"] == "ceiling" and not plan.get("ceiling_api"):
+        haria["nota"] = "sin DB.Ceiling.Create o sin tipos de techo: se crea como suelo"
+    return haria
+
+
+def crear_superficie(doc, plan):
+    """Crea la cubierta (NewFootPrintRoof), el techo (Ceiling.Create) o el suelo (Floor.Create). Dentro de una transaccion."""
+    if plan["element_type"] == "roof":
+        curve_array = DB.CurveArray()
+        for s, e in plan["puntos"]:
+            curve_array.Append(DB.Line.CreateBound(s, e))
+        import clr
+        model_curves = clr.Reference[DB.ModelCurveArray]()
+        return doc.Create.NewFootPrintRoof(curve_array, plan["level"], plan["tipo"], model_curves)
+    curve_loop = DB.CurveLoop()
+    for s, e in plan["puntos"]:
+        curve_loop.Append(DB.Line.CreateBound(s, e))
+    curve_loops = List[DB.CurveLoop]()
+    curve_loops.Add(curve_loop)
+    if plan["element_type"] == "ceiling" and plan.get("ceiling_api"):
+        techo = DB.Ceiling.Create(doc, curve_loops, plan["tipo"].Id, plan["level"].Id)
+        if plan["offset"] != 0:
+            try:
+                p = techo.get_Parameter(DB.BuiltInParameter.CEILING_HEIGHTABOVELEVEL_PARAM)
+                if p and not p.IsReadOnly:
+                    p.Set(plan["offset"] * MM_TO_FEET)
+            except Exception:
+                pass
+        return techo
+    floor = DB.Floor.Create(doc, curve_loops, plan["tipo"].Id, plan["level"].Id)
+    if plan["offset"] != 0:
+        offset_param = floor.get_Parameter(DB.BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)
+        if offset_param and not offset_param.IsReadOnly:
+            offset_param.Set(plan["offset"] * MM_TO_FEET)
+    return floor
+
+
+# ---------------------------------------------------------------------------
+# Rutas
+# ---------------------------------------------------------------------------
 def register_building_routes(api):
     """Register all building creation routes with the API"""
 
@@ -126,79 +377,25 @@ def register_building_routes(api):
                 )
             comprobar_alcance(data, len(elements), "elementos a crear")
 
-            level_map = mapa_niveles(doc)
-            if not level_map:
+            mapas = mapas_lineales(doc)
+            if not mapas["levels"]:
                 raise EscrituraRechazada(
                     "No levels found in the project — create levels first", 404
                 )
-            wall_type_map = elementos_por_nombre(
-                DB.FilteredElementCollector(doc).OfClass(DB.WallType).ToElements()
-            )
-            beam_type_map = elementos_por_nombre(
-                DB.FilteredElementCollector(doc)
-                .OfCategory(DB.BuiltInCategory.OST_StructuralFraming)
-                .OfClass(DB.FamilySymbol)
-                .ToElements()
-            )
 
             # Fase 1: validar y resolver todo sin abrir transaccion
             planes = []
             errors = []
             for idx, elem in enumerate(elements):
                 try:
-                    element_type = elem.get("element_type")
-                    if not element_type:
-                        raise ValueError("Element {}: element_type is required".format(idx))
-                    if element_type not in ("wall", "beam"):
-                        raise ValueError(
-                            "Element {}: element_type '{}' not supported — use 'wall' or 'beam'".format(
-                                idx, element_type
-                            )
-                        )
-                    start = elem.get("start_point")
-                    end = elem.get("end_point")
-                    if not start or not end:
-                        raise ValueError("Element {}: start_point and end_point are required".format(idx))
-                    sp = xyz_desde_mm(start)
-                    ep = xyz_desde_mm(end)
-                    if sp.DistanceTo(ep) < 0.001:
-                        raise ValueError(
-                            "Element {}: Start and end points must be different (zero-length element)".format(idx)
-                        )
-                    level = _nivel_de(elem, level_map, idx)
-                    plan = {
-                        "idx": idx,
-                        "element_type": element_type,
-                        "name": elem.get("name", ""),
-                        "sp": sp,
-                        "ep": ep,
-                        "level": level,
-                    }
-                    if element_type == "wall":
-                        plan["tipo"] = _tipo_de(elem, wall_type_map, idx, "Wall")
-                        plan["height"] = float(elem.get("height", 3000)) * MM_TO_FEET
-                        plan["offset"] = float(elem.get("offset", 0)) * MM_TO_FEET
-                        plan["structural"] = bool(elem.get("structural", False))
-                    else:
-                        plan["tipo"] = _tipo_de(elem, beam_type_map, idx, "Beam")
-                    planes.append(plan)
+                    planes.append(planificar_lineal(elem, idx, mapas))
                 except ValueError as elem_err:
                     errors.append(str(elem_err))
                 except Exception as elem_err:
                     errors.append("Element {}: {}".format(idx, str(elem_err)))
 
             if ctx["simular"]:
-                haria = []
-                for plan in planes:
-                    haria.append({
-                        "accion": "crear",
-                        "element_type": plan["element_type"],
-                        "type": get_element_name(plan["tipo"]),
-                        "level": get_element_name(plan["level"]),
-                        "start_mm": punto_a_mm(plan["sp"]),
-                        "end_mm": punto_a_mm(plan["ep"]),
-                        "height_mm": round(plan["height"] / MM_TO_FEET, 1) if "height" in plan else None,
-                    })
+                haria = [haria_lineal(plan) for plan in planes]
                 return simulacion(haria, count=len(haria), errors=errors)
 
             # Fase 2: crear dentro de una sola transaccion
@@ -206,22 +403,7 @@ def register_building_routes(api):
             with transaccion(doc, "Crear muros/vigas"):
                 for plan in planes:
                     try:
-                        line = DB.Line.CreateBound(plan["sp"], plan["ep"])
-                        if plan["element_type"] == "wall":
-                            wall = DB.Wall.Create(
-                                doc, line, plan["tipo"].Id, plan["level"].Id,
-                                plan["height"], plan["offset"], False, plan["structural"],
-                            )
-                            ids.append(get_element_id_value(wall))
-                        else:
-                            symbol = plan["tipo"]
-                            if not symbol.IsActive:
-                                symbol.Activate()
-                                doc.Regenerate()
-                            beam = doc.Create.NewFamilyInstance(
-                                line, symbol, plan["level"], DB.Structure.StructuralType.Beam
-                            )
-                            ids.append(get_element_id_value(beam))
+                        ids.append(get_element_id_value(crear_lineal(doc, plan)))
                     except Exception as elem_err:
                         errors.append("Element {}: {}".format(plan["idx"], str(elem_err)))
 
@@ -248,103 +430,29 @@ def register_building_routes(api):
                 )
             comprobar_alcance(data, len(elements), "elementos a crear")
 
-            level_map = mapa_niveles(doc)
-            if not level_map:
+            mapas = mapas_superficies(doc)
+            if not mapas["levels"]:
                 raise EscrituraRechazada("No levels found — create levels first", 404)
-
-            floor_type_map = elementos_por_nombre(
-                DB.FilteredElementCollector(doc).OfClass(DB.FloorType).ToElements()
-            )
-            roof_type_map = elementos_por_nombre(
-                DB.FilteredElementCollector(doc).OfClass(DB.RoofType).ToElements()
-            )
-            # Prefer a real (non-foundation) floor type as default: the raw first
-            # type often lands on "Foundation Slab" (a Structural Foundation).
-            floor_por_defecto = None
-            for ft in floor_type_map.values():
-                try:
-                    if not getattr(ft, "IsFoundationSlab", False):
-                        floor_por_defecto = ft
-                        break
-                except Exception:
-                    continue
 
             planes = []
             errors = []
             for idx, elem in enumerate(elements):
                 try:
-                    element_type = elem.get("element_type")
-                    if not element_type:
-                        raise ValueError("Element {}: element_type is required".format(idx))
-                    if element_type not in ("floor", "roof", "ceiling"):
-                        raise ValueError(
-                            "Element {}: element_type must be 'floor', 'roof', or 'ceiling'".format(idx)
-                        )
-                    boundary = _segmentos(elem.get("boundary", []), idx)
-                    level = _nivel_de(elem, level_map, idx)
-                    puntos = []
-                    for seg in boundary:
-                        puntos.append((xyz_desde_mm(seg.get("p0", {})), xyz_desde_mm(seg.get("p1", {}))))
-                    plan = {
-                        "idx": idx,
-                        "element_type": element_type,
-                        "name": elem.get("name", ""),
-                        "level": level,
-                        "puntos": puntos,
-                        "offset": float(elem.get("offset", 0)),
-                    }
-                    if element_type == "roof":
-                        plan["tipo"] = _tipo_de(elem, roof_type_map, idx, "Roof")
-                    else:
-                        plan["tipo"] = _tipo_de(elem, floor_type_map, idx, "Floor", floor_por_defecto)
-                    planes.append(plan)
+                    planes.append(planificar_superficie(elem, idx, mapas))
                 except ValueError as elem_err:
                     errors.append(str(elem_err))
                 except Exception as elem_err:
                     errors.append("Element {}: {}".format(idx, str(elem_err)))
 
             if ctx["simular"]:
-                haria = []
-                for plan in planes:
-                    haria.append({
-                        "accion": "crear",
-                        "element_type": plan["element_type"],
-                        "type": get_element_name(plan["tipo"]),
-                        "level": get_element_name(plan["level"]),
-                        "segmentos": len(plan["puntos"]),
-                        "primer_punto_mm": punto_a_mm(plan["puntos"][0][0]),
-                        "offset_mm": plan["offset"],
-                    })
+                haria = [haria_superficie(plan) for plan in planes]
                 return simulacion(haria, count=len(haria), errors=errors)
 
             ids = []
             with transaccion(doc, "Crear suelos/cubiertas"):
                 for plan in planes:
                     try:
-                        if plan["element_type"] == "roof":
-                            curve_array = DB.CurveArray()
-                            for s, e in plan["puntos"]:
-                                curve_array.Append(DB.Line.CreateBound(s, e))
-                            import clr
-                            model_curves = clr.Reference[DB.ModelCurveArray]()
-                            roof = doc.Create.NewFootPrintRoof(
-                                curve_array, plan["level"], plan["tipo"], model_curves
-                            )
-                            ids.append(get_element_id_value(roof))
-                        else:
-                            curve_loop = DB.CurveLoop()
-                            for s, e in plan["puntos"]:
-                                curve_loop.Append(DB.Line.CreateBound(s, e))
-                            curve_loops = List[DB.CurveLoop]()
-                            curve_loops.Add(curve_loop)
-                            floor = DB.Floor.Create(doc, curve_loops, plan["tipo"].Id, plan["level"].Id)
-                            if plan["offset"] != 0:
-                                offset_param = floor.get_Parameter(
-                                    DB.BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM
-                                )
-                                if offset_param and not offset_param.IsReadOnly:
-                                    offset_param.Set(plan["offset"] * MM_TO_FEET)
-                            ids.append(get_element_id_value(floor))
+                        ids.append(get_element_id_value(crear_superficie(doc, plan)))
                     except Exception as elem_err:
                         errors.append("Element {}: {}".format(plan["idx"], str(elem_err)))
 
@@ -376,27 +484,14 @@ def register_building_routes(api):
             errors = []
             for idx, lv in enumerate(levels):
                 try:
-                    elevation_mm = lv.get("elevation")
-                    if elevation_mm is None:
-                        raise ValueError("Level {}: elevation is required".format(idx))
-                    name = lv.get("name")
-                    if name and name in existentes:
-                        raise ValueError("Level {}: a level named '{}' already exists".format(idx, name))
-                    planes.append({
-                        "idx": idx,
-                        "elevation_mm": float(elevation_mm),
-                        "name": name if name else None,
-                    })
+                    planes.append(planificar_nivel(lv, idx, existentes))
                 except ValueError as lv_err:
                     errors.append(str(lv_err))
                 except Exception as lv_err:
                     errors.append("Level {}: {}".format(idx, str(lv_err)))
 
             if ctx["simular"]:
-                haria = [
-                    {"accion": "crear", "element_type": "level", "name": p["name"], "elevation_mm": p["elevation_mm"]}
-                    for p in planes
-                ]
+                haria = [haria_nivel(p) for p in planes]
                 return simulacion(haria, count=len(haria), errors=errors)
 
             ids = []
@@ -413,14 +508,7 @@ def register_building_routes(api):
             )
             # Verificacion adicional: elevacion real de cada nivel creado
             for creado in resultado["creados"]:
-                try:
-                    nivel = doc.GetElement(make_element_id(creado["id"]))
-                    # elevation_mm: origen interno (el marco de la peticion); elevation_shown_mm: la que muestra Revit
-                    creado["elevation_mm"] = round(elevacion_interna(nivel) / MM_TO_FEET, 1)
-                    creado["elevation_shown_mm"] = round(elevacion_mostrada(nivel) / MM_TO_FEET, 1)
-                    creado["name"] = get_element_name(nivel)
-                except Exception:
-                    pass
+                describir_nivel(doc, creado)
             return resultado
 
         return ejecutar(doc, "/create_level/", request, cuerpo)

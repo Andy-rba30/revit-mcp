@@ -19,31 +19,16 @@ This implementation uses a **modular architecture** that separates concerns and 
 ```
 revit-mcp-python/
 ├── main.py                                    # MCP Server (FastMCP implementation)
-├── tools/                                     # MCP Tool definitions (organized by functionality)
-│   ├── __init__.py                           # Tool registration system (12 modules)
-│   ├── utils.py                              # Utility functions for response formatting
-│   ├── status_tools.py                       # Status and connectivity tools
-│   ├── model_tools.py                        # Model information tools
-│   ├── view_tools.py                         # View export and image tools
-│   ├── family_tools.py                       # Family placement and management tools
-│   ├── colors_tools.py                       # Color splashing tools
-│   ├── code_execution_tools.py               # Code execution tools
-│   ├── building_tools.py                     # Building creation (walls, floors, roofs, levels)
-│   ├── editing_tools.py                      # Element editing (delete, modify, select)
-│   ├── structure_tools.py                    # Structural (grids, framing)
-│   ├── annotation_tools.py                   # Annotation (dimensions, wall tags)
-│   ├── analysis_tools.py                     # Analysis (filter, rooms, materials, statistics)
-│   ├── documentation_tools.py                # Documentation (sheets, schedules, export)
-│   ├── query_tools.py                        # 0.2.0: warnings, worksets, phases, links, location, find, geometry, types, log
-│   ├── type_tools.py                         # 0.2.0: change_element_type, set_type_parameter
-│   ├── structural_tools.py                   # 0.2.0: columns, foundations, openings, toposolid
-│   ├── location_tools.py                     # 0.2.0: set_project_location, set_workset, join_geometry
-│   ├── maintenance_tools.py                  # 0.2.0: purge_unused, create_backup
-│   ├── navigation_tools.py                   # 0.3.0: describe_element, dependency_graph, query_elements, schedule_to_json, get_view_extents, snapshot_model, diff_snapshots
-│   └── macro_tools.py                        # 0.3.0: create_grid_and_levels, create_sheet_set, import_from_civil
+├── tools/                                     # MCP Tool definitions (0.4.0: 40 tools in 4 modules)
+│   ├── __init__.py                           # HERRAMIENTAS (40), HERRAMIENTAS_RETIRADAS (51 old names -> replacement), instalar_retiradas(), register_tools()
+│   ├── utils.py                              # format_response (+ ms_puente), Cronometro, timeouts
+│   ├── lectura_tools.py                      # 16 read tools (status, model info with include, views, query, describe, types, schedule, warnings, analyze, clashes, snapshots, log)
+│   ├── escritura_tools.py                    # 19 write tools (set_parameters, create_elements, transform, delete, types, joins, worksets, location, views, sheets, schedules, annotate, colors, export, link, family, MEP, maintain)
+│   ├── macro_tools.py                        # 4 macros: create_grid_and_levels, import_from_civil, list_macros, run_macro
+│   └── code_execution_tools.py               # execute_revit_code (last resort)
 ├── INSTRUCCIONES_AGENTE.md                    # Sent to the client as MCPServer(instructions=...)
-├── CONTRATO.md                                # HTTP contract: security, safe-write layer, every route, curl examples
-├── herramientas-dev/                          # Dev notes: phase-2 prompt, API members pending a check inside Revit, validation prompts
+├── CONTRATO.md                                # HTTP contract: security, safe-write layer, every route, curl examples, the 40-tool table with "Sustituye a"
+├── herramientas-dev/                          # Dev notes: phase-2 and consolidation prompts, API members pending a check inside Revit, validation prompts, macros-ejemplo/ (numerar_planos, comentarios_por_nivel)
 ├── revit-mcp-python.extension/               # pyRevit Extension
 │   ├── startup.py                            # Extension entry point - registers all routes
 │   └── revit_mcp/                            # Routes API modules (organized by functionality)
@@ -71,8 +56,10 @@ revit-mcp-python/
 │       ├── subproyectos.py                   # 0.2.0: set_workset, join_geometry
 │       ├── mantenimiento.py                  # 0.2.0: purge_unused, backup
 │       ├── navegacion.py                     # 0.3.0: describe, dependency_graph, query (engine of find_elements), schedule, view_extents, warnings grouping
-│       ├── instantaneas.py                   # 0.3.0: snapshot / diff_snapshots (snapshots\<name>.json)
-│       └── macros.py                         # 0.3.0: grid_levels, sheet_set, import_civil (reuse the phase-1 helpers)
+│       ├── instantaneas.py                   # 0.3.0: snapshot / diff_snapshots (snapshots\<name>.json); 0.4.0: timings, include_bbox, name caches
+│       ├── macros.py                         # 0.3.0: grid_levels, sheet_set, import_civil (reuse the phase-1 helpers)
+│       ├── lotes.py                          # 0.4.0: /set_parameters/ and /create_elements/ (one transaction per batch; reuse planificar_*/crear_* helpers)
+│       └── macros_usuario.py                 # 0.4.0: /macros/ and /macros/run/ (user macros: macro.json + macro.py, reload by mtime)
 ├── tests/                                    # CPython tests (fake pyrevit + fake model in tests/fakes) — `uv run pytest`
 ├── pruebas/probar_revit.py                   # Smoke tests against a running Revit
 ├── requirements.txt                          # Python dependencies
@@ -449,81 +436,26 @@ It contains:
 
 ## **Available Tools** |
 
-The implementation provides 78 tools organized by category (0.3.0). Every
-write tool accepts `simular` (dry run) and returns `ok`, `verificacion`,
-`copia` and `ms`; see the "Safe-write layer" section below.
+0.4.0 consolidates the 78 tools of 0.3.x into **40** (`tools.HERRAMIENTAS`);
+the 51 retired names live in `tools.HERRAMIENTAS_RETIRADAS` and a client that
+calls one gets an `is_error` result naming the replacement (the SDK's
+`ToolManager.call_tool` is wrapped by `tools.instalar_retiradas`). Every
+tool description is under 60 words with an example. Every write tool accepts
+`simular` and returns `ok`, `verificacion`, `copia`, `ms` and `ms_puente`.
 
-### **Status & Connectivity Tools (2)**
-- **get_revit_status**: Check if the Revit MCP API is active and responding
-- **get_revit_model_info**: Get comprehensive information about the current Revit model
+### **Read (16)** — `tools/lectura_tools.py`
+`get_revit_status`, `get_revit_model_info(include=[levels, worksets, phases, links, location])`, `list_views(current_only, view_type, on_sheet)`, `describe_view(view_id?)`, `capture_view` (image), `query_elements(... current_view, selected)`, `describe_element(element_id | element_ids[<=20], depth, include_geometry)`, `dependency_graph`, `list_types(category | family | contains, with_parameters, loaded_only)`, `schedule_to_json`, `list_warnings(group_by)`, `analyze_model(include=[statistics, materials])`, `check_clashes`, `snapshot_model(include_bbox, timings in the answer)`, `diff_snapshots`, `read_log`.
 
-### **Model Information Tools (1)**
-- **list_levels**: Get all levels with elevation information in the current Revit model
+### **Write (19)** — `tools/escritura_tools.py`
+`set_parameters(changes[], type_parameters)` → `POST /set_parameters/` (one transaction, `fallidos` for read-only / missing parameters); `create_elements(elements[] with kind)` → `POST /create_elements/` (one transaction, all validated first, one failure rolls back everything); `transform_elements` (+ `array`), `delete_elements`, `change_element_type`, `join_geometry`, `set_workset`, `set_project_location(forzar)`, `create_view`, `set_active_view`, `create_sheet_set`, `create_schedule`, `annotate(kind=dimension|tag)`, `color_elements(clear)`, `export(format=pdf|png|jpg|dwg|ifc|rooms_json|rooms_csv)`, `link_file`, `load_family`, `create_mep_system`, `maintain_model(action=purge|backup|save)`.
 
-### **View & Image Tools (4)**
-- **get_revit_view**: Export a specific Revit view as an image
-- **list_revit_views**: Get a list of all exportable views in the current Revit model
-- **get_current_view_info**: Get details about the active Revit view
-- **get_current_view_elements**: Get all elements visible in the current view
+### **Macros (4)** — `tools/macro_tools.py`
+`create_grid_and_levels`, `import_from_civil` (0.3.0) and the user's own macros: `list_macros` (`GET /macros/`) and `run_macro(name, args, simular, forzar, timeout_s)` (`POST /macros/run/`). A macro is `%LOCALAPPDATA%\RevitMcp\macros\<name>\macro.json` + `macro.py` (`run(doc, uidoc, args, api)`, optional `plan(doc, args, api)`); `writes: true` macros run inside `IA: Macro <name>` with the full safe-write pattern; files reload when their mtime changes.
 
-### **Family & Placement Tools (3)**
-- **place_family**: Place a family instance at a specified location
-- **list_families**: Get available family types, optionally filtered
-- **list_family_categories**: Get all family categories in the model
+### **Last resort (1)** — `tools/code_execution_tools.py`
+`execute_revit_code` (`description` required; full code logged; `elementos_modificados`).
 
-### **Building Creation Tools (3)**
-- **create_level**: Create building levels (floor elevations) — must be done before walls/floors
-- **create_line_based_element**: Create walls, beams, and other line-based elements (batch)
-- **create_surface_based_element**: Create floors, roofs, ceilings (batch, closed boundary polygon)
-
-### **Editing Tools (3)**
-- **delete_elements**: Delete elements by ID, reports cascaded deletions (hosted elements)
-- **modify_element**: Change parameter values on a Revit element
-- **get_selected_elements**: Get details of elements selected in the Revit UI
-
-### **Structure Tools (2)**
-- **create_grid**: Create grid lines for structural column layout (batch)
-- **create_structural_framing**: Create structural beams and framing elements (batch)
-
-### **Annotation Tools (2)**
-- **create_dimensions**: Create dimension annotations for elements in the current view
-- **tag_walls**: Tag all untagged walls in the current view
-
-### **Analysis Tools (4)**
-- **ai_element_filter**: Filter elements by category, type, visibility, and spatial bounds
-- **export_room_data**: Export room names, numbers, areas, perimeters, departments
-- **get_material_quantities**: Get aggregated material areas and volumes for takeoffs
-- **analyze_model_statistics**: Get element counts grouped by category
-
-### **Documentation Tools (3)**
-- **create_sheet**: Create a drawing sheet with title block for construction docs
-- **create_schedule**: Create a schedule (quantity takeoff view) for a category
-- **export_document**: Export a view/sheet to PDF, PNG, JPG, or DWG
-
-### **Color Tools (3)**
-- **color_splash**: Color elements by category and parameter value
-- **clear_colors**: Remove all color overrides from a category
-- **list_category_parameters**: Get available parameters for elements in a category
-
-### **Code Execution Tools (1)**
-- **execute_revit_code**: Execute IronPython 2.7 code directly in Revit context (escape hatch). `description` is required; the full code is logged; the response includes `elementos_modificados` (ids created/deleted, new warnings)
-
-### **Query Tools added in 0.2.0 (9)** — `tools/query_tools.py`
-- **list_warnings**, **list_worksets**, **list_phases_and_options**, **list_links**, **get_project_location**, **find_elements**, **get_element_geometry**, **list_element_types**, **read_log**
-
-### **Write Tools added in 0.2.0 (11)**
-- `tools/type_tools.py`: **change_element_type**, **set_type_parameter**
-- `tools/structural_tools.py`: **create_structural_column**, **create_foundation**, **create_opening**, **create_toposolid**
-- `tools/location_tools.py`: **set_project_location**, **set_workset**, **join_geometry**
-- `tools/maintenance_tools.py`: **purge_unused**, **create_backup**
-
-### **Navigation Tools added in 0.3.0 (7, read-only)** — `tools/navigation_tools.py`
-- **describe_element** (parameters with contract units, `builtin` name, shared guid; hosted / joined / dependent elements; dimensions and tags of the active view; geometry), **dependency_graph** (`hosts`, `joins`, `depends` edges), **query_elements** (paginated, `filters[]` with `=`, `!=`, `>`, `<`, `>=`, `<=`, `contains`, `starts`, `empty`, `not_empty`, `exists`; native `ElementParameterFilter` for BuiltInParameter / shared parameters), **schedule_to_json**, **get_view_extents**, **snapshot_model**, **diff_snapshots**. `find_elements` is now an alias of `query_elements`; `list_warnings(group_by="description")` groups warnings by `FailureDefinitionId` with a suggestion.
-
-### **Macro Tools added in 0.3.0 (3)** — `tools/macro_tools.py`
-- **create_grid_and_levels**, **create_sheet_set**, **import_from_civil**. Every macro validates first, returns `plan` with `simular=true` and applies the 200-element limit (`forzar`) to the total it creates. They reuse the phase-1 helpers `structure.crear_rejilla`, `building.crear_nivel`, `documentation.elegir_cajetin` / `crear_plano`, `topografia.tipo_toposolido` / `crear_toposolido` and `interop.vincular_cad`.
-
-Other tools not listed above (MEP, rooms, tags, transforms, views, interop, document, clash, parameters, editing) live in the matching `tools/*_tools.py`; the full list with descriptions is in README.md.
+The full table with the "Sustituye a" column and the routes behind each tool is in CONTRATO.md.
 
 ---
 
@@ -590,6 +522,11 @@ The pyRevit extension exposes these HTTP endpoints under `http://localhost:48884
 - Read: `POST /describe/`, `POST /dependency_graph/`, `POST /query/` (`/find_elements/` is an alias), `POST /schedule/`, `POST /view_extents/`, `POST /snapshot/` (writes `snapshots\<name>.json`, no transaction), `POST /diff_snapshots/`, `GET /warnings/?group_by=description`
 - Write (macros, `simular` returns `plan`): `POST /grid_levels/`, `POST /sheet_set/`, `POST /import_civil/`
 
+### **Endpoints added in 0.4.0** (every 0.3.x route still exists)
+- Batches (one transaction per call): `POST /set_parameters/` (`changes[]`, `type_parameters`, `fallidos`), `POST /create_elements/` (`elements[]` with `kind`; all validated first, `400` with `index`/`kind`; one Revit failure → `500` and full rollback; `creados` grouped by kind)
+- User macros: `GET /macros/` (catalogue with invalid manifests), `POST /macros/run/` (`name`, `args`, `simular`, `forzar`)
+- Extended: `POST /transform_elements/` `operation=array` + `count`; `POST /snapshot/` `include_bbox` + `timings`; `POST /query/` adds `nombre` per element; `POST /list_category_parameters/` accepts `OST_...`; `POST /create_surface/` ceilings via `Ceiling.Create` (2022+)
+
 The complete route table (parameters, responses, curl examples) is in CONTRATO.md.
 
 ---
@@ -613,7 +550,7 @@ def mi_ruta(doc, request):
     return ejecutar(doc, "/mi_ruta/", request, cuerpo)
 ```
 
-`ejecutar` runs `preparar` (409 if `doc.IsModifiable`/`doc.IsReadOnly`; backup of the saved .rvt to `backups\`), calls the body, adds `ok`/`ms`/`copia` and writes a JSON line to `mcp_log.jsonl` (`registrar`). Helpers: `comprobar_alcance` (200-element limit unless `forzar`), `describir_elemento`, `verificar_creados`, `verificar_eliminados`, `bbox_mm`, `nombre_nivel`. `parameters.py` exposes `valor_parametro`, `convertir_valor`, `asignar_parametro`, `coincide_valor` for parameter routes. Unit helpers (`xyz_desde_mm`, `punto_a_mm`, `mapa_niveles`, `buscar_vista`, `buscar_tipo_por_nombre`) live in `revit_mcp/utils.py`.
+`ejecutar` runs `preparar` (409 if `doc.IsModifiable`/`doc.IsReadOnly`; backup of the saved .rvt to `backups\` — since 0.4.0 in a background thread, `escritura.CopiaDiferida`, that `transaccion` joins right before `Commit`, so a write is never committed without the backup finished; `copia.ms` / `copia.espera_ms` in the answer), calls the body, adds `ok`/`ms`/`copia` and writes a JSON line to `mcp_log.jsonl` (`registrar`). Helpers: `comprobar_alcance` (200-element limit unless `forzar`), `describir_elemento`, `verificar_creados`, `verificar_eliminados`, `bbox_mm`, `nombre_nivel`. `parameters.py` exposes `valor_parametro`, `convertir_valor`, `asignar_parametro`, `coincide_valor` for parameter routes. Unit helpers (`xyz_desde_mm`, `punto_a_mm`, `mapa_niveles`, `buscar_vista`, `buscar_tipo_por_nombre`) live in `revit_mcp/utils.py`.
 
 Tests: `tests/` runs in CPython with a fake `pyrevit` (`tests/fakes`, plus a fake Spanish-language model in `tests/fakes/modelo_falso.py` whose `FilteredElementCollector` honours `OfClass` / `OfCategory` / `WherePasses` and the simulated `ElementParameterFilter` rules); `tests/test_compatibilidad_ironpython.py` rejects Python-3-only syntax in `revit_mcp/`. Language rule (learned in the Revit validation): never look up parameters, categories, views, templates or parameter groups by their English display name; use `utils.buscar_por_nombre`, `BuiltInCategory`, `GroupTypeId`, `SpecTypeId` and `ViewType`.
 
