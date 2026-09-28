@@ -683,6 +683,9 @@ class FamilyInstance(Element):
             self.copings = lista
         lista.append(otro.Id)
 
+    def GetCopingIds(self):
+        return list(getattr(self, "copings", None) or [])
+
 
 class HostObject(Element):
     def FindInserts(self, huecos, sombras, muros_embebidos, compartidos):
@@ -1331,6 +1334,9 @@ class JoinGeometryUtils(object):
 
     @staticmethod
     def JoinGeometry(doc, a, b):
+        if getattr(a, "no_unible", False) or getattr(b, "no_unible", False):
+            # como Revit con dos perfiles de acero (validacion 2b en Revit 2027)
+            raise Exception("The elements cannot be joined.\nParameter name: secondElement")
         a.unidos.append(b.Id.Value)
         b.unidos.append(a.Id.Value)
 

@@ -215,15 +215,16 @@ def register_escritura_tools(mcp, revit_get, revit_post, revit_image=None):
         ctx: Context = None,
     ) -> str:
         """Join or unjoin the geometry of two elements, or of a chain (`element_ids`, joined
-        in consecutive pairs; `coping=true` also cuts steel members with AddCoping). Returns
-        joined antes/despues. Example: join_geometry(element_ids=[1234, 5678, 9012], coping=true).
+        in consecutive pairs). Steel beams and columns cannot be geometry-joined: use `coping=true`,
+        which only cuts the beam against the column or other beam (AddCoping). A pair Revit rejects
+        goes to `fallidos`. Example: join_geometry(element_ids=[1234, 5678, 9012], coping=true).
 
         Args:
             element_id_a: First element (two-element form)
             element_id_b: Second element (two-element form)
             element_ids: Chain of 2+ elements joined pair by pair (alternative)
             unjoin: true to separate elements already joined
-            coping: With element_ids: FamilyInstance.AddCoping on each pair (steel beams/columns)
+            coping: With element_ids: cut each pair with AddCoping instead of joining (steel)
             simular: Only validate
             forzar: Required above 200 elements in a chain
         """
@@ -753,8 +754,9 @@ def register_escritura_tools(mcp, revit_get, revit_post, revit_image=None):
         ctx: Context = None,
     ) -> str:
         """Structural properties of beams, braces and columns in ONE transaction, by
-        BuiltInParameter (releases fall back to the AnalyticalMember in Revit 2023+). Returns
-        antes/despues per element, `fallidos` and `no_disponibles` per Revit version.
+        BuiltInParameter (releases fall back to the AnalyticalMember in Revit 2023+; with no
+        analytical model, releases alone answer 409 no_soportado). Returns antes/despues per
+        element, `fallidos` and `no_disponibles` per Revit version.
         Example: set_structural_properties(element_ids=[10, 11], start_release="pinned",
         end_release={"FX": true, "MZ": true}, y_justification="center").
 
@@ -852,9 +854,9 @@ def register_escritura_tools(mcp, revit_get, revit_post, revit_image=None):
         simular: bool = False,
         ctx: Context = None,
     ) -> str:
-        """Split a straight beam at distances from its start: the original keeps the first
-        segment and each further segment is a copy (CopyElement + LocationCurve). `avisos`
-        warns that joins and connections of the original are lost.
+        """Split a straight beam at distances from its start (FamilyInstance.Split, keeping end
+        joins; without it, copies with the end join released). `original.segment` says which
+        segment kept the original id; `verificacion` checks every segment length.
         Example: split_beam(element_id=1234, at_mm=[2000, 4000]).
 
         Args:

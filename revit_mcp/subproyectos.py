@@ -43,11 +43,46 @@ def _estan_unidos(doc, a, b):
             get_element_id_value(a), get_element_id_value(b), error), 400)
 
 
-def unir_en_cadena(doc, ctx):
-    """0.5.0: JoinGeometryUtils por parejas consecutivas de element_ids[]; con coping=true, FamilyInstance.AddCoping.
+def _es_viga(elem):
+    """True si el elemento es de Armazon estructural (vigas y arriostres)."""
+    bic = getattr(DB.BuiltInCategory, "OST_StructuralFraming", None)
+    categoria = getattr(elem, "Category", None)
+    if categoria is None or bic is None:
+        return False
+    try:
+        if categoria.BuiltInCategory == bic:
+            return True
+    except Exception:
+        pass
+    try:
+        return get_element_id_value(categoria.Id) == int(bic)
+    except Exception:
+        return False
 
-    Sustituye al join_steel_elements del bloque B original. Cada pareja ya unida (o ya
-    separada con unjoin) se informa en `skipped_pairs` y no aborta el lote."""
+
+def _recortada(elem, contra):
+    """True/False si `elem` ya tiene un recorte contra `contra` (FamilyInstance.GetCopingIds); None si no se sabe."""
+    try:
+        ids = [get_element_id_value(i) for i in elem.GetCopingIds()]
+    except Exception:
+        return None
+    return get_element_id_value(contra) in ids
+
+
+def _orden_recorte(a, b):
+    """(recortado, contra): se recorta la viga contra el pilar, sea cual sea el orden de element_ids."""
+    if _es_viga(b) and not _es_viga(a):
+        return b, a
+    return a, b
+
+
+def unir_en_cadena(doc, ctx):
+    """JoinGeometryUtils por parejas consecutivas de element_ids[]; con coping=true, FamilyInstance.AddCoping.
+
+    0.5.1: con coping=true solo se recorta (AddCoping sobre la viga, contra el pilar o la otra viga). Revit no une
+    la geometria de perfiles de acero ("The elements cannot be joined", validacion 2b en Revit 2027): en acero la
+    union es el recorte. Una pareja que Revit rechaza va a `fallidos` y no aborta el lote. Cada pareja ya unida
+    (o ya separada con unjoin, o ya recortada) se informa en `skipped_pairs`."""
     data = ctx["data"]
     ids = data.get("element_ids")
     if isinstance(ids, (int, float)) and not isinstance(ids, bool):
@@ -72,56 +107,89 @@ def unir_en_cadena(doc, ctx):
     for a, b in zip(elementos, elementos[1:]):
         if get_element_id_value(a) == get_element_id_value(b):
             raise EscrituraRechazada("Consecutive element_ids must differ ({})".format(get_element_id_value(a)), 400)
-        unidos = _estan_unidos(doc, a, b)
         if coping and not (isinstance(a, DB.FamilyInstance) and isinstance(b, DB.FamilyInstance)):
             raise EscrituraRechazada(
                 "coping needs family instances (steel beams/columns): {} and {}".format(
                     get_element_id_value(a), get_element_id_value(b)), 400,
             )
-        parejas.append({"a": a, "b": b, "id_a": get_element_id_value(a), "id_b": get_element_id_value(b),
-                        "antes": unidos, "skip": (unidos if not unjoin else not unidos)})
-    accion = "unjoin" if unjoin else "join"
-    haria = [{"accion": accion, "element_id_a": p["id_a"], "element_id_b": p["id_b"], "antes": {"joined": p["antes"]},
-              "coping": coping, "skip": p["skip"]} for p in parejas]
+        pareja = {"a": a, "b": b, "id_a": get_element_id_value(a), "id_b": get_element_id_value(b)}
+        if coping:
+            recortado, contra = _orden_recorte(a, b)
+            ya = _recortada(recortado, contra)
+            pareja.update({"recortado": recortado, "contra": contra, "antes": {"coped": ya}, "skip": ya is True})
+        else:
+            unidos = _estan_unidos(doc, a, b)
+            pareja.update({"antes": {"joined": unidos}, "skip": (unidos if not unjoin else not unidos)})
+        parejas.append(pareja)
+    accion = "cope" if coping else ("unjoin" if unjoin else "join")
+    haria = []
+    for p in parejas:
+        entrada = {"accion": accion, "element_id_a": p["id_a"], "element_id_b": p["id_b"], "antes": p["antes"],
+                   "coping": coping, "skip": p["skip"]}
+        if coping:
+            entrada.update({"coped_element": get_element_id_value(p["recortado"]), "against": get_element_id_value(p["contra"])})
+        haria.append(entrada)
     if ctx["simular"]:
         return simulacion(haria, count=len([p for p in parejas if not p["skip"]]), pairs=len(parejas))
     copings = []
     fallos_coping = []
-    with transaccion(doc, u"{} geometria en cadena ({} elementos)".format("Separar" if unjoin else "Unir", len(elementos))):
+    fallidos = []
+    titulo = u"Recortar acero en cadena ({} elementos)" if coping else (
+        u"{} geometria en cadena".format("Separar" if unjoin else "Unir") + u" ({} elementos)")
+    with transaccion(doc, titulo.format(len(elementos))):
         for pareja in parejas:
             if pareja["skip"]:
                 continue
-            if unjoin:
-                DB.JoinGeometryUtils.UnjoinGeometry(doc, pareja["a"], pareja["b"])
-            else:
-                DB.JoinGeometryUtils.JoinGeometry(doc, pareja["a"], pareja["b"])
-        if coping:
-            for pareja in parejas:
+            if coping:
+                id_recortado = get_element_id_value(pareja["recortado"])
+                id_contra = get_element_id_value(pareja["contra"])
                 try:
-                    pareja["a"].AddCoping(pareja["b"])
-                    copings.append({"element_id": pareja["id_a"], "against": pareja["id_b"]})
+                    pareja["recortado"].AddCoping(pareja["contra"])
+                    copings.append({"element_id": id_recortado, "against": id_contra})
                 except Exception as error:
-                    fallos_coping.append({"element_id": pareja["id_a"], "against": pareja["id_b"], "error": str(error)})
+                    pareja["fallo"] = True
+                    fallos_coping.append({"element_id": id_recortado, "against": id_contra, "error": str(error)})
+                continue
+            try:
+                if unjoin:
+                    DB.JoinGeometryUtils.UnjoinGeometry(doc, pareja["a"], pareja["b"])
+                else:
+                    DB.JoinGeometryUtils.JoinGeometry(doc, pareja["a"], pareja["b"])
+            except Exception as error:
+                pareja["fallo"] = True
+                fallidos.append({"element_id_a": pareja["id_a"], "element_id_b": pareja["id_b"], "error": str(error)})
     resultados = []
     desajustes = []
     for pareja in parejas:
-        despues = _estan_unidos(doc, pareja["a"], pareja["b"])
-        esperado = not unjoin
+        if coping:
+            despues = {"coped": _recortada(pareja["recortado"], pareja["contra"])}
+            if not pareja["skip"] and not pareja.get("fallo") and despues["coped"] is False:
+                desajustes.append("{} against {}: no coping after AddCoping".format(
+                    get_element_id_value(pareja["recortado"]), get_element_id_value(pareja["contra"])))
+        else:
+            despues = {"joined": _estan_unidos(doc, pareja["a"], pareja["b"])}
+            if not pareja.get("fallo") and despues["joined"] != (not unjoin):
+                desajustes.append("{} and {}: joined={} after {}".format(pareja["id_a"], pareja["id_b"], despues["joined"], accion))
         resultados.append({"element_id_a": pareja["id_a"], "element_id_b": pareja["id_b"],
-                           "antes": {"joined": pareja["antes"]}, "despues": {"joined": despues}, "skipped": pareja["skip"]})
-        if despues != esperado:
-            desajustes.append("{} and {}: joined={} after {}".format(pareja["id_a"], pareja["id_b"], despues, accion))
+                           "antes": pareja["antes"], "despues": despues, "skipped": pareja["skip"],
+                           "failed": bool(pareja.get("fallo"))})
+    hechas = len([p for p in parejas if not p["skip"] and not p.get("fallo")])
+    motivo_salto = "already coped" if coping else ("already joined" if not unjoin else "not joined")
     resultado = {
         "accion": accion, "element_ids": [get_element_id_value(e) for e in elementos], "pairs": resultados,
-        "joined_pairs" if not unjoin else "unjoined_pairs": len([p for p in parejas if not p["skip"]]),
-        "skipped_pairs": [{"element_id_a": p["id_a"], "element_id_b": p["id_b"],
-                           "reason": "already joined" if not unjoin else "not joined"} for p in parejas if p["skip"]],
+        ("coped_pairs" if coping else ("unjoined_pairs" if unjoin else "joined_pairs")): hechas,
+        "skipped_pairs": [{"element_id_a": p["id_a"], "element_id_b": p["id_b"], "reason": motivo_salto}
+                          for p in parejas if p["skip"]],
+        "fallidos": fallidos,
         "coping": {"requested": coping, "applied": copings, "failed": fallos_coping},
-        "ok": not desajustes,
+        "ok": not desajustes and not fallidos and not fallos_coping,
         "message": "{} {} pair(s) of {} elements{}".format(
-            "Unjoined" if unjoin else "Joined", len([p for p in parejas if not p["skip"]]), len(elementos),
-            " with coping" if coping else ""),
+            "Coped" if coping else ("Unjoined" if unjoin else "Joined"), hechas, len(elementos),
+            ", {} failed".format(len(fallidos) + len(fallos_coping)) if (fallidos or fallos_coping) else ""),
     }
+    if fallidos and not unjoin:
+        resultado["nota"] = (u"Revit no une la geometría de perfiles de acero entre sí: para vigas y pilares metálicos "
+                             u"usa coping=true (recorte).")
     resultado["verificacion"] = ({"coincide": True} if not desajustes else
                                  {"coincide": False, "detalle": "; ".join(desajustes)})
     return resultado

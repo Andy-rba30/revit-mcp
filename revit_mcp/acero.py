@@ -19,7 +19,7 @@ transaccion "IA: ...", creados / antes-despues):
                                     desfases, rotacion, extensiones, analyze_as, uso estructural
   POST /create_steel_connection/    LOTE: connections[] {element_ids, connection_type}; 409 no_soportado
   POST /add_plate/                  familia alojada en cara (o de punto) sobre una viga o pilar
-  POST /split_beam/                 CopyElement por tramo y ajuste de LocationCurve
+  POST /split_beam/                 FamilyInstance.Split (0.5.1); si no existe, CopyElement y LocationCurve
 
 Idioma de Revit: todo lo estructural se lee y escribe por BuiltInParameter, las
 categorias por BuiltInCategory y el material por StructuralMaterialType /
@@ -1053,6 +1053,27 @@ NO_SOPORTADO_CONEXIONES = (
 )
 
 
+MOTIVO_SIN_ANALITICO = "parameter not found and no analytical member associated"
+NO_SOPORTADO_LIBERACIONES = (
+    u"Las liberaciones (articulaciones) no se pueden fijar en estos elementos: desde Revit 2023 viven en el modelo "
+    u"analítico y los elementos no tienen miembro analítico asociado (analytical_status: sin_analitico). Crea el "
+    u"modelo analítico en Revit (Analizar > Automatización del modelo analítico, o dibujando los miembros "
+    u"analíticos) y vuelve a pedirlas. El resto de propiedades (justificación, desfases, rotación, extensiones) "
+    u"sí se pueden fijar sin modelo analítico."
+)
+
+
+def _tipo_desde_id(doc, valor):
+    """Elemento de un ElementId (o el propio elemento si ya lo es); None si no es valido."""
+    if valor is None:
+        return None
+    if isinstance(valor, DB.ElementId):
+        if valor == DB.ElementId.InvalidElementId:
+            return None
+        return doc.GetElement(valor)
+    return valor
+
+
 def tipos_conexion_disponibles(doc):
     """(clase_handler, tipos[]): lanza EscrituraRechazada(409, no_soportado) sin el modulo o sin tipos."""
     handler, clase_tipo, _ = clases_conexiones()
@@ -1065,7 +1086,8 @@ def tipos_conexion_disponibles(doc):
         logger.debug("No se pudieron leer los tipos de conexion: %s", error)
     if not tipos:
         try:
-            por_defecto = clase_tipo.GetDefaultConnectionHandlerType(doc)
+            # 0.5.1: devuelve un ElementId, no el tipo (en Revit 2027 el tipo se leia como "Unnamed" y .Id fallaba)
+            por_defecto = _tipo_desde_id(doc, clase_tipo.GetDefaultConnectionHandlerType(doc))
             if por_defecto is not None:
                 tipos = [por_defecto]
         except Exception:
@@ -2430,20 +2452,87 @@ def _resumen_tramo(tramo):
     return {"segment": tramo["segment"], "start_mm": tramo["start_mm"], "end_mm": tramo["end_mm"], "length_mm": tramo["length_mm"]}
 
 
-def dividir_viga(doc, plan):
-    """Copia el elemento por tramo (CopyElement) y ajusta LocationCurve; el original queda como primer tramo."""
+def _punto_medio(curva):
+    a, b = curva.GetEndPoint(0), curva.GetEndPoint(1)
+    return DB.XYZ((a.X + b.X) / 2.0, (a.Y + b.Y) / 2.0, (a.Z + b.Z) / 2.0)
+
+
+def _toca_punto(curva, punto, tolerancia_mm=1.0):
+    return min(curva.GetEndPoint(0).DistanceTo(punto), curva.GetEndPoint(1).DistanceTo(punto)) * FEET_TO_MM <= tolerancia_mm
+
+
+def _asignar_tramos(doc, plan, ids):
+    """{id: tramo} emparejando cada pieza con el tramo cuyo punto medio queda mas cerca."""
+    asignados = {}
+    for identificador in ids:
+        elem = doc.GetElement(make_element_id(identificador))
+        curva = _curva_ubicacion(elem) if elem is not None else None
+        if curva is None:
+            continue
+        medio = _punto_medio(curva)
+        mejor = min(plan["tramos"], key=lambda t: _punto_medio(DB.Line.CreateBound(t["a"], t["b"])).DistanceTo(medio))
+        asignados[identificador] = mejor
+    return asignados
+
+
+def _dividir_nativo(doc, plan):
+    """FamilyInstance.Split(parametro normalizado), cortando de atras hacia delante. None si la API no lo tiene.
+
+    Revit conserva asi las uniones de los extremos (con el pilar, por ejemplo); moviendo la LocationCurve,
+    la union del extremo devolvia la viga a su longitud original (validacion 2b en Revit 2027)."""
     elem = plan["elem"]
+    if not hasattr(elem, "Split"):
+        return None
+    actual = elem
     nuevos = []
+    for mm in reversed(plan["cortes"]):
+        curva = _curva_ubicacion(actual)
+        inicio = curva.GetEndPoint(0)
+        punto = plan["p0"].Add(plan["p1"].Subtract(plan["p0"]).Normalize().Multiply(mm * MM_TO_FEET))
+        if not _toca_punto(curva, plan["p0"]):
+            raise EscrituraRechazada("split_beam lost track of the start of beam {}".format(plan["element_id"]), 500)
+        parametro = inicio.DistanceTo(punto) / curva.Length
+        nuevo = doc.GetElement(actual.Split(parametro))
+        if nuevo is None:
+            raise EscrituraRechazada("FamilyInstance.Split returned no element at {} mm".format(mm), 500)
+        nuevos.append(get_element_id_value(nuevo))
+        # el trozo que sigue conteniendo el inicio es el que se vuelve a cortar
+        if _toca_punto(_curva_ubicacion(nuevo), plan["p0"]):
+            actual = nuevo
+    return {"metodo": "FamilyInstance.Split", "ids": [plan["element_id"]] + nuevos, "avisos": []}
+
+
+def _dividir_copiando(doc, plan):
+    """Alternativa sin Split: CopyElement por tramo y LocationCurve, soltando antes la union del extremo final."""
+    elem = plan["elem"]
+    avisos = []
+    try:
+        DB.Structure.StructuralFramingUtils.DisallowJoinAtEnd(elem, 1)
+        avisos.append(u"Se desactivó la unión del extremo final de la viga original (StructuralFramingUtils.DisallowJoinAtEnd) "
+                      u"para que Revit no la devolviera a su longitud; vuelve a permitirla si la necesitas.")
+    except Exception as error:
+        avisos.append(u"No se pudo desactivar la unión del extremo final ({}); Revit puede devolver la viga a su longitud.".format(error))
+    nuevos = []
+    asignados = {plan["element_id"]: plan["tramos"][0]}
     for tramo in plan["tramos"][1:]:
         copiados = list(DB.ElementTransformUtils.CopyElement(doc, elem.Id, DB.XYZ(0, 0, 0)))
         if not copiados:
             raise EscrituraRechazada("CopyElement returned no element for segment {}".format(tramo["segment"]), 500)
         copia = doc.GetElement(copiados[0])
         copia.Location.Curve = DB.Line.CreateBound(tramo["a"], tramo["b"])
-        nuevos.append((tramo, get_element_id_value(copia)))
+        nuevos.append(get_element_id_value(copia))
+        asignados[nuevos[-1]] = tramo
     primero = plan["tramos"][0]
     elem.Location.Curve = DB.Line.CreateBound(primero["a"], primero["b"])
-    return nuevos
+    return {"metodo": "CopyElement", "ids": [plan["element_id"]] + nuevos, "avisos": avisos, "asignados": asignados}
+
+
+def dividir_viga(doc, plan):
+    """0.5.1: FamilyInstance.Split si existe; si no, CopyElement + LocationCurve. Devuelve {metodo, ids, avisos}."""
+    resultado = _dividir_nativo(doc, plan)
+    if resultado is None:
+        resultado = _dividir_copiando(doc, plan)
+    return resultado
 
 
 # ---------------------------------------------------------------------------
@@ -2730,12 +2819,17 @@ def register_acero_routes(api):
                         if prefijo in prefijos:
                             fallidos.append({"element_id": element_id, "property": clave,
                                              "builtin": "STRUCTURAL_{}_RELEASE_TYPE".format(prefijo),
-                                             "motivo": "parameter not found and no analytical member associated"})
+                                             "motivo": MOTIVO_SIN_ANALITICO})
                     continue
                 analiticos.append(plan_analitico)
             # los componentes FX..MZ de un elemento cuya liberacion va por el AnalyticalMember no se fijan por parametro
             fase2 = [op for op in fase2 if op[0] not in sin_parametro]
             if not planes and not analiticos and not fase2:
+                if fallidos and all(f.get("motivo") == MOTIVO_SIN_ANALITICO for f in fallidos):
+                    # 0.5.1: en Revit 2023+ las liberaciones viven en el modelo analitico (validacion 2b en Revit 2027)
+                    raise EscrituraRechazada(NO_SOPORTADO_LIBERACIONES, 409,
+                                             {"no_soportado": True, "motivo": "sin_modelo_analitico",
+                                              "fallidos": fallidos, "no_disponibles": no_disponibles})
                 raise EscrituraRechazada("No property can be set on the given elements", 400,
                                          {"fallidos": fallidos, "no_disponibles": no_disponibles})
             elementos = sorted(set([p["element_id"] for p in planes] + [a["acciones"][0]["element_id"] for a in analiticos]))
@@ -2911,7 +3005,7 @@ def register_acero_routes(api):
     @api.route("/split_beam/", methods=["POST"])
     @requiere_token
     def split_beam(doc, request):
-        """Divide una viga recta en tramos (CopyElement + LocationCurve); el original queda como primer tramo. Acepta `simular`."""
+        """Divide una viga recta en tramos (FamilyInstance.Split o CopyElement + LocationCurve). Acepta `simular`."""
 
         def cuerpo(ctx):
             data = ctx["data"]
@@ -2924,29 +3018,49 @@ def register_acero_routes(api):
                 return simulacion(haria, plan={"counts": {"segments": len(resumen), "new_elements": len(resumen) - 1}},
                                   avisos=list(AVISOS_DIVIDIR))
             with transaccion(doc, u"Dividir viga {}".format(plan["element_id"])):
-                nuevos = dividir_viga(doc, plan)
-            resultado, por_id = _agrupar_creados(doc, [identificador for _, identificador in nuevos])
-            for tramo, identificador in nuevos:
+                division = dividir_viga(doc, plan)
+            asignados = division.get("asignados") or _asignar_tramos(doc, plan, division["ids"])
+            nuevos_ids = [i for i in division["ids"] if i != plan["element_id"]]
+            resultado, por_id = _agrupar_creados(doc, nuevos_ids)
+            for identificador in nuevos_ids:
                 creado = por_id.get(identificador)
-                if creado is not None:
-                    creado.update(_resumen_tramo(tramo))
-            primero = plan["tramos"][0]
+                if creado is not None and identificador in asignados:
+                    creado.update(_resumen_tramo(asignados[identificador]))
+            resultado["creados"] = sorted(resultado["creados"], key=lambda c: c.get("segment", 0))
             despues = _curva_ubicacion(plan["elem"])
+            tramo_original = asignados.get(plan["element_id"], plan["tramos"][0])
             resultado["original"] = {
                 "id": plan["element_id"],
                 "antes": {"start_mm": punto_a_mm(plan["p0"]), "end_mm": punto_a_mm(plan["p1"]), "length_mm": plan["length_mm"]},
                 "despues": {"start_mm": punto_a_mm(despues.GetEndPoint(0)), "end_mm": punto_a_mm(despues.GetEndPoint(1)),
                             "length_mm": round(despues.Length * FEET_TO_MM, 1)} if despues is not None else None,
-                "segment": 0,
+                "segment": tramo_original["segment"],
             }
-            if resultado["original"]["despues"] is not None and abs(resultado["original"]["despues"]["length_mm"] - primero["length_mm"]) > 1.0:
-                resultado["ok"] = False
-                resultado["verificacion"] = {"coincide": False, "detalle": u"the original beam is {} mm long instead of {} mm".format(
-                    resultado["original"]["despues"]["length_mm"], primero["length_mm"])}
+            # cada pieza tiene que medir lo que su tramo y cada tramo tiene que tener una pieza
+            desajustes = []
+            for identificador in division["ids"]:
+                elem = doc.GetElement(make_element_id(identificador))
+                curva = _curva_ubicacion(elem) if elem is not None else None
+                tramo = asignados.get(identificador)
+                if curva is None or tramo is None:
+                    desajustes.append(u"element {} has no location curve after the split".format(identificador))
+                    continue
+                largo = round(curva.Length * FEET_TO_MM, 1)
+                if abs(largo - tramo["length_mm"]) > 1.0:
+                    desajustes.append(u"element {} is {} mm long instead of {} mm (segment {})".format(
+                        identificador, largo, tramo["length_mm"], tramo["segment"]))
+            cubiertos = set(t["segment"] for t in asignados.values())
+            if len(cubiertos) != len(plan["tramos"]):
+                desajustes.append(u"{} segment(s) planned, {} covered".format(len(plan["tramos"]), len(cubiertos)))
+            resultado["ok"] = not desajustes
+            resultado["verificacion"] = ({"coincide": True} if not desajustes else
+                                         {"coincide": False, "detalle": u"; ".join(desajustes)})
+            resultado["metodo"] = division["metodo"]
             resultado["segments"] = resumen
-            resultado["creados_ids"] = [identificador for _, identificador in nuevos]
-            resultado["avisos"] = list(AVISOS_DIVIDIR)
-            resultado["message"] = u"Split beam {} into {} segments ({} new)".format(plan["element_id"], len(resumen), len(nuevos))
+            resultado["creados_ids"] = nuevos_ids
+            resultado["avisos"] = division["avisos"] + list(AVISOS_DIVIDIR if division["metodo"] == "CopyElement" else AVISOS_DIVIDIR[1:])
+            resultado["message"] = u"Split beam {} into {} segments ({} new, {})".format(
+                plan["element_id"], len(resumen), len(nuevos_ids), division["metodo"])
             return resultado
 
         return ejecutar(doc, "/split_beam/", request, cuerpo)
