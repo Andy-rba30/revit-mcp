@@ -12,12 +12,11 @@ por el numero de columnas): "P,N,E,Z" (numero de punto, norte, este, cota) o
 esta en metros salvo que `units` diga otra cosa. Pasa por escritura.ejecutar.
 """
 
-from utils import get_element_name, get_element_id_value, make_element_id, xyz_desde_mm, punto_a_mm, mapa_niveles, elementos_por_nombre
+from utils import get_element_name, get_element_id_value, make_element_id, xyz_desde_mm, punto_a_mm, mapa_niveles, elementos_por_nombre, leer_texto_utf8
 from seguridad import requiere_token
 from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, resultado_creacion
 from pyrevit import routes, revit, DB
 from System.Collections.Generic import List
-import io
 import os
 import logging
 
@@ -53,8 +52,7 @@ def leer_csv_puntos(ruta, unidades="m"):
     if unidades not in FACTOR_A_MM:
         raise ValueError("units must be one of {}".format(sorted(FACTOR_A_MM.keys())))
     factor = FACTOR_A_MM[unidades]
-    with io.open(ruta, "r", encoding="utf-8-sig") as archivo:
-        lineas = [l.strip() for l in archivo.readlines()]
+    lineas = [l.strip() for l in leer_texto_utf8(ruta).splitlines()]
     lineas = [l for l in lineas if l and not l.startswith("#")]
     if not lineas:
         raise ValueError("CSV is empty")

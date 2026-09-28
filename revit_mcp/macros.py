@@ -23,7 +23,7 @@ por un nombre ingles fijo.
 from utils import (
     elevacion_interna, elevacion_mostrada,
     get_element_name, get_element_id_value, make_element_id, xyz_desde_mm, punto_a_mm,
-    elementos_por_nombre, mapa_niveles, buscar_vista, MM_TO_FEET, FEET_TO_MM,
+    elementos_por_nombre, mapa_niveles, buscar_vista, MM_TO_FEET, FEET_TO_MM, leer_texto_utf8,
 )
 from seguridad import requiere_token
 from escritura import (
@@ -40,7 +40,6 @@ from topografia import (
 from interop import vincular_cad, PLACEMENTS
 from coordenadas import ubicacion_proyecto, puntos_base, comprobar_puntos_base_libres
 from pyrevit import routes, revit, DB
-import io
 import os
 import re
 import logging
@@ -428,8 +427,7 @@ def leer_landxml(ruta, unidades=None):
 
     Cada punto LandXML es "norte este cota" (Y X Z): se guarda x = este, y = norte.
     Devuelve (puntos, formato, avisos). Lanza ValueError."""
-    with io.open(ruta, "r", encoding="utf-8-sig") as archivo:
-        texto = archivo.read()
+    texto = leer_texto_utf8(ruta)
     avisos = []
     etiqueta_unidad = None
     factor = None

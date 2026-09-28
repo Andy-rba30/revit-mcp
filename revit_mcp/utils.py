@@ -16,6 +16,21 @@ except NameError:  # pragma: no cover - CPython 3 en las pruebas
     _ENTEROS = (int,)
 
 
+def leer_texto_utf8(ruta, errores="strict"):
+    """Contenido de un archivo UTF-8 (con o sin BOM) como texto.
+
+    Lee los bytes de una vez y los decodifica en bloque. En IronPython 2.7,
+    io.open(..., encoding="utf-8") decodifica por trozos y lanza
+    UnicodeDecodeError cuando un caracter de dos bytes (la o de "Anton" en
+    una ruta) cae partido entre dos trozos (validacion 0.4.1, read_log).
+    `errores="replace"` para archivos que no controla el conector."""
+    with open(ruta, "rb") as archivo:
+        datos = archivo.read()
+    if datos[:3] == b"\xef\xbb\xbf":
+        datos = datos[3:]
+    return datos.decode("utf-8", errores)
+
+
 class _FailureSwallower(DB.IFailuresPreprocessor):
     """Resolve Revit failures during a transaction without ever showing a modal
     dialog. Warnings are deleted (the operation proceeds); if any error-severity

@@ -108,11 +108,17 @@ de muro, así que `annotate(kind="tag")` responde 400; es lo correcto). En esa s
 de `creados` salieron en inglés (`Comments`, `Walls`), no en español como en la 0.2.2; falta confirmar el idioma con
 el que se abrió Revit.
 
+Validación de la 0.4.1 (28/09/2026, Revit 2027 `English_USA`): Revit se abre en inglés (el script de arranque usa la
+asociación de archivos de Windows), así que las etiquetas en español siguen sin probarse en esta entrega. La matriz y
+la copia de un muro fijado funcionan y las copias salen sin fijar; `move` responde 400 sin mover el muro. `read_log`
+dio 500 con `UnicodeDecodeError` en `io.open(..., encoding="utf-8").readlines()`: corregido con
+`utils.leer_texto_utf8`, que lee en binario y decodifica en bloque.
+
 | Tipo | Miembro | Versión mínima | Ruta que lo usa | Estado |
 |---|---|---|---|---|
 | método | `Ceiling.Create(Document, IList<CurveLoop>, ElementId tipo, ElementId nivel)` + clase `CeilingType` | 2022 | `/create_elements/` y `/create_surface/` (kind `ceiling`; reserva: suelo como en 0.3.x) | por verificar |
 | enumeración | `BuiltInParameter.CEILING_HEIGHTABOVELEVEL_PARAM` (desfase del techo) | 2011 | `building.crear_superficie` (techo con `offset`) | por verificar |
-| método | `ElementTransformUtils.CopyElement` repetido con `vector * i` en una transacción, también sobre un elemento fijado (0.4.1) | 2012 | `/transform_elements/` (`operation=array`) | por verificar (0.4.0 lo rechazó antes de llamar a Revit porque el muro 151574 estaba fijado) |
+| método | `ElementTransformUtils.CopyElement` repetido con `vector * i` en una transacción, también sobre un elemento fijado (0.4.1) | 2012 | `/transform_elements/` (`operation=array`) | verificado (0.4.1 en Revit 2027: `array` count 3 y `copy` sobre el muro fijado 151574; las copias salen con `pinned` false) |
 | método | `Element.GetOrderedParameters()` en cada elemento de la instantánea (antes `Parameters`) | 2015 | `/snapshot/` (`instantaneas._parametros_de`) | verificado (0.4.0: `parametros_ms` 950 en 2745 elementos; `total_ms` 3612 frente a 8200 en 0.3.1) |
 | método | `Element.get_BoundingBox(None)` solo con `include_bbox` | 2011 | `/snapshot/` | verificado (0.4.0: `total_ms` 2241 sin bbox frente a 3612 con bbox; `bbox_ms` 77 y 2, la diferencia está sobre todo en `escritura_ms`: 1729 y 916) |
 | módulo | `threading.Thread` + `System.IO.File.Copy` desde un hilo que no es el de Revit (solo E/S de archivos) | IronPython 2.7 | `escritura.CopiaDiferida` (todas las escrituras salvo `RUTAS_COPIA_SINCRONA`) | por verificar (0.4.0: `diferida` true y `estado` terminada en los pasos 8, 13 y 22, pero las tres con `reutilizada` true y `ms` 0, así que el hilo no llegó a copiar) |
@@ -121,3 +127,4 @@ el que se abrió Revit.
 | argumento | `uidoc` inyectado por Routes en `/macros/run/` (`run(doc, uidoc, args, api)`) | pyRevit 4.8 | `/macros/run/` | verificado (0.4.0: `run_macro` se ejecuta con la firma de Routes; las macros de ejemplo no lo usan) |
 | parámetro | `BuiltInParameter.VIEWER_SHEET_NUMBER` como `fields` de `/query/` sobre `OST_Views` (`---` = sin plano) | 2011 | herramienta `list_views(on_sheet=...)` | verificado (0.4.0: `list_views(view_type="floor_plans", on_sheet=false)`, 13 plantas) |
 | método | `Category.Id` comparado con `int(BuiltInCategory)` para resolver `OST_...` en `/list_category_parameters/` | 2011 | herramienta `list_types(with_parameters=true)` | verificado (0.4.0: `list_types(category="OST_Walls", with_parameters=true)` con `category_parameters`) |
+| módulo | `io.open(ruta, "r", encoding="utf-8")` en IronPython 2.7 | IronPython 2.7 | antes: `/log/` (`read_log`), `/diff_snapshots/`, manifiestos de macros, CSV y LandXML | no fiable: falla con `UnicodeDecodeError` si un carácter de dos bytes cae entre dos trozos (0.4.1, `read_log` con la ruta `Antón`); sustituido por `utils.leer_texto_utf8` (bytes + `decode` en bloque), por verificar en Revit |
