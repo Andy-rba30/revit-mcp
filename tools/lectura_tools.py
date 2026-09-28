@@ -33,6 +33,10 @@ _TIPOS_VISTA = {
     "other": "other", "otras": "other",
 }
 _SIN_PLANO = ("", "---", "-", None)
+_CONEXIONES = ("connections", "conexiones", "steel_connections", "connection")
+_NORMAS = ("aisc", "en", "todos")
+_FORMAS = ("w", "hss", "l", "c", "wt", "pipe")
+_GROUP_BY_ACERO = ("type", "level", "family", "mark")
 
 
 def _texto_error(mensaje, **extra):
@@ -256,18 +260,20 @@ def register_lectura_tools(mcp, revit_get, revit_post, revit_image=None):
         element_ids: list[int] = None,
         depth: int = 0,
         include_geometry: bool = False,
+        include_structural: bool = False,
         ctx: Context = None,
     ) -> str:
         """Everything about one element (or up to 20, answered per id): category, type,
         level, host, every instance and type parameter (mm, `builtin` name), hosted,
         joined, dependent elements, dimensions/tags of the active view and bbox.
-        Example: describe_element(element_id=1234, depth=1, include_geometry=true).
+        Example: describe_element(element_id=1234, depth=1, include_structural=true).
 
         Args:
             element_id: One element id
             element_ids: Up to 20 ids in one call; the answer is {"elements": {id: ...}}
             depth: 0 = related elements as ids; 1 = with category/type/level; 2 = also their relations
             include_geometry: Add `geometry` (location in mm, solids with volume_m3 / area_m2)
+            include_structural: Add `structural` (usage, material, start/end releases, Y/Z justification and offsets, rotation, extensions, analyze_as; `no_disponibles` per Revit version)
         """
         crono = Cronometro()
         ids = list(element_ids or [])
@@ -283,6 +289,8 @@ def register_lectura_tools(mcp, revit_get, revit_post, revit_image=None):
         errores = {}
         for identificador in ids:
             data = {"element_id": identificador, "depth": depth, "include_geometry": include_geometry}
+            if include_structural:
+                data["include_structural"] = True
             response = await revit_post("/describe/", data, ctx, timeout=TIMEOUT_LECTURA)
             if es_error(response):
                 errores[str(identificador)] = response if isinstance(response, dict) else {"error": str(response)}
@@ -329,12 +337,13 @@ def register_lectura_tools(mcp, revit_get, revit_post, revit_image=None):
         ctx: Context = None,
     ) -> str:
         """Types available to create or change elements. With `category`: its types with
-        main type parameters and instance counts. With only `family`/`contains`: family
-        types matching the text. Without arguments: the family categories with counts.
+        main type parameters and instance counts (category="connections" lists the steel
+        connection types, 409 no_soportado without the module). With only `family`/`contains`:
+        family types matching the text. Without arguments: the family categories with counts.
         Example: list_types(category="OST_StructuralColumns", with_parameters=true).
 
         Args:
-            category: BuiltInCategory ("OST_Walls") or alias ("walls", "beams")
+            category: BuiltInCategory ("OST_Walls"), alias ("walls", "beams") or "connections"
             family: Only types of this family (with category: exact; alone: substring)
             contains: Substring of "family type" when no category is given
             with_parameters: Also list the parameters of the category's elements (`category_parameters`)
@@ -352,7 +361,7 @@ def register_lectura_tools(mcp, revit_get, revit_post, revit_image=None):
                 response["types"] = tipos
                 response["count"] = len(tipos)
                 response["loaded_only"] = True
-            if with_parameters:
+            if with_parameters and str(category).strip().lower() not in _CONEXIONES:
                 response["category_parameters"] = await revit_post(
                     "/list_category_parameters/", {"category_name": category}, ctx, timeout=TIMEOUT_LECTURA)
             return format_response(response, ms_puente=crono.ms())
@@ -521,6 +530,65 @@ def register_lectura_tools(mcp, revit_get, revit_post, revit_image=None):
         if b is not None:
             data["b"] = b
         response = await revit_post("/diff_snapshots/", data, ctx, timeout=TIMEOUT_LARGO)
+        return format_response(response, ms_puente=crono.ms())
+
+    @mcp.tool()
+    async def list_steel_profiles(
+        standard: str = "todos",
+        shape: str = None,
+        loaded_only: bool = True,
+        ctx: Context = None,
+    ) -> str:
+        """Steel profiles loaded in the model (family, type, shape W/HSS/L/C/WT/Pipe,
+        standard AISC/EN, section dimensions in mm, instances) and, with loaded_only=false,
+        the library .rfa files that have a type catalog next to them.
+        Example: list_steel_profiles(shape="W", loaded_only=false).
+
+        Args:
+            standard: "AISC", "EN" or "todos" (default)
+            shape: "W", "HSS", "L", "C", "WT" or "Pipe"
+            loaded_only: false also scans Application.GetLibraryPaths() for .rfa with a .txt catalog
+        """
+        crono = Cronometro()
+        norma = str(standard or "todos").strip()
+        if norma.lower() not in _NORMAS:
+            return format_response(_texto_error("standard '{}' not supported: use AISC, EN or todos".format(standard)),
+                                   ms_puente=crono.ms())
+        data = {"standard": norma, "loaded_only": loaded_only}
+        if shape:
+            if str(shape).strip().lower() not in _FORMAS:
+                return format_response(_texto_error("shape '{}' not supported: use W, HSS, L, C, WT or Pipe".format(shape)),
+                                       ms_puente=crono.ms())
+            data["shape"] = shape
+        response = await revit_post("/steel_profiles/", data, ctx,
+                                    timeout=TIMEOUT_LECTURA if loaded_only else TIMEOUT_LARGO)
+        return format_response(response, ms_puente=crono.ms())
+
+    @mcp.tool()
+    async def steel_quantities(
+        group_by: str = "type",
+        element_ids: list[int] = None,
+        max: int = 2000,
+        ctx: Context = None,
+    ) -> str:
+        """Steel take-off: count, total length (mm) and weight (kg = volume x structural asset
+        density, or nominal weight x length) grouped by type, level, family or mark;
+        `sin_peso` lists the elements that could not be weighed and why.
+        Example: steel_quantities(group_by="type").
+
+        Args:
+            group_by: "type", "level", "family" or "mark"
+            element_ids: Elements to measure; empty = every steel beam, brace and column
+            max: Element limit when element_ids is empty (default 2000)
+        """
+        crono = Cronometro()
+        if str(group_by or "").strip().lower() not in _GROUP_BY_ACERO:
+            return format_response(_texto_error(
+                "group_by '{}' not supported: use type, level, family or mark".format(group_by)), ms_puente=crono.ms())
+        data = {"group_by": group_by, "max": max}
+        if element_ids:
+            data["element_ids"] = element_ids
+        response = await revit_post("/steel_quantities/", data, ctx, timeout=TIMEOUT_LECTURA)
         return format_response(response, ms_puente=crono.ms())
 
     @mcp.tool()

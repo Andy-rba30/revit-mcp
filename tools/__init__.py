@@ -25,10 +25,11 @@ logger = logging.getLogger(__name__)
 # Las 40 herramientas de 0.4.0 (39 sin capture_view, que se mantiene aparte
 # porque devuelve una imagen y no un texto JSON).
 HERRAMIENTAS = (
-    # lectura (16)
+    # lectura (16 + 2 de 0.5.0)
     "get_revit_status", "get_revit_model_info", "list_views", "describe_view", "capture_view",
     "query_elements", "describe_element", "dependency_graph", "list_types", "schedule_to_json",
     "list_warnings", "analyze_model", "check_clashes", "snapshot_model", "diff_snapshots", "read_log",
+    "list_steel_profiles", "steel_quantities",
     # escritura (19)
     "set_parameters", "create_elements", "transform_elements", "delete_elements",
     "change_element_type", "join_geometry", "set_workset", "set_project_location", "create_view",

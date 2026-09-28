@@ -272,6 +272,37 @@ class BuiltInParameter(object):
     RBS_PIPE_DIAMETER_PARAM = _Enum("RBS_PIPE_DIAMETER_PARAM", -1001226)
     RBS_CURVE_WIDTH_PARAM = _Enum("RBS_CURVE_WIDTH_PARAM", -1001227)
     RBS_CURVE_HEIGHT_PARAM = _Enum("RBS_CURVE_HEIGHT_PARAM", -1001228)
+    # 0.5.0 (entrega 2b): estructuras metalicas
+    INSTANCE_LENGTH_PARAM = _Enum("INSTANCE_LENGTH_PARAM", -1001229)
+    STRUCTURAL_MATERIAL_PARAM = _Enum("STRUCTURAL_MATERIAL_PARAM", -1001230)
+    INSTANCE_STRUCT_USAGE_PARAM = _Enum("INSTANCE_STRUCT_USAGE_PARAM", -1001231)
+    STRUCTURAL_START_RELEASE_TYPE = _Enum("STRUCTURAL_START_RELEASE_TYPE", -1001232)
+    STRUCTURAL_END_RELEASE_TYPE = _Enum("STRUCTURAL_END_RELEASE_TYPE", -1001233)
+    STRUCTURAL_START_RELEASE_FX = _Enum("STRUCTURAL_START_RELEASE_FX", -1001234)
+    STRUCTURAL_START_RELEASE_FY = _Enum("STRUCTURAL_START_RELEASE_FY", -1001235)
+    STRUCTURAL_START_RELEASE_FZ = _Enum("STRUCTURAL_START_RELEASE_FZ", -1001236)
+    STRUCTURAL_START_RELEASE_MX = _Enum("STRUCTURAL_START_RELEASE_MX", -1001237)
+    STRUCTURAL_START_RELEASE_MY = _Enum("STRUCTURAL_START_RELEASE_MY", -1001238)
+    STRUCTURAL_START_RELEASE_MZ = _Enum("STRUCTURAL_START_RELEASE_MZ", -1001239)
+    STRUCTURAL_END_RELEASE_FX = _Enum("STRUCTURAL_END_RELEASE_FX", -1001240)
+    STRUCTURAL_END_RELEASE_FY = _Enum("STRUCTURAL_END_RELEASE_FY", -1001241)
+    STRUCTURAL_END_RELEASE_FZ = _Enum("STRUCTURAL_END_RELEASE_FZ", -1001242)
+    STRUCTURAL_END_RELEASE_MX = _Enum("STRUCTURAL_END_RELEASE_MX", -1001243)
+    STRUCTURAL_END_RELEASE_MY = _Enum("STRUCTURAL_END_RELEASE_MY", -1001244)
+    STRUCTURAL_END_RELEASE_MZ = _Enum("STRUCTURAL_END_RELEASE_MZ", -1001245)
+    Y_JUSTIFICATION = _Enum("Y_JUSTIFICATION", -1001246)
+    Z_JUSTIFICATION = _Enum("Z_JUSTIFICATION", -1001247)
+    Y_OFFSET_VALUE = _Enum("Y_OFFSET_VALUE", -1001248)
+    Z_OFFSET_VALUE = _Enum("Z_OFFSET_VALUE", -1001249)
+    STRUCTURAL_BEND_DIR_ANGLE = _Enum("STRUCTURAL_BEND_DIR_ANGLE", -1001250)
+    START_EXTENSION = _Enum("START_EXTENSION", -1001251)
+    END_EXTENSION = _Enum("END_EXTENSION", -1001252)
+    STRUCTURAL_ANALYZES_AS = _Enum("STRUCTURAL_ANALYZES_AS", -1001253)
+    STRUCTURAL_SECTION_COMMON_HEIGHT = _Enum("STRUCTURAL_SECTION_COMMON_HEIGHT", -1001254)
+    STRUCTURAL_SECTION_COMMON_WIDTH = _Enum("STRUCTURAL_SECTION_COMMON_WIDTH", -1001255)
+    STRUCTURAL_SECTION_COMMON_WEB_THICKNESS = _Enum("STRUCTURAL_SECTION_COMMON_WEB_THICKNESS", -1001256)
+    STRUCTURAL_SECTION_COMMON_FLANGE_THICKNESS = _Enum("STRUCTURAL_SECTION_COMMON_FLANGE_THICKNESS", -1001257)
+    STRUCTURAL_SECTION_NOMINAL_WEIGHT = _Enum("STRUCTURAL_SECTION_NOMINAL_WEIGHT", -1001258)
 
 
 class BuiltInCategory(object):
@@ -303,6 +334,9 @@ class BuiltInCategory(object):
     OST_Lines = _Enum("OST_Lines", -2000051)
     OST_ProjectBasePoint = _Enum("OST_ProjectBasePoint", -2001267)
     OST_SharedBasePoint = _Enum("OST_SharedBasePoint", -2001268)
+    OST_StructuralTruss = _Enum("OST_StructuralTruss", -2001336)
+    OST_StructConnections = _Enum("OST_StructConnections", -2009030)
+    OST_Materials = _Enum("OST_Materials", -2000700)
 
 
 class CategoryType(object):
@@ -604,6 +638,10 @@ class FamilySymbol(ElementType):
     def Activate(self):
         self.IsActive = True
 
+    def GetStructuralSection(self):
+        """0.5.0: la seccion estructural del tipo (None si la familia no la define)."""
+        return getattr(self, "seccion", None)
+
 
 class WallType(ElementType):
     pass
@@ -626,12 +664,24 @@ class ViewFamilyType(ElementType):
 
 
 class Family(Element):
-    pass
+    # 0.5.0: Family.StructuralMaterialType (Steel, Concrete, Wood...); None = no definido
+    StructuralMaterialType = None
+    FamilyPlacementType = None
 
 
 class FamilyInstance(Element):
     Host = None
     SuperComponent = None
+    StructuralUsage = None
+    StructuralMaterialType = None
+
+    def AddCoping(self, otro):
+        """0.5.0: FamilyInstance.AddCoping (recorte de la viga contra `otro`)."""
+        lista = getattr(self, "copings", None)
+        if lista is None:
+            lista = []
+            self.copings = lista
+        lista.append(otro.Id)
 
 
 class HostObject(Element):
@@ -753,6 +803,142 @@ class Structure(object):
         Column = _Enum("Column")
         Footing = _Enum("Footing")
 
+    # --- 0.5.0 (entrega 2b): estructuras metalicas y modelo analitico ------------
+    class StructuralMaterialType(object):
+        Undefined = _Enum("Undefined", 0)
+        Steel = _Enum("Steel", 1)
+        Concrete = _Enum("Concrete", 2)
+        Wood = _Enum("Wood", 3)
+        Other = _Enum("Other", 4)
+        Generic = _Enum("Generic", 5)
+        PrecastConcrete = _Enum("PrecastConcrete", 6)
+        Aluminum = _Enum("Aluminum", 7)
+
+    class StructuralInstanceUsage(object):
+        Undefined = _Enum("Undefined", 0)
+        Column = _Enum("Column", 1)
+        Girder = _Enum("Girder", 2)
+        Joist = _Enum("Joist", 3)
+        Purlin = _Enum("Purlin", 4)
+        HorizontalBracing = _Enum("HorizontalBracing", 5)
+        KickerBracing = _Enum("KickerBracing", 6)
+        Other = _Enum("Other", 7)
+        Automatic = _Enum("Automatic", 8)
+        Wall = _Enum("Wall", 9)
+        TrussChord = _Enum("TrussChord", 10)
+        TrussWeb = _Enum("TrussWeb", 11)
+        Brace = _Enum("Brace", 12)
+
+    class YJustification(object):
+        Origin = _Enum("Origin", 0)
+        Left = _Enum("Left", 1)
+        Center = _Enum("Center", 2)
+        Right = _Enum("Right", 3)
+
+    class ZJustification(object):
+        Origin = _Enum("Origin", 0)
+        Top = _Enum("Top", 1)
+        Center = _Enum("Center", 2)
+        Bottom = _Enum("Bottom", 3)
+
+    class AnalyzeAs(object):
+        NotForAnalysis = _Enum("NotForAnalysis", 0)
+        Gravity = _Enum("Gravity", 1)
+        Lateral = _Enum("Lateral", 2)
+        GravityLateral = _Enum("GravityLateral", 3)
+        Hanger = _Enum("Hanger", 4)
+
+    class ReleaseType(object):
+        Fixed = _Enum("Fixed", 0)
+        Pinned = _Enum("Pinned", 1)
+        BendingMoment = _Enum("BendingMoment", 2)
+        UserDefined = _Enum("UserDefined", 3)
+
+    class AnalyticalElementSelector(object):
+        StartOrBase = _Enum("StartOrBase", 0)
+        EndOrTop = _Enum("EndOrTop", 1)
+        Whole = _Enum("Whole", 2)
+
+    class ReleaseConditions(object):
+        def __init__(self, inicio, fx=False, fy=False, fz=False, mx=False, my=False, mz=False):
+            self.Start = inicio
+            self.Fx, self.Fy, self.Fz, self.Mx, self.My, self.Mz = fx, fy, fz, mx, my, mz
+
+    class StructuralSectionShape(object):
+        NotDefined = _Enum("NotDefined", 0)
+        IWideFlange = _Enum("IWideFlange", 1)
+        RectangleHSS = _Enum("RectangleHSS", 2)
+        RoundHSS = _Enum("RoundHSS", 3)
+        LAngle = _Enum("LAngle", 4)
+        CProfile = _Enum("CProfile", 5)
+        StructuralTees = _Enum("StructuralTees", 6)
+        PipeStandard = _Enum("PipeStandard", 7)
+        IParallelFlange = _Enum("IParallelFlange", 8)
+
+    class StructuralSection(object):
+        def __init__(self, forma):
+            self.StructuralSectionShape = forma
+
+    class AnalyticalMember(Element):
+        """Miembro analitico (2023+): GetCurve / SetCurve y liberaciones por extremo."""
+
+        def __init__(self):
+            Element.__init__(self)
+            self.curva = None
+            self.liberaciones = {}
+            self.condiciones = {}
+
+        def GetCurve(self):
+            return self.curva
+
+        def SetCurve(self, curva):
+            if curva.Length < 1e-9:
+                raise Exception("Revit: the analytical curve must have a length")
+            self.curva = curva
+
+        def GetReleaseType(self, selector):
+            return self.liberaciones.get(str(selector), Structure.ReleaseType.Fixed)
+
+        def SetReleaseType(self, selector, tipo):
+            self.liberaciones[str(selector)] = tipo
+
+        def GetReleaseConditions(self, selector):
+            return self.condiciones.get(str(selector), Structure.ReleaseConditions(str(selector) == "StartOrBase"))
+
+        def SetReleaseConditions(self, condiciones):
+            clave = "StartOrBase" if condiciones.Start else "EndOrTop"
+            self.condiciones[clave] = condiciones
+
+    class _GestorAsociaciones(object):
+        def __init__(self, doc):
+            self.doc = doc
+
+        def GetAssociatedElementId(self, elem_id):
+            asociado = getattr(self.doc, "asociaciones", {}).get(elem_id.Value)
+            return ElementId(asociado) if asociado is not None else ElementId.InvalidElementId
+
+        def HasAssociation(self, elem_id):
+            return elem_id.Value in getattr(self.doc, "asociaciones", {})
+
+    class AnalyticalToPhysicalAssociationManager(object):
+        @staticmethod
+        def GetAnalyticalToPhysicalAssociationManager(doc):
+            return Structure._GestorAsociaciones(doc)
+
+    class TrussType(ElementType):
+        pass
+
+    class Truss(Element):
+        @staticmethod
+        def Create(doc, tipo_id, plano_id, curva):
+            cercha = Structure.Truss()
+            cercha.Location = _UbicacionCurva(curva)
+            cercha.plano_id = plano_id
+            return _registrar_creado(doc, cercha, u"Cerchas estructurales", BuiltInCategory.OST_StructuralTruss, tipo_id)
+    # Las conexiones de acero (StructuralConnectionHandler, StructuralConnectionHandlerType,
+    # StructuralConnectionApprovalType) NO estan aqui a proposito: sin el modulo instalado
+    # las rutas responden 409 no_soportado; modelo_falso.instalar_conexiones las anade.
+
 
 class Mechanical(object):
     class DuctType(ElementType):
@@ -856,6 +1042,7 @@ class Grid(Element):
 class View(Element):
     IsTemplate = False
     ViewType = ViewType.Undefined
+    AreAnalyticalModelCategoriesHidden = True
     Scale = 100
     CropBoxActive = False
     CropBoxVisible = False
@@ -1057,8 +1244,41 @@ class Solid(object):
 
 
 class _Coleccion(object):
+    """Size y, si se construye con una lista (0.5.0, caras), iteracion."""
+
     def __init__(self, n):
-        self.Size = n
+        if isinstance(n, (list, tuple)):
+            self.elementos = list(n)
+            self.Size = len(self.elementos)
+        else:
+            self.elementos = []
+            self.Size = n
+
+    def __iter__(self):
+        return iter(self.elementos)
+
+
+class _ResultadoInterseccion(object):
+    def __init__(self, punto):
+        self.XYZPoint = punto
+
+
+class Face(object):
+    pass
+
+
+class PlanarFace(Face):
+    """0.5.0: cara plana con normal, origen, area y referencia (para add_plate)."""
+
+    def __init__(self, normal, origen, area=1.0, referencia=None):
+        self.FaceNormal = normal
+        self.Origin = origen
+        self.Area = area
+        self.Reference = referencia
+
+    def Project(self, punto):
+        distancia = punto.Subtract(self.Origin).DotProduct(self.FaceNormal)
+        return _ResultadoInterseccion(punto.Subtract(self.FaceNormal.Multiply(distancia)))
 
 
 class GeometryInstance(object):
@@ -1142,7 +1362,9 @@ class ElementTransformUtils(object):
         copia = _copy.copy(original)
         copia.Id = ElementId.InvalidElementId
         copia.UniqueId = None
-        copia.Parameters = list(getattr(original, "Parameters", []))
+        copia.Parameters = [_copy.copy(p) for p in getattr(original, "Parameters", [])]
+        if getattr(original, "Location", None) is not None:
+            copia.Location = _copy.copy(original.Location)   # cada copia con su propia curva (split_beam)
         doc.agregar(copia)
         if hasattr(copia, "mover"):
             copia.mover(delta)
@@ -1465,3 +1687,78 @@ class DesignOption(object):
     @staticmethod
     def GetActiveDesignOptionId(doc):
         return ElementId(-1)
+
+
+# ---------------------------------------------------------------------------
+# 0.5.0 (entrega 2b): materiales, activos estructurales, unidades e IFC
+# ---------------------------------------------------------------------------
+class StructuralAssetClass(object):
+    Undefined = _Enum("Undefined", 0)
+    Basic = _Enum("Basic", 1)
+    Generic = _Enum("Generic", 2)
+    Metal = _Enum("Metal", 3)
+    Concrete = _Enum("Concrete", 4)
+    Wood = _Enum("Wood", 5)
+
+
+class StructuralAsset(object):
+    """Activo estructural: densidad en unidades internas (kg/ft3) y clase."""
+
+    def __init__(self, densidad_kg_m3=0.0, clase=None):
+        self.Density = float(densidad_kg_m3) / 35.3146667   # interno kg/ft3
+        self.StructuralAssetClass = clase if clase is not None else StructuralAssetClass.Undefined
+
+
+class PropertySetElement(Element):
+    activo = None
+
+    def GetStructuralAsset(self):
+        if self.activo is None:
+            raise Exception("no structural asset")
+        return self.activo
+
+
+class Material(Element):
+    StructuralAssetId = ElementId.InvalidElementId
+    MaterialClass = u""
+
+
+class UnitTypeId(object):
+    Millimeters = _Enum("Millimeters")
+    Meters = _Enum("Meters")
+    CubicMeters = _Enum("CubicMeters")
+    KilogramsPerCubicMeter = _Enum("KilogramsPerCubicMeter")
+    KilogramsPerMeter = _Enum("KilogramsPerMeter")
+    Degrees = _Enum("Degrees")
+
+
+_FACTORES_DESDE_INTERNO = {
+    "Millimeters": 304.8, "Meters": 0.3048, "CubicMeters": 0.028316846592,
+    "KilogramsPerCubicMeter": 35.3146667, "KilogramsPerMeter": 1.0 / 0.3048, "Degrees": 57.2957795,
+}
+
+
+class UnitUtils(object):
+    @staticmethod
+    def ConvertFromInternalUnits(valor, unidad):
+        return float(valor) * _FACTORES_DESDE_INTERNO[str(unidad)]
+
+    @staticmethod
+    def ConvertToInternalUnits(valor, unidad):
+        return float(valor) / _FACTORES_DESDE_INTERNO[str(unidad)]
+
+
+class IFCVersion(object):
+    IFC2x3 = _Enum("IFC2x3")
+    IFC4 = _Enum("IFC4")
+
+
+class IFCExportOptions(object):
+    def __init__(self):
+        self.FileVersion = IFCVersion.IFC2x3
+        self.ExportBaseQuantities = False
+        self.FilterViewId = ElementId.InvalidElementId
+        self.opciones = {}
+
+    def AddOption(self, nombre, valor):
+        self.opciones[nombre] = valor

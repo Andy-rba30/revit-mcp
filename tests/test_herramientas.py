@@ -94,11 +94,11 @@ def servidor():
 # ---------------------------------------------------------------------------
 # Registro y nombres retirados
 # ---------------------------------------------------------------------------
-def test_se_registran_las_40_y_ninguna_retirada(servidor):
+def test_se_registran_todas_y_ninguna_retirada(servidor):
     mcp, _ = servidor
     nombres = sorted(t.name for t in mcp._tool_manager.list_tools())
     assert nombres == sorted(HERRAMIENTAS)
-    assert len(HERRAMIENTAS) == 40
+    assert len(HERRAMIENTAS) == 42
     assert not set(nombres) & set(HERRAMIENTAS_RETIRADAS)
     assert len(HERRAMIENTAS_RETIRADAS) == 51
     # cada sustituta empieza por una herramienta registrada
@@ -381,3 +381,39 @@ def test_set_project_location_acepta_forzar_y_snapshot_include_bbox():
     assert datos["data"] == {"simular": False, "forzar": True, "true_north_deg": 1.5}
     datos = _llamar(f, "snapshot_model", name="a", include_bbox=False)
     assert datos["data"]["include_bbox"] is False and datos["data"]["include_parameters"] is True
+
+
+# ---------------------------------------------------------------------------
+# 0.5.0 (entrega 2b): estructuras metalicas
+# ---------------------------------------------------------------------------
+def test_describe_element_include_structural_y_list_types_connections():
+    puente = Puente({"/describe/": lambda d: {"data": d}, "/element_types/": lambda d: {"types": [], "count": 0, "category": d["category"]},
+                     "/list_category_parameters/": {"parameters": []}})
+    f = _herramientas(puente)
+    datos = _llamar(f, "describe_element", element_id=10, include_structural=True)
+    assert datos["data"]["include_structural"] is True
+    datos = _llamar(f, "describe_element", element_id=10)
+    assert "include_structural" not in datos["data"]
+    puente.llamadas = []
+    datos = _llamar(f, "list_types", category="connections", with_parameters=True)
+    # con connections no se piden los parametros de categoria (no hay BuiltInCategory)
+    assert puente.rutas() == ["/element_types/"] and datos["category"] == "connections"
+    puente.llamadas = []
+    _llamar(f, "list_types", category="OST_Walls", with_parameters=True)
+    assert puente.rutas() == ["/element_types/", "/list_category_parameters/"]
+
+
+def test_list_steel_profiles_y_steel_quantities():
+    puente = Puente({"/steel_profiles/": lambda d: {"data": d}, "/steel_quantities/": lambda d: {"data": d}})
+    f = _herramientas(puente)
+    datos = _llamar(f, "list_steel_profiles")
+    assert datos["data"] == {"standard": "todos", "loaded_only": True} and puente.llamadas[-1][3] == 30.0
+    datos = _llamar(f, "list_steel_profiles", standard="EN", shape="W", loaded_only=False)
+    assert datos["data"] == {"standard": "EN", "loaded_only": False, "shape": "W"} and puente.llamadas[-1][3] == 600.0
+    assert "not supported" in _llamar(f, "list_steel_profiles", standard="DIN")
+    assert "not supported" in _llamar(f, "list_steel_profiles", shape="Z")
+    datos = _llamar(f, "steel_quantities", group_by="level", element_ids=[1, 2])
+    assert datos["data"] == {"group_by": "level", "max": 2000, "element_ids": [1, 2]}
+    datos = _llamar(f, "steel_quantities")
+    assert datos["data"] == {"group_by": "type", "max": 2000}
+    assert "not supported" in _llamar(f, "steel_quantities", group_by="peso")

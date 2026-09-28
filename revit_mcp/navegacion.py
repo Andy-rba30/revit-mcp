@@ -1587,6 +1587,12 @@ def register_navegacion_routes(api):
             depth = _entero(data.get("depth"), 0, minimo=0, maximo=2)
             include_geometry = bool(data.get("include_geometry", False))
             datos = describir_a_fondo(doc, elem, depth, include_geometry)
+            if bool(data.get("include_structural", False)):
+                # 0.5.0: uso estructural, material, liberaciones, justificaciones, desfases,
+                # rotacion, extensiones y analyze_as por BuiltInParameter (acero.py)
+                from acero import bloque_estructural
+
+                datos["structural"] = bloque_estructural(doc, elem)
             datos["status"] = "success"
             return datos
 
