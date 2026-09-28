@@ -94,6 +94,10 @@ class Parametro(object):
         if self.IsReadOnly:
             return False
         self._valor = valor
+        # 0.5.0: como en Revit, el texto visible de una longitud refleja el valor nuevo
+        if self.StorageType is DB.StorageType.Double and self.Definition._spec is SpecTypeId.Length and valor is not None:
+            mm = float(valor) / MM_TO_FEET
+            self._visible = u"{} mm".format(int(round(mm)) if abs(mm - round(mm)) < 1e-6 else round(mm, 2))
         return True
 
 
@@ -673,10 +677,13 @@ class Doc(object):
         self.cargas.append((ruta, list(tipos)))
         return nueva, familia, simbolos
 
-    def LoadFamily(self, ruta):
-        """(bool, Family): False si la familia ya estaba cargada (como en Revit)."""
+    def LoadFamily(self, ruta, referencia=None):
+        """LoadFamily(ruta, out Family): False si la familia ya estaba cargada (como en Revit)."""
         descripcion = self.familias_cargables.get(ruta) or {}
         nueva, familia, _ = self._cargar(ruta, descripcion.get("tipos", []))
+        if referencia is not None:
+            referencia.Value = familia
+            return nueva
         return nueva, familia
 
     def LoadFamilySymbol(self, ruta, nombre_tipo, referencia=None):
