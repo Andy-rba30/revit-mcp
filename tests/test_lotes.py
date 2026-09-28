@@ -422,6 +422,24 @@ def test_transform_array_crea_count_menos_una_copias(api, doc):
     assert r.status == 400 and r.data["cantidad"] == 202
 
 
+def test_transform_array_y_copy_admiten_elementos_fijados(api, doc):
+    """0.4.1 (validacion 0.4.0, paso 25): copy y array no mueven el original, asi que
+    un muro fijado se copia; move, rotate y mirror siguen rechazandolo sin citar
+    herramientas retiradas."""
+    doc.elementos[10].Pinned = True
+    cuerpo = {"element_ids": [10], "operation": "array", "vector": {"x": 0, "y": 5000, "z": 0}, "count": 3}
+    r = _post(api, "/transform_elements/", doc, cuerpo)
+    assert r.status == 200, r.data
+    assert r.data["ok"] is True and len(r.data["new_element_ids"]) == 2
+    r = _post(api, "/transform_elements/", doc, {"element_ids": [10], "operation": "copy", "vector": {"x": 1000, "y": 0, "z": 0}})
+    assert r.status == 200 and len(r.data["new_element_ids"]) == 1
+    DB.Transaction.creadas = []
+    r = _post(api, "/transform_elements/", doc, {"element_ids": [10], "operation": "move", "vector": {"x": 1000, "y": 0, "z": 0}})
+    assert r.status == 400 and r.data["pinned_ids"] == [10]
+    assert "is pinned" in r.data["error"] and "modify_element" not in r.data["error"]
+    assert DB.Transaction.creadas == []
+
+
 def test_set_parameters_de_tipo_acepta_el_id_del_tipo(api, doc):
     """Como set_type_parameter(type_id=...): con type_parameters el id puede ser ya el del tipo."""
     r = _post(api, "/set_parameters/", doc, {"changes": [{"element_ids": [50], "parameters": {"Type Comments": u"desde el tipo"}}],

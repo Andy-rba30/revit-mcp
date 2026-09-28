@@ -46,7 +46,7 @@ transaccion propia y el servidor no puede verificar lo que hacen).
 
 from utils import (
     get_element_name, get_element_id_value, make_element_id, buscar_por_nombre, xyz_desde_mm, punto_a_mm,
-    mapa_niveles, MM_TO_FEET, FEET_TO_MM,
+    mapa_niveles, MM_TO_FEET, FEET_TO_MM, leer_texto_utf8,
 )
 from seguridad import requiere_token
 from escritura import (
@@ -56,7 +56,6 @@ from escritura import (
 from parameters import convertir_valor, buscar_parametro
 from navegacion import _responder, _texto_seguro
 from pyrevit import routes, revit, DB
-import io
 import json
 import os
 import re
@@ -121,8 +120,7 @@ def leer_manifiesto(carpeta):
     if not os.path.isfile(ruta_py):
         raise ValueError("falta {}".format(NOMBRE_CODIGO))
     try:
-        with io.open(ruta_json, "r", encoding="utf-8-sig") as archivo:
-            datos = json.load(archivo)
+        datos = json.loads(leer_texto_utf8(ruta_json))
     except Exception as error:
         raise ValueError("{} no es JSON valido: {}".format(NOMBRE_MANIFIESTO, error))
     if not isinstance(datos, dict):

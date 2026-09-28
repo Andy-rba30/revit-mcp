@@ -574,8 +574,7 @@ def leer_log(doc, last_n=50):
         last_n = 50
     if last_n <= 0:
         last_n = 50
-    with io.open(destino, "r", encoding="utf-8") as archivo:
-        lineas = archivo.readlines()
+    lineas = _utils.leer_texto_utf8(destino, "replace").splitlines()
     entradas = []
     for linea in lineas[-last_n:]:
         linea = linea.strip()

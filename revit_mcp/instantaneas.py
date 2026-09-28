@@ -29,7 +29,7 @@ de tipo, nivel y de los elementos referenciados por ElementId se cachean por
 id en vez de pedirselos a Revit por cada parametro de cada elemento.
 """
 
-from utils import get_element_name, get_element_id_value, buscar_por_nombre
+from utils import get_element_name, get_element_id_value, buscar_por_nombre, leer_texto_utf8
 from seguridad import requiere_token
 from escritura import (
     describir_elemento, carpeta_log, EscrituraRechazada, titulo_documento, ruta_documento,
@@ -419,8 +419,7 @@ def cargar_snapshot(doc, name):
         raise EscrituraRechazada(
             "Snapshot not found: {}".format(ruta), 404, {"available_snapshots": listar_snapshots(doc)},
         )
-    with io.open(ruta, "r", encoding="utf-8") as archivo:
-        datos = json.load(archivo)
+    datos = json.loads(leer_texto_utf8(ruta))
     if not isinstance(datos, dict) or not isinstance(datos.get("elements"), dict):
         raise EscrituraRechazada("{} is not a snapshot file".format(ruta), 400)
     return datos, ruta

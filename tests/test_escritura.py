@@ -223,6 +223,22 @@ def test_log_rota_a_5mb(doc_guardado, tmp_path, monkeypatch):
     assert entradas[-1]["args"]["i"] == 19
 
 
+def test_leer_log_con_tildes_y_bytes_invalidos(doc_guardado, tmp_path):
+    """0.4.1 (validacion, read_log): IronPython fallaba con UnicodeDecodeError al
+    leer el log por trozos con una ruta como "Antón". Ahora se lee en bloque y un
+    byte que no es UTF-8 no impide leer el resto."""
+    for i in range(40):
+        escritura.registrar(doc_guardado, "/x/", {"i": i, "ruta": u"C:\\Users\\Andy Bayona Antón\\Desktop"}, True, 1)
+    principal = tmp_path / "mcp_log.jsonl"
+    with open(str(principal), "ab") as archivo:
+        archivo.write(b'{"ruta": "/roto/", "texto": "An\xf3n"}\n')
+    escritura.registrar(doc_guardado, "/y/", {"i": 99}, True, 1)
+    ruta, entradas = escritura.leer_log(doc_guardado, last_n=3)
+    assert entradas[0]["args"]["ruta"] == u"C:\\Users\\Andy Bayona Antón\\Desktop"
+    assert entradas[1]["ruta"] == "/roto/" and u"\ufffd" in entradas[1]["texto"]
+    assert entradas[2]["ruta"] == "/y/"
+
+
 # ---------------------------------------------------------------------------
 # ejecutar
 # ---------------------------------------------------------------------------

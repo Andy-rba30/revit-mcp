@@ -20,6 +20,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# Operaciones rechazadas con el elemento fijado (move y rotate lo desplazan;
+# mirror se mantiene por prudencia hasta verificar MirrorElement en Revit)
+MUEVEN_EL_ORIGINAL = ("move", "rotate", "mirror")
+
+
 def _centro(caja):
     if not caja or not caja.get("min") or not caja.get("max"):
         return None
@@ -111,10 +116,15 @@ def register_transform_routes(api):
                 elem = doc.GetElement(elem_id)
                 if not elem:
                     raise EscrituraRechazada("Element {} not found".format(eid), 404)
-                if hasattr(elem, "Pinned") and elem.Pinned:
+                # 0.4.1: copy y array no mueven el original, asi que un elemento
+                # fijado se puede copiar (como en la interfaz de Revit)
+                if operation in MUEVEN_EL_ORIGINAL and getattr(elem, "Pinned", False):
                     raise EscrituraRechazada(
-                        "Element {} is pinned — unpin it first using modify_element before transforming.".format(eid),
+                        "Element {} is pinned; {} would move it. Unpin it in Revit (Modify > Unpin) or with "
+                        "execute_revit_code (element.Pinned = False inside a transaction), or use operation "
+                        "copy/array, which leave the original in place.".format(eid, operation),
                         400,
+                        {"pinned_ids": [eid]},
                     )
                 elem_id_list.append(elem_id)
                 antes.append(describir_elemento(doc, elem))
