@@ -1,0 +1,22 @@
+name: Pruebas
+
+# Ejecuta las pruebas de CPython (pyrevit simulado en tests/fakes) en cada PR y
+# en cada push a main. Las pruebas que necesitan Revit (pruebas/probar_revit.py)
+# siguen siendo manuales.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Comprobar que uv.lock coincide con pyproject.toml
+        run: uv lock --check
+      - name: Pruebas
+        run: uv run --frozen --with pytest pytest -q

@@ -226,8 +226,8 @@ al total de elementos que va a crear.
 | POST | `/set_workset/` | `element_ids`, `workset_name`, `simular`, `forzar` | `antes`/`despues` (subproyecto) |
 | POST | `/join_geometry/` | `element_id_a`, `element_id_b`, `unjoin`, `simular` | `antes`/`despues` (`joined`) |
 | POST | `/set_project_location/` | `base_point_mm`, `survey_point_mm`, `true_north_deg`, `acquire_from_link_id` (solo, sin los otros), `forzar`, `simular` | `antes`/`despues` (ubicación completa). `409` si el punto está anclado o recortado y no se pasa `forzar=true` (mover un punto recortado cambia las coordenadas compartidas de todo el modelo) |
-| POST | `/color_splash/` | `category_name`, `parameter_name`, `use_gradient`, `custom_colors`, `simular` | Elementos coloreados, `verificacion` (muestra) |
-| POST | `/clear_colors/` | `category_name`, `simular` | Colores restablecidos |
+| POST | `/color_splash/` | `category_name` (`OST_Walls`, alias `walls` o nombre visible; 0.4.2), `parameter_name`, `use_gradient`, `custom_colors`, `simular` | Elementos coloreados, `verificacion` (muestra) |
+| POST | `/clear_colors/` | `category_name` (como en `/color_splash/`), `simular` | Colores restablecidos |
 | POST | `/list_category_parameters/` | `category_name` | Parámetros de la categoría (lectura) |
 
 ### Anotación y documentación

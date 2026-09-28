@@ -114,6 +114,10 @@ la copia de un muro fijado funcionan y las copias salen sin fijar; `move` respon
 dio 500 con `UnicodeDecodeError` en `io.open(..., encoding="utf-8").readlines()`: corregido con
 `utils.leer_texto_utf8`, que lee en binario y decodifica en bloque.
 
+0.4.2 (sin probar aún en Revit): `color_elements` acepta `OST_Walls` o el alias `walls` además del nombre visible
+(antes `"Walls"` daba 404 en un Revit en español) y `query_elements` admite `category` como lista en el esquema MCP.
+Lo que queda por verificar se prueba con `herramientas-dev/VALIDACION_PENDIENTES.md`.
+
 | Tipo | Miembro | Versión mínima | Ruta que lo usa | Estado |
 |---|---|---|---|---|
 | método | `Ceiling.Create(Document, IList<CurveLoop>, ElementId tipo, ElementId nivel)` + clase `CeilingType` | 2022 | `/create_elements/` y `/create_surface/` (kind `ceiling`; reserva: suelo como en 0.3.x) | por verificar |

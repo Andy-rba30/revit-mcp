@@ -17,6 +17,32 @@ from .utils import normalize_string
 logger = logging.getLogger(__name__)
 
 
+def buscar_categoria(doc, category_name):
+    """Categoria por BuiltInCategory o alias ("OST_Walls", "walls"; independiente
+    del idioma de Revit) o por su nombre visible ("Muros"). None si no existe.
+
+    0.4.1: color_elements y su clear solo aceptaban el nombre visible, asi que
+    category_name="Walls" daba 404 en un Revit en espanol."""
+    bic_id = None
+    try:
+        from clash import _resolve_bic
+        bic = _resolve_bic(category_name)
+        if bic is not None:
+            bic_id = int(bic)
+    except Exception:
+        bic_id = None
+    por_nombre = None
+    for cat in doc.Settings.Categories:
+        try:
+            if bic_id is not None and get_element_id_value(cat.Id) == bic_id:
+                return cat
+        except Exception:
+            pass
+        if por_nombre is None and cat.Name == category_name:
+            por_nombre = cat
+    return por_nombre
+
+
 def generate_distinct_colors(count):
     """
     Generate visually distinct colors using predefined RGB values
@@ -615,15 +641,7 @@ def color_elements_by_parameter(
         the category or its elements do not exist.
     """
     if True:
-        # Find the category
-        categories = doc.Settings.Categories
-        target_category = None
-
-        for cat in categories:
-            if cat.Name == category_name:
-                target_category = cat
-                break
-
+        target_category = buscar_categoria(doc, category_name)
         if not target_category:
             raise EscrituraRechazada("Category '{}' not found".format(category_name), 404)
 
@@ -939,15 +957,7 @@ def clear_element_colors(doc, category_name, simular=False):
         the category does not exist.
     """
     if True:
-        # Find the category
-        categories = doc.Settings.Categories
-        target_category = None
-
-        for cat in categories:
-            if cat.Name == category_name:
-                target_category = cat
-                break
-
+        target_category = buscar_categoria(doc, category_name)
         if not target_category:
             raise EscrituraRechazada("Category '{}' not found".format(category_name), 404)
 
@@ -1049,33 +1059,7 @@ def list_category_parameters(doc, category_name):
         dict: List of available parameters with their types
     """
     try:
-        # Find the category: by BuiltInCategory name or alias ("OST_Walls", "walls";
-        # 0.4.0, independiente del idioma de Revit) or by its visible name.
-        categories = doc.Settings.Categories
-        target_category = None
-        bic = None
-        try:
-            from clash import _resolve_bic
-            bic = _resolve_bic(category_name)
-        except Exception:
-            bic = None
-        bic_id = None
-        if bic is not None:
-            try:
-                bic_id = int(bic)
-            except Exception:
-                bic_id = None
-
-        for cat in categories:
-            try:
-                if bic_id is not None and get_element_id_value(cat.Id) == bic_id:
-                    target_category = cat
-                    break
-            except Exception:
-                pass
-            if cat.Name == category_name:
-                target_category = cat
-                break
+        target_category = buscar_categoria(doc, category_name)
 
         if not target_category:
             return {
