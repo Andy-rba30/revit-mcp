@@ -767,6 +767,7 @@ def pruebas_2b(cliente, token, resultados):
                 print("   pilares: {} (nivel superior {}), vigas: {}, marcas: {}".format(
                     [c["id"] for c in columnas], columnas[0].get("top_level"), [v["id"] for v in vigas_creadas],
                     [c.get("mark") for c in columnas + vigas_creadas]))
+        sin_modelo_analitico = False
         if ok:
             r = _post(cliente, "/analytical_status/", token, {"element_ids": creados_ids})
             ok = mostrar("2b.3b POST /analytical_status/ de los 8 elementos", 200, r, cuerpo_max=2500)
@@ -774,6 +775,7 @@ def pruebas_2b(cliente, token, resultados):
             if ok:
                 ok = estado.get("loose_nodes_total") == 0
                 if estado.get("members", 0) == 0:
+                    sin_modelo_analitico = True
                     print("   ningun elemento tiene modelo analitico asociado (sin_analitico = {}): "
                           "Revit 2023+ no lo crea salvo con la automatizacion analitica activa".format(estado.get("sin_analitico")))
                 else:
@@ -787,9 +789,15 @@ def pruebas_2b(cliente, token, resultados):
             resultados.append(resultado_manual("2b.4 set_structural_properties", False, "   sin vigas creadas en 2b.3"))
         else:
             r = _post(cliente, "/set_structural_properties/", token, {"element_ids": ids_vigas, "start_release": "pinned"})
-            ok = mostrar("2b.4a POST /set_structural_properties/ start_release=pinned ({} vigas)".format(len(ids_vigas)), 200, r, cuerpo_max=2500)
+            # 0.5.1: sin modelo analitico (Revit 2023+), las liberaciones no se pueden fijar: 409 no_soportado
+            esperado = 409 if sin_modelo_analitico else 200
+            ok = mostrar("2b.4a POST /set_structural_properties/ start_release=pinned ({} vigas)".format(len(ids_vigas)), esperado, r, cuerpo_max=2500)
             datos = _json(r)
-            if ok:
+            if ok and sin_modelo_analitico:
+                ok = datos.get("no_soportado") is True and datos.get("motivo") == "sin_modelo_analitico"
+                print("   sin modelo analitico: 409 no_soportado con motivo {} [{}] (2b.4b no aplica)".format(
+                    datos.get("motivo"), "OK" if ok else "FALLO"))
+            elif ok:
                 ok = datos.get("ok") is True and datos.get("count") == len(ids_vigas)
                 if datos.get("fallidos"):
                     print("   fallidos: {}".format(datos["fallidos"]))
@@ -797,7 +805,7 @@ def pruebas_2b(cliente, token, resultados):
                     print("   no_disponibles: {}".format(datos["no_disponibles"]))
                 if not ok:
                     print("   (se esperaba ok=true y count={})".format(len(ids_vigas)))
-            if ok:
+            if ok and not sin_modelo_analitico:
                 r = _post(cliente, "/describe/", token, {"element_id": ids_vigas[0], "include_structural": True})
                 ok = mostrar("2b.4b POST /describe/ include_structural de la viga {}".format(ids_vigas[0]), 200, r, cuerpo_max=2500)
                 bloque = (_json(r).get("structural") or {})

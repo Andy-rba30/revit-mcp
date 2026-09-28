@@ -9,7 +9,7 @@
                                     AnalyticalMember de reserva, fallidos y no_disponibles
   POST /create_steel_connection/    409 no_soportado sin el modulo; con el modulo, creacion y aprobacion
   POST /add_plate/                  familia alojada en cara (top, bottom, web) y de punto
-  POST /split_beam/                 CopyElement por tramo y LocationCurve del original
+  POST /split_beam/                 FamilyInstance.Split y, sin el, CopyElement con la union del extremo suelta
   POST /join_geometry/              element_ids[] en cadena y coping (los dos argumentos siguen funcionando)
 
 Reutiliza las fixtures y elementos de tests/test_acero.py (Revit "en espanol").
@@ -441,6 +441,13 @@ def test_set_structural_properties_liberaciones_en_el_miembro_analitico(api, doc
     assert r.data["fallidos"] == [{"element_id": 12, "property": "start_release", "builtin": "STRUCTURAL_START_RELEASE_TYPE",
                                    "motivo": "parameter not found and no analytical member associated"}]
     assert r.data["despues"]["12"] == {"y_justification": "2"} and r.data["despues"]["13"]["start_release"] == "0"
+    # 0.5.1: solo liberaciones y ningun elemento las admite (sin modelo analitico): 409 no_soportado con la explicacion
+    DB.Transaction.creadas = []
+    r = _post(api, "/set_structural_properties/", doc, {"element_ids": [12], "start_release": "pinned"})
+    assert r.status == 409, r.data
+    assert r.data["no_soportado"] is True and r.data["motivo"] == "sin_modelo_analitico"
+    assert u"modelo analítico" in r.data["error"] and r.data["fallidos"][0]["element_id"] == 12
+    assert DB.Transaction.creadas == []
 
 
 def test_set_structural_properties_no_disponibles_y_errores(api, doc, monkeypatch):
@@ -644,25 +651,149 @@ def test_split_beam_errores_controlados(api, doc):
     assert DB.Transaction.creadas == []
 
 
+class _UbicacionUnida(object):
+    """LocationCurve de una viga unida por su extremo final a un pilar: al mover la curva, Revit devuelve el extremo
+    al pilar salvo que la union se haya desactivado (lo que paso en la validacion 2b en Revit 2027)."""
+
+    def __init__(self, curva):
+        self._curva = curva
+        self.union_final = True
+
+    @property
+    def Curve(self):
+        return self._curva
+
+    @Curve.setter
+    def Curve(self, curva):
+        if self.union_final:
+            curva = DB.Line.CreateBound(curva.GetEndPoint(0), self._curva.GetEndPoint(1))
+        self._curva = curva
+
+
+def _union_en_el_extremo(doc):
+    viga = doc.elementos[10]
+    viga.Location = _UbicacionUnida(viga.Location.Curve)
+    return viga
+
+
+def test_split_beam_sin_split_suelta_la_union_del_extremo(api, doc, monkeypatch):
+    viga = _union_en_el_extremo(doc)
+
+    class StructuralFramingUtils(object):
+        llamadas = []
+
+        @staticmethod
+        def DisallowJoinAtEnd(elemento, extremo):
+            StructuralFramingUtils.llamadas.append((get_id(elemento), extremo))
+            if extremo == 1:
+                elemento.Location.union_final = False
+
+    def get_id(elemento):
+        return elemento.Id.Value
+
+    monkeypatch.setattr(DB.Structure, "StructuralFramingUtils", StructuralFramingUtils, raising=False)
+    r = _post(api, "/split_beam/", doc, {"element_id": 10, "at_mm": [2000]})
+    assert r.status == 200, r.data
+    datos = r.data
+    assert datos["ok"] is True and datos["metodo"] == "CopyElement" and datos["verificacion"] == {"coincide": True}
+    assert StructuralFramingUtils.llamadas == [(10, 1)]
+    assert abs(viga.Location.Curve.Length * 304.8 - 2000) < 1e-6
+    assert any(u"DisallowJoinAtEnd" in aviso for aviso in datos["avisos"])
+
+
+def test_split_beam_detecta_la_viga_devuelta_a_su_longitud(api, doc, monkeypatch):
+    """Sin StructuralFramingUtils, el extremo vuelve al pilar: la verificacion lo dice (ok=false), como en Revit."""
+    monkeypatch.delattr(DB.Structure, "StructuralFramingUtils", raising=False)
+    _union_en_el_extremo(doc)
+    r = _post(api, "/split_beam/", doc, {"element_id": 10, "at_mm": [2000]})
+    assert r.status == 200, r.data
+    assert r.data["ok"] is False and r.data["verificacion"]["coincide"] is False
+    assert u"element 10 is 6000.0 mm long instead of 2000.0 mm" in r.data["verificacion"]["detalle"]
+    assert any(u"No se pudo desactivar" in aviso for aviso in r.data["avisos"])
+
+
+def test_split_beam_con_split_nativo_sigue_el_tramo_del_inicio(api, doc, monkeypatch):
+    """FamilyInstance.Split: la pieza nueva puede ser la del inicio; el plan se sigue por geometria."""
+    viga = _union_en_el_extremo(doc)
+    llamadas = []
+
+    def split(parametro):
+        llamadas.append(round(parametro, 6))
+        curva = viga_actual[0].Location.Curve
+        a, b = curva.GetEndPoint(0), curva.GetEndPoint(1)
+        corte = a.Add(b.Subtract(a).Multiply(parametro))
+        nuevo_id = DB.ElementTransformUtils.CopyElement(doc, viga_actual[0].Id, DB.XYZ(0, 0, 0))[0]
+        nuevo = doc.GetElement(nuevo_id)
+        nuevo.Location = mf.Ubicacion(curva=DB.Line.CreateBound(a, corte))      # la nueva es la del inicio
+        ubicacion = viga_actual[0].Location                                       # Revit conserva la union del final
+        if isinstance(ubicacion, _UbicacionUnida):
+            ubicacion._curva = DB.Line.CreateBound(corte, b)
+        else:
+            viga_actual[0].Location = mf.Ubicacion(curva=DB.Line.CreateBound(corte, b))
+        nuevo.Split = lambda p, n=nuevo: split_de(n, p)
+        return nuevo_id
+
+    viga_actual = [viga]
+
+    def split_de(elemento, parametro):
+        viga_actual[0] = elemento
+        return split(parametro)
+
+    viga.Split = split
+    r = _post(api, "/split_beam/", doc, {"element_id": 10, "at_mm": [4000, 2000]})
+    assert r.status == 200, r.data
+    datos = r.data
+    assert datos["ok"] is True and datos["metodo"] == "FamilyInstance.Split", datos
+    assert llamadas == [round(4000 / 6000.0, 6), 0.5]
+    assert datos["original"]["segment"] == 2 and datos["original"]["despues"]["length_mm"] == 2000.0
+    assert sorted(c["segment"] for c in datos["creados"]) == [0, 1] and len(datos["creados_ids"]) == 2
+    assert all(abs(c["length_mm"] - 2000.0) < 1e-6 for c in datos["creados"])
+
+
+def test_join_geometry_pareja_rechazada_no_aborta_el_lote(api, doc):
+    """Revit rechaza unir dos perfiles de acero: esa pareja va a fallidos y el resto se une (antes: HTTP 500)."""
+    doc.elementos[12].no_unible = True
+    r = _post(api, "/join_geometry/", doc, {"element_ids": [10, 11, 12]})
+    assert r.status == 200, r.data
+    datos = r.data
+    assert datos["ok"] is False and datos["joined_pairs"] == 1
+    assert datos["fallidos"] == [{"element_id_a": 11, "element_id_b": 12,
+                                  "error": "The elements cannot be joined.\nParameter name: secondElement"}]
+    assert datos["pairs"][1]["failed"] is True and datos["pairs"][0]["despues"] == {"joined": True}
+    assert "coping=true" in datos["nota"]
+    assert 11 in doc.elementos[10].unidos
+
+
 # ---------------------------------------------------------------------------
 # /join_geometry/ en cadena
 # ---------------------------------------------------------------------------
 def test_join_geometry_en_cadena_con_coping(api, doc):
-    doc.elementos[11].unidos.append(13)
-    doc.elementos[13].unidos.append(11)
-    cuerpo = {"element_ids": [10, 11, 13], "coping": True}
+    """0.5.1: coping solo recorta (AddCoping sobre la viga, contra el pilar), sin JoinGeometry."""
+    doc.elementos[10].copings = [DB.ElementId(11)]           # 10 ya recortada contra 11
+    cuerpo = {"element_ids": [12, 10, 11], "coping": True}   # pilar, viga, viga
     r = _post(api, "/join_geometry/", doc, dict(cuerpo, simular=True))
     assert r.status == 200, r.data
     assert r.data["count"] == 1 and r.data["pairs"] == 2 and r.data["haria"][1]["skip"] is True
+    assert r.data["haria"][0]["coped_element"] == 10 and r.data["haria"][0]["against"] == 12   # la viga, no el pilar
     assert DB.Transaction.creadas == []
     r = _post(api, "/join_geometry/", doc, cuerpo)
     assert r.status == 200, r.data
     datos = r.data
-    assert datos["ok"] is True and datos["joined_pairs"] == 1 and _transacciones() == [u"IA: Unir geometria en cadena (3 elementos)"]
-    assert datos["pairs"][0] == {"element_id_a": 10, "element_id_b": 11, "antes": {"joined": False}, "despues": {"joined": True}, "skipped": False}
-    assert datos["skipped_pairs"] == [{"element_id_a": 11, "element_id_b": 13, "reason": "already joined"}]
-    assert datos["coping"]["applied"] == [{"element_id": 10, "against": 11}, {"element_id": 11, "against": 13}]
-    assert doc.elementos[10].copings == [DB.ElementId(11)] and 11 in doc.elementos[10].unidos
+    assert datos["ok"] is True and datos["coped_pairs"] == 1 and _transacciones() == [u"IA: Recortar acero en cadena (3 elementos)"]
+    assert datos["pairs"][0] == {"element_id_a": 12, "element_id_b": 10, "antes": {"coped": False}, "despues": {"coped": True},
+                                 "skipped": False, "failed": False}
+    assert datos["skipped_pairs"] == [{"element_id_a": 10, "element_id_b": 11, "reason": "already coped"}]
+    assert datos["coping"]["applied"] == [{"element_id": 10, "against": 12}]
+    assert doc.elementos[10].copings == [DB.ElementId(11), DB.ElementId(12)]
+    assert 12 not in doc.elementos[10].unidos and not getattr(doc.elementos[12], "copings", None)   # sin JoinGeometry
+    DB.Transaction.creadas = []
+    # union normal en cadena (11-13 ya unidas)
+    doc.elementos[11].unidos.append(13)
+    doc.elementos[13].unidos.append(11)
+    r = _post(api, "/join_geometry/", doc, {"element_ids": [10, 11, 13]})
+    assert r.status == 200 and r.data["ok"] is True and r.data["joined_pairs"] == 1, r.data
+    assert r.data["pairs"][0]["despues"] == {"joined": True}
+    assert r.data["skipped_pairs"] == [{"element_id_a": 11, "element_id_b": 13, "reason": "already joined"}]
     # separar en cadena
     r = _post(api, "/join_geometry/", doc, {"element_ids": [10, 11, 13], "unjoin": True})
     assert r.status == 200 and r.data["unjoined_pairs"] == 2 and 11 not in doc.elementos[10].unidos

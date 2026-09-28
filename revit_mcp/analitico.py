@@ -393,14 +393,75 @@ def filas_csv(doc, elementos):
     return filas, sin_analitico
 
 
-def escribir_csv(ruta, filas):
-    carpeta = os.path.dirname(ruta)
-    if carpeta and not os.path.isdir(carpeta):
+def _ruta_reparada(ruta):
+    """La ruta con el UTF-8 bien leido si llego como latin-1 ("AntÃ³n" -> "Antón"); None si no parece mal leida."""
+    try:
+        reparada = ruta.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return None
+    return reparada if reparada != ruta else None
+
+
+def _diagnostico_ruta(ruta):
+    """Datos para saber por que no se pudo escribir: los caracteres no ASCII tal como llegaron y si parecen mal leidos."""
+    return {
+        "ruta_recibida": ruta,
+        "caracteres_no_ascii": [u"{} U+{:04X}".format(c, ord(c)) for c in ruta if ord(c) > 127],
+        "posible_ruta_mal_leida": _ruta_reparada(ruta) is not None,
+        "sugerencia": (u"Prueba con una carpeta sin tildes ni espacios (por ejemplo C:\\IA\\salidas). Si ahí funciona y en "
+                       u"el Escritorio no, revisa en Seguridad de Windows > Protección contra ransomware > Acceso "
+                       u"controlado a carpetas si Revit tiene permiso para escribir."),
+    }
+
+
+def _carpeta_existe(carpeta):
+    try:
+        from System.IO import Directory
+        return bool(Directory.Exists(carpeta))
+    except ImportError:
+        return os.path.isdir(carpeta)
+
+
+def _crear_carpeta(carpeta):
+    try:
+        from System.IO import Directory
+    except ImportError:
         os.makedirs(carpeta)
-    with io.open(ruta, "w", encoding="utf-8") as archivo:
-        archivo.write(u",".join(COLUMNAS_CSV) + u"\n")
-        for fila in filas:
-            archivo.write(u",".join(_texto_csv(v) for v in fila) + u"\n")
+        return
+    Directory.CreateDirectory(carpeta)
+
+
+def preparar_ruta_salida(ruta):
+    """0.5.1: comprueba y crea la carpeta con System.IO (IronPython) en lugar de os; devuelve la ruta a usar.
+
+    En la validacion 2b en Revit 2027 os.path.isdir dio False para el Escritorio del usuario (ruta con "ó") y
+    os.makedirs fallo con "Access ... denied". Si la ruta parece UTF-8 leido como latin-1 y la carpeta reparada
+    existe, se usa la reparada. Si no se puede, EscrituraRechazada con un diagnostico."""
+    carpeta = os.path.dirname(ruta)
+    if not carpeta or _carpeta_existe(carpeta):
+        return ruta
+    reparada = _ruta_reparada(ruta)
+    if reparada is not None and _carpeta_existe(os.path.dirname(reparada)):
+        return reparada
+    try:
+        _crear_carpeta(carpeta)
+    except Exception as error:
+        raise EscrituraRechazada(u"Cannot create output directory {}: {}".format(carpeta, error), 500,
+                                 _diagnostico_ruta(ruta))
+    return ruta
+
+
+def escribir_csv(ruta, filas):
+    lineas = [u",".join(COLUMNAS_CSV)] + [u",".join(_texto_csv(v) for v in fila) for fila in filas]
+    texto = u"\n".join(lineas) + u"\n"
+    try:
+        from System.IO import File
+        from System.Text import UTF8Encoding
+    except ImportError:
+        with io.open(ruta, "w", encoding="utf-8") as archivo:
+            archivo.write(texto)
+        return
+    File.WriteAllText(ruta, texto, UTF8Encoding(False))
 
 
 def exportar_estructural(doc, data):
@@ -418,12 +479,7 @@ def exportar_estructural(doc, data):
         vista, motivo = vista_analitica_activa(doc, _texto_seguro(data.get("view_name")).strip() or None)
         version = _texto_seguro(data.get("ifc_version") or "IFC2x3").strip()
         opciones = opciones_ifc(version, True, vista.Id if vista is not None else None)
-        carpeta = os.path.dirname(ruta)
-        if carpeta and not os.path.isdir(carpeta):
-            try:
-                os.makedirs(carpeta)
-            except Exception as error:
-                raise EscrituraRechazada("Cannot create output directory: {}".format(error), 500)
+        ruta = preparar_ruta_salida(ruta)
         with transaccion(doc, u"Exportar IFC estructural"):
             tamano = exportar_ifc(doc, ruta, opciones)
         return {
@@ -441,10 +497,11 @@ def exportar_estructural(doc, data):
     maximo = _entero(data.get("max"), MAX_ELEMENTOS_ANALITICO, minimo=1)
     elementos, info = elementos_acero(doc, element_ids, maximo)
     filas, sin_analitico = filas_csv(doc, elementos)
+    ruta = preparar_ruta_salida(ruta)
     try:
         escribir_csv(ruta, filas)
-    except (IOError, OSError) as error:
-        raise EscrituraRechazada(u"Could not write {}: {}".format(ruta, error), 500)
+    except Exception as error:
+        raise EscrituraRechazada(u"Could not write {}: {}".format(ruta, error), 500, _diagnostico_ruta(ruta))
     return {
         "format": formato, "file_path": ruta, "rows": len(filas), "columns": list(COLUMNAS_CSV),
         "sin_analitico": sin_analitico, "not_found": info["not_found"], "truncated": info["truncated"],

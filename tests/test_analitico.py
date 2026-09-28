@@ -250,3 +250,21 @@ def test_export_structural_errores_controlados(api, doc, tmp_path):
     assert _post(api, "/export_structural/", doc, {"format": "csv_nodes_members", "file_path": str(tmp_path / "a.ifc")}).status == 400
     assert _post(api, "/export_structural/", doc, {"format": "csv_nodes_members", "file_path": str(tmp_path / "a.csv"), "element_ids": 10}).status == 400
     assert DB.Transaction.creadas == []
+
+
+def test_export_structural_ruta_con_tildes_mal_leida_y_diagnostico(api, doc, tmp_path):
+    """0.5.1: validacion 2b en Revit 2027: 'Access ... denied' al exportar al Escritorio de 'Andy Bayona Antón'."""
+    carpeta = tmp_path / u"Andy Bayona Antón"
+    carpeta.mkdir()
+    # la ruta llega con el UTF-8 leido como latin-1 ("AntÃ³n"): se usa la carpeta reparada si existe
+    mal_leida = str(carpeta / u"miembros.csv").encode("utf-8").decode("latin-1")
+    r = _post(api, "/export_structural/", doc, {"format": "csv_nodes_members", "file_path": mal_leida})
+    assert r.status == 200, r.data
+    assert r.data["file_path"] == str(carpeta / u"miembros.csv") and (carpeta / u"miembros.csv").exists()
+    # una carpeta que no se puede crear: 500 con el diagnostico (caracteres no ASCII y la sugerencia)
+    (tmp_path / "archivo").write_text("x")
+    imposible = str(tmp_path / "archivo" / u"Antón" / "m.csv")
+    r = _post(api, "/export_structural/", doc, {"format": "csv_nodes_members", "file_path": imposible})
+    assert r.status == 500, r.data
+    assert r.data["ruta_recibida"] == imposible and u"ó U+00F3" in r.data["caracteres_no_ascii"]
+    assert r.data["posible_ruta_mal_leida"] is False and u"Acceso controlado a carpetas" in r.data["sugerencia"]

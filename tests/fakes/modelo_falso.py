@@ -576,10 +576,11 @@ def instalar_conexiones(monkeypatch):
     class StructuralConnectionHandlerType(DB.ElementType):
         @staticmethod
         def GetDefaultConnectionHandlerType(doc):
+            # como la API real: devuelve el ElementId del tipo, no el tipo (0.5.1)
             for elemento in doc.elementos.values():
                 if isinstance(elemento, StructuralConnectionHandlerType):
-                    return elemento
-            return None
+                    return elemento.Id
+            return DB.ElementId.InvalidElementId
 
     class StructuralConnectionApprovalType(DB.ElementType):
         @staticmethod

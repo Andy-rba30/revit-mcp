@@ -168,7 +168,11 @@ al `.rvt` (léelo con `read_log`).
    `fallidos` dice qué par elemento × propiedad no se pudo fijar y
    `no_disponibles` qué `BuiltInParameter` no existe en esa versión de Revit
    (las liberaciones van al `AnalyticalMember` cuando el elemento físico no
-   las tiene, Revit 2023+). Comprueba con `describe_element(element_id,
+   las tiene, Revit 2023+). Sin modelo analítico (`analytical_status`:
+   `members: 0`) las liberaciones no se pueden fijar: si solo pides
+   liberaciones, responde `409` `no_soportado` con `motivo:
+   sin_modelo_analitico`. Díselo al usuario; no lo rodees con
+   `execute_revit_code`. Comprueba con `describe_element(element_id,
    include_structural=true)`.
 6. `analytical_status(element_ids=[...])`: `members`, `sin_analitico` y
    `loose_nodes_total`; con nodos sueltos, `fix_analytical_alignment(element_ids,
@@ -192,8 +196,11 @@ al `.rvt` (léelo con `read_log`).
    cargados: díselo al usuario, no lo rodees con `execute_revit_code`.
 10. `add_plate_or_stiffener` coloca una familia alojada en cara (`top`,
     `bottom`, `web`) o de punto sobre una viga o pilar; `split_beam` divide
-    una viga recta y avisa de que se pierden uniones y conexiones del
-    original; `join_geometry(element_ids=[...], coping=true)` une en cadena.
+    una viga recta (con `FamilyInstance.Split`, que conserva las uniones de
+    los extremos; mira `metodo`, `original.segment` y `verificacion`).
+    Revit no une la geometría de perfiles de acero: para vigas y pilares
+    metálicos usa `join_geometry(element_ids=[...], coping=true)`, que solo
+    recorta la viga contra el pilar o la otra viga, sea cual sea el orden.
 
 ## 3. Reglas de dominio
 
@@ -351,6 +358,9 @@ al `.rvt` (léelo con `read_log`).
 | `409` "already loaded" en `load_steel_profile` | La familia (y los tipos pedidos) ya están en el proyecto | No hace falta cargar; usa `overwrite=true` solo si el usuario quiere recargarla. |
 | `404` "grids not found" / `400` "unknown intersections" con `available_grids` / `available_labels` | Nombres de rejilla o etiquetas (`"A-1"`) que no existen | Usa los nombres de `query_elements(category="OST_Grids")` y las etiquetas de `available_labels`. |
 | `fallidos[]` con `motivo: parameter not found and no analytical member associated` en `set_structural_properties` | El elemento no tiene ese parámetro (un pilar sin extensiones) ni miembro analítico para las liberaciones | Informa; el resto del lote sí se aplicó. |
+| `409` `no_soportado` con `motivo: sin_modelo_analitico` en `set_structural_properties` | Solo se pidieron liberaciones y ningún elemento tiene miembro analítico (Revit 2023+) | Informa: el usuario tiene que crear el modelo analítico en Revit. |
+| `fallidos[]` con "The elements cannot be joined" en `join_geometry` (y `nota`) | Revit no une la geometría de esa pareja (dos perfiles de acero) | Repite con `coping=true` si son vigas y pilares metálicos. |
+| `500` al exportar con `ruta_recibida`, `caracteres_no_ascii`, `posible_ruta_mal_leida` y `sugerencia` | Revit no pudo crear la carpeta o escribir el archivo | Enseña el diagnóstico al usuario y prueba una carpeta sin tildes (`C:\IA\salidas`); si ahí funciona, el Escritorio está protegido o la ruta llega mal leída. |
 | `no_disponibles[]` en `set_structural_properties` / `describe_element(include_structural)` | Ese `BuiltInParameter` no existe en la versión de Revit | Informa; anótalo en `herramientas-dev/miembros_por_verificar_revit.md`. |
 | `400` "approve=true needs approval_status" con `available_approval_types` | El estado de aprobación se elige por su nombre visible (depende del idioma) o su id | Repite con `approval_status` tomado de la lista. |
 | `sin_peso[]` en `steel_quantities` | Material sin activo estructural o tipo sin masa lineal | Informa el motivo; no inventes densidades. |
