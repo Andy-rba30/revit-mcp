@@ -127,7 +127,8 @@ def register_escritura_tools(mcp, revit_get, revit_post, revit_image=None):
         ctx: Context = None,
     ) -> str:
         """Move, copy, rotate, mirror or array elements (mm, degrees). Returns bbox
-        antes/despues; copies and arrays return `creados`.
+        antes/despues; copies and arrays return `creados`. Pinned elements can be
+        copied or arrayed; move, rotate and mirror reject them (400, pinned_ids).
         Example: transform_elements(element_ids=[1234], operation="array",
         vector={"x": 3000, "y": 0, "z": 0}, count=4).
 

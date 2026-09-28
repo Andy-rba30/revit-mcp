@@ -169,7 +169,7 @@ def register_annotation_routes(api):
             )
             if not tag_symbols or len(tag_symbols) == 0:
                 raise EscrituraRechazada(
-                    "No wall tag types found — load wall tag families into the project", 400
+                    "No wall tag types found: load a wall tag family into the project (load_family) and retry", 400
                 )
             target_tag = None
             if tag_type_name:

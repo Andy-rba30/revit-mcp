@@ -66,7 +66,8 @@ def _texto_error(response):
     error_msg = response.get("error", "Unknown error occurred")
     traceback_info = response.get("traceback", "")
     details = response.get("details", "")
-    status = response.get("status", "unknown")
+    # sin "status" (errores HTTP que devuelve el puente) se muestra "error", no "unknown"
+    status = response.get("status") or "error"
 
     error_parts = ["=== ERROR DETAILS ==="]
     error_parts.append("Status: {}".format(status))

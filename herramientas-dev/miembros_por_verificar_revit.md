@@ -23,7 +23,7 @@ Pendiente tras la validación de la 0.3.0 (27/09/2026): `Grid.Create` (la herram
 | método | `Definition.GetDataType()` | 2022 | `parameters.factor_a_interno` | verificado |
 | propiedad | `SpecTypeId.Length` (y `Area`, `Volume`, `Angle`) | 2021 | `parameters.factor_a_interno` | verificado |
 | método | `Document.GetUndoName()` | — | `pruebas/probar_revit.py` prueba 9 | no existe (la prueba 9 sigue siendo manual) |
-| clase | `PerformanceAdviser` (`GetPerformanceAdviser`, `GetAllRuleIds`, `ExecuteRules`) | 2012 | `/purge_unused/` | por verificar |
+| clase | `PerformanceAdviser` (`GetPerformanceAdviser`, `GetAllRuleIds`, `ExecuteRules`) | 2012 | `/purge_unused/` | verificado (0.4.0, `maintain_model(action="purge", simular=true)`: 371 candidatos) |
 | método | `Toposolid.Create(Document, IList<XYZ>, ElementId, ElementId)` (y la sobrecarga con `CurveLoop`) | 2024 | `/create_toposolid/` | verificado (0.3.0 en Revit 2027 es, `/import_civil/` CSV) |
 | método | `WallFoundation.Create(Document, ElementId, ElementId)` | 2014 | `/create_foundation/` (corrida) | por verificar |
 | método | `Document.Create.NewOpening(Element, CurveArray, bool)` | 2011 | `/create_opening/` (suelo, cubierta, techo) | por verificar |
@@ -101,20 +101,23 @@ Pendiente tras la validación de la 0.3.0 (27/09/2026): `Grid.Create` (la herram
 
 ## Consolidación (0.4.0): lotes, macros propias y rendimiento
 
-Todo lo de esta entrega está probado en CPython contra el `pyrevit` simulado; ninguna prueba se ha ejecutado aún en un
-Revit real. `pruebas/probar_revit.py --fase cons` cubre `/set_parameters/`, `/create_elements/` (simulado), `/macros/`,
-`/macros/run/`, `/snapshot/` con `timings` y el nombre retirado en el puente.
+Validada en Revit el 28/09/2026 con `herramientas-dev/VALIDACION_CONS.md`: `probar_revit.py --fase cons` 15/15 y 29
+de 31 pasos como se esperaba. Los dos que no: el paso 25 (la matriz se rechazaba porque el muro estaba fijado;
+corregido en 0.4.1, `copy` y `array` admiten elementos fijados) y el paso 27 (el modelo no tiene familias de etiqueta
+de muro, así que `annotate(kind="tag")` responde 400; es lo correcto). En esa sesión `parameter_label` y las categorías
+de `creados` salieron en inglés (`Comments`, `Walls`), no en español como en la 0.2.2; falta confirmar el idioma con
+el que se abrió Revit.
 
 | Tipo | Miembro | Versión mínima | Ruta que lo usa | Estado |
 |---|---|---|---|---|
 | método | `Ceiling.Create(Document, IList<CurveLoop>, ElementId tipo, ElementId nivel)` + clase `CeilingType` | 2022 | `/create_elements/` y `/create_surface/` (kind `ceiling`; reserva: suelo como en 0.3.x) | por verificar |
 | enumeración | `BuiltInParameter.CEILING_HEIGHTABOVELEVEL_PARAM` (desfase del techo) | 2011 | `building.crear_superficie` (techo con `offset`) | por verificar |
-| método | `ElementTransformUtils.CopyElement` repetido con `vector * i` en una transacción | 2012 | `/transform_elements/` (`operation=array`) | por verificar |
-| método | `Element.GetOrderedParameters()` en cada elemento de la instantánea (antes `Parameters`) | 2015 | `/snapshot/` (`instantaneas._parametros_de`) | verificado en `/element_properties/`; por verificar el tiempo en 2746 elementos |
-| método | `Element.get_BoundingBox(None)` solo con `include_bbox` | 2011 | `/snapshot/` | verificado (0.3.0); por verificar el ahorro con `include_bbox=false` |
-| módulo | `threading.Thread` + `System.IO.File.Copy` desde un hilo que no es el de Revit (solo E/S de archivos) | IronPython 2.7 | `escritura.CopiaDiferida` (todas las escrituras salvo `RUTAS_COPIA_SINCRONA`) | por verificar (`copia.ms` y `copia.espera_ms` en la respuesta) |
-| módulo | `imp.load_source(nombre, ruta)` para cargar `macro.py` y recargarlo al cambiar el `mtime` | IronPython 2.7 | `/macros/run/` (`macros_usuario.cargar_modulo`) | por verificar (en CPython 3.12+ se usa `importlib.util`) |
+| método | `ElementTransformUtils.CopyElement` repetido con `vector * i` en una transacción, también sobre un elemento fijado (0.4.1) | 2012 | `/transform_elements/` (`operation=array`) | por verificar (0.4.0 lo rechazó antes de llamar a Revit porque el muro 151574 estaba fijado) |
+| método | `Element.GetOrderedParameters()` en cada elemento de la instantánea (antes `Parameters`) | 2015 | `/snapshot/` (`instantaneas._parametros_de`) | verificado (0.4.0: `parametros_ms` 950 en 2745 elementos; `total_ms` 3612 frente a 8200 en 0.3.1) |
+| método | `Element.get_BoundingBox(None)` solo con `include_bbox` | 2011 | `/snapshot/` | verificado (0.4.0: `total_ms` 2241 sin bbox frente a 3612 con bbox; `bbox_ms` 77 y 2, la diferencia está sobre todo en `escritura_ms`: 1729 y 916) |
+| módulo | `threading.Thread` + `System.IO.File.Copy` desde un hilo que no es el de Revit (solo E/S de archivos) | IronPython 2.7 | `escritura.CopiaDiferida` (todas las escrituras salvo `RUTAS_COPIA_SINCRONA`) | por verificar (0.4.0: `diferida` true y `estado` terminada en los pasos 8, 13 y 22, pero las tres con `reutilizada` true y `ms` 0, así que el hilo no llegó a copiar) |
+| módulo | `imp.load_source(nombre, ruta)` para cargar `macro.py` y recargarlo al cambiar el `mtime` | IronPython 2.7 | `/macros/run/` (`macros_usuario.cargar_modulo`) | verificado (0.4.0: `reloaded` true tras editar `comentarios_por_nivel/macro.py`) |
 | propiedad | `ViewSheet.SheetNumber` asignada dos veces (número temporal y definitivo) para evitar duplicados | 2013 | macro de ejemplo `numerar_planos` | por verificar |
-| argumento | `uidoc` inyectado por Routes en `/macros/run/` (`run(doc, uidoc, args, api)`) | pyRevit 4.8 | `/macros/run/` | por verificar (las macros de ejemplo no lo usan) |
-| parámetro | `BuiltInParameter.VIEWER_SHEET_NUMBER` como `fields` de `/query/` sobre `OST_Views` (`---` = sin plano) | 2011 | herramienta `list_views(on_sheet=...)` | por verificar |
-| método | `Category.Id` comparado con `int(BuiltInCategory)` para resolver `OST_...` en `/list_category_parameters/` | 2011 | herramienta `list_types(with_parameters=true)` | por verificar |
+| argumento | `uidoc` inyectado por Routes en `/macros/run/` (`run(doc, uidoc, args, api)`) | pyRevit 4.8 | `/macros/run/` | verificado (0.4.0: `run_macro` se ejecuta con la firma de Routes; las macros de ejemplo no lo usan) |
+| parámetro | `BuiltInParameter.VIEWER_SHEET_NUMBER` como `fields` de `/query/` sobre `OST_Views` (`---` = sin plano) | 2011 | herramienta `list_views(on_sheet=...)` | verificado (0.4.0: `list_views(view_type="floor_plans", on_sheet=false)`, 13 plantas) |
+| método | `Category.Id` comparado con `int(BuiltInCategory)` para resolver `OST_...` en `/list_category_parameters/` | 2011 | herramienta `list_types(with_parameters=true)` | verificado (0.4.0: `list_types(category="OST_Walls", with_parameters=true)` con `category_parameters`) |
