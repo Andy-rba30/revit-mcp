@@ -24,6 +24,16 @@ def _referencia(elem, active_view):
         ref = None
     if ref:
         return ref
+    # 0.4.3: un muro no tiene la referencia "Center" (es de FamilyInstance) y su
+    # geometria son Solid sin `Reference`, asi que la cota entre dos muros daba
+    # siempre 400. Se acota a la cara exterior; en muros paralelos son paralelas.
+    if isinstance(elem, DB.Wall):
+        try:
+            caras = DB.HostObjectUtils.GetSideFaces(elem, DB.ShellLayerType.Exterior)
+            if caras and len(caras) > 0:
+                return caras[0]
+        except Exception as error:
+            logger.warning("GetSideFaces failed for wall {}: {}".format(get_element_id_value(elem), error))
     options = DB.Options()
     options.ComputeReferences = True
     options.View = active_view
