@@ -67,7 +67,7 @@ HERRAMIENTAS_RETIRADAS = {
     "list_category_parameters": "list_types(category=..., with_parameters=true)",
     # parametros (lote en una transaccion)
     "set_parameter": "set_parameters(changes=[{\"element_ids\": [...], \"parameters\": {nombre: valor}}])",
-    "set_type_parameter": "set_parameters(changes=[...], type_parameters=true)",
+    "set_type_parameter": "set_parameters(element_ids=[type_id o element_id], parameters={...}, type_parameters=true)",
     "modify_element": "set_parameters(changes=[{\"element_id\": id, \"parameters\": {...}}])",
     # creacion (lote en una transaccion)
     "create_line_based_element": "create_elements(elements=[{\"kind\": \"wall\"|\"beam\", ...}])",

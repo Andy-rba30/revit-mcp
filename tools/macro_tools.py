@@ -9,6 +9,18 @@ from mcp.server.mcpserver import Context
 from .utils import format_response, Cronometro, TIMEOUT_LECTURA, TIMEOUT_ESCRITURA, TIMEOUT_LARGO
 
 
+async def _timeout_del_manifiesto(revit_get, name, ctx):
+    """timeout_s declarado en macro.json de `name` (via GET /macros/), o TIMEOUT_LARGO."""
+    try:
+        catalogo = await revit_get("/macros/", ctx, timeout=TIMEOUT_LECTURA)
+        for macro in (catalogo or {}).get("macros") or []:
+            if macro.get("name") == name and macro.get("timeout_s"):
+                return max(float(macro["timeout_s"]), 1.0)
+    except Exception:
+        pass
+    return TIMEOUT_LARGO
+
+
 def register_macro_tools(mcp, revit_get, revit_post, revit_image=None):
     """Registra las 4 macros."""
 
@@ -120,9 +132,10 @@ def register_macro_tools(mcp, revit_get, revit_post, revit_image=None):
             args: Arguments as declared in macro.json (400 lists what is missing or unknown)
             simular: Only validate and return the macro's plan
             forzar: Required above 200 elements when the macro reports its scope
-            timeout_s: Bridge timeout for long macros (default 600 s)
+            timeout_s: Bridge timeout; default: the macro's `timeout_s` from its manifest (list_macros), else 600 s
         """
         crono = Cronometro()
         data = {"name": name, "args": args or {}, "simular": simular, "forzar": forzar}
-        response = await revit_post("/macros/run/", data, ctx, timeout=float(timeout_s) if timeout_s else TIMEOUT_LARGO)
+        espera = float(timeout_s) if timeout_s else await _timeout_del_manifiesto(revit_get, name, ctx)
+        response = await revit_post("/macros/run/", data, ctx, timeout=espera)
         return format_response(response, ms_puente=crono.ms())

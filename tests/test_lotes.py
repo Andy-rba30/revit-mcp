@@ -420,3 +420,12 @@ def test_transform_array_crea_count_menos_una_copias(api, doc):
     assert _post(api, "/transform_elements/", doc, dict(cuerpo, count="tres")).status == 400
     r = _post(api, "/transform_elements/", doc, dict(cuerpo, count=102))
     assert r.status == 400 and r.data["cantidad"] == 202
+
+
+def test_set_parameters_de_tipo_acepta_el_id_del_tipo(api, doc):
+    """Como set_type_parameter(type_id=...): con type_parameters el id puede ser ya el del tipo."""
+    r = _post(api, "/set_parameters/", doc, {"changes": [{"element_ids": [50], "parameters": {"Type Comments": u"desde el tipo"}}],
+                                            "type_parameters": True})
+    assert r.status == 200, r.data
+    assert r.data["fallidos"] == [] and r.data["changes"][0]["is_type_parameter"] is True
+    assert r.data["changes"][0]["type_id"] == 50 and r.data["despues"]["50"][u"Comentarios de tipo"] == u"desde el tipo"

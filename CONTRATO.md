@@ -54,7 +54,7 @@ más en contexto es justo lo que se elimina).
 | `list_types` | `list_element_types`, `list_families`, `list_family_categories`, `list_category_parameters` | `POST /element_types/`, `GET /list_families/`, `GET /list_family_categories/`, `POST /list_category_parameters/` | `category` → tipos; solo `family`/`contains` → familias; nada → categorías; `with_parameters`; `loaded_only` (tipos con ejemplares o `is_active`) |
 | `schedule_to_json` | — | `POST /schedule/` | igual |
 | `list_warnings` | — | `GET /warnings/` | igual (`group_by`) |
-| `set_parameters` | `set_parameter`, `set_type_parameter`, `modify_element` | **`POST /set_parameters/`** (nueva) | lote en una transacción, `type_parameters` |
+| `set_parameters` | `set_parameter`, `set_type_parameter`, `modify_element` | **`POST /set_parameters/`** (nueva) | lote en una transacción; `type_parameters=true` acepta en `element_ids` el id del ejemplar o directamente el del tipo (como `set_type_parameter(type_id)`) |
 | `create_elements` | `create_line_based_element`, `create_surface_based_element`, `create_level`, `create_grid`, `create_structural_column`, `create_structural_framing`, `create_foundation`, `create_opening`, `create_toposolid`, `create_room`, `create_room_separation`, `create_detail_line`, `create_duct`, `create_pipe`, `place_family` | **`POST /create_elements/`** (nueva) | lote en una transacción, `kind` |
 | `transform_elements` | — | `POST /transform_elements/` | igual + `operation="array"` con `count` (0.4.0) |
 | `delete_elements` | — | `POST /delete_elements/` | igual |
@@ -335,6 +335,8 @@ puede abortar una macro en curso); el puente usa `run_macro(timeout_s=...)`.
 
 **`macro.py`** define `def run(doc, uidoc, args, api)` (obligatoria) y, si
 quiere, `def plan(doc, args, api)` que devuelve lo que haría (para `simular`;
+
+> Una macro con `writes: true` **debe** definir `plan()` devolviendo `{"count": n}`: sin él, `POST /macros/run/` responde `400` (`plan_required`) salvo `forzar=true`, porque el límite de 200 elementos no se puede comprobar antes de escribir. Con `simular` se devuelve una `nota` en lugar del `plan`.
 `plan["count"]` alimenta `comprobar_alcance`). `api` expone los helpers ya
 probados del servidor: `make_element_id`, `get_element_id_value`,
 `get_element_name`, `buscar_por_nombre(elem, nombre)`, `buscar_parametro(elem,

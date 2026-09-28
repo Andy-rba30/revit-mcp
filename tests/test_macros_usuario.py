@@ -310,3 +310,19 @@ def test_macros_de_ejemplo_son_ironpython_27(nombre):
     from test_compatibilidad_ironpython import _problemas
 
     assert _problemas(os.path.join(EJEMPLOS, nombre, "macro.py")) == []
+
+
+def test_macro_que_escribe_sin_plan_exige_forzar(api, doc, carpeta):
+    (carpeta / "sin_plan").mkdir()
+    _escribir(str(carpeta / "sin_plan" / "macro.json"), u'{"name": "sin_plan", "args": {}, "writes": true}')
+    _escribir(str(carpeta / "sin_plan" / "macro.py"),
+              u"def run(doc, uidoc, args, api):\n    doc.elementos[10].LookupParameter(u'Comentarios').Set(u'sin plan')\n    return {}\n")
+    macros_usuario._modulos.clear()
+    r = _post(api, "/macros/run/", doc, {"name": "sin_plan", "simular": True})
+    assert r.status == 200 and r.data["plan"] is None and "no define plan()" in r.data["nota"]
+    r = _post(api, "/macros/run/", doc, {"name": "sin_plan"})
+    assert r.status == 400 and r.data["plan_required"] is True and "forzar" in r.data["error"]
+    assert DB.Transaction.creadas == []
+    r = _post(api, "/macros/run/", doc, {"name": "sin_plan", "forzar": True})
+    assert r.status == 200, r.data
+    assert doc.elementos[10].LookupParameter(u"Comentarios").AsString() == u"sin plan"

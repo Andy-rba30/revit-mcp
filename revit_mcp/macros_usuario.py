@@ -51,7 +51,7 @@ from utils import (
 from seguridad import requiere_token
 from escritura import (
     ejecutar, transaccion, simulacion, EscrituraRechazada, resultado_creacion, verificar_eliminados,
-    comprobar_alcance, datos_peticion, nombre_nivel, _a_texto,
+    comprobar_alcance, datos_peticion, nombre_nivel, _a_texto, es_forzado,
 )
 from parameters import convertir_valor, buscar_parametro
 from navegacion import _responder, _texto_seguro
@@ -557,6 +557,16 @@ def register_macros_usuario_routes(api):
                 if plan is None:
                     extra["nota"] = u"la macro no define plan(): no se puede anticipar lo que haria"
                 return simulacion(haria, **extra)
+            if plan is None and not es_forzado(ctx_data):
+                # Sin plan() no hay recuento previo: el limite de 200 (comprobar_alcance)
+                # no se puede aplicar antes de escribir. La macro debe declararlo o el
+                # agente asumirlo con forzar=true.
+                raise EscrituraRechazada(
+                    u"Macro '{}' writes but defines no plan(doc, args, api): add one returning "
+                    u"{{'count': n}} so the 200-element limit can be checked before writing, "
+                    u"or pass forzar=true to run it anyway.".format(manifiesto["name"]), 400,
+                    {"name": manifiesto["name"], "plan_required": True},
+                )
             with transaccion(doc, u"Macro {}".format(manifiesto["name"])):
                 resultado = modulo.run(doc, uidoc, args, api_macro)
             respuesta = {"name": manifiesto["name"], "args": registro, "writes": True, "plan": plan,

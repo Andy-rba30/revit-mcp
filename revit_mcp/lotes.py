@@ -141,6 +141,13 @@ def normalizar_cambios(data):
     return operaciones
 
 
+def _es_tipo(elem):
+    try:
+        return isinstance(elem, DB.ElementType)
+    except Exception:
+        return False
+
+
 def _tipo_de(doc, elem):
     try:
         tipo_id = elem.GetTypeId()
@@ -177,7 +184,9 @@ def resolver_parametros(doc, operaciones):
         objetivo = elem
         es_de_tipo = False
         if de_tipo:
-            objetivo = _tipo_de(doc, elem)
+            # Como set_type_parameter(type_id=...): si el id ya es el de un tipo
+            # (sin ejemplares, por ejemplo), se fija sobre el mismo.
+            objetivo = elem if _es_tipo(elem) else _tipo_de(doc, elem)
             es_de_tipo = True
             if objetivo is None:
                 fallidos.append({"element_id": element_id, "parameter_name": nombre, "motivo": "element has no type"})
