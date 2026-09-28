@@ -592,6 +592,30 @@ def register_lectura_tools(mcp, revit_get, revit_post, revit_image=None):
         return format_response(response, ms_puente=crono.ms())
 
     @mcp.tool()
+    async def analytical_status(
+        element_ids: list[int] = None,
+        tolerance_mm: float = 10,
+        max: int = 500,
+        ctx: Context = None,
+    ) -> str:
+        """Analytical model check per element: associated AnalyticalMember, end nodes in mm,
+        members connected at each node (within tolerance_mm), `is_connected` and
+        `loose_nodes`; summary with `members`, `sin_analitico` and `loose_nodes_total`.
+        Example: analytical_status(element_ids=[1234, 1235]).
+
+        Args:
+            element_ids: Elements to check; empty = every steel element (up to max)
+            tolerance_mm: Distance under which two nodes count as connected (default 10)
+            max: Element limit when element_ids is empty (max 500)
+        """
+        crono = Cronometro()
+        data = {"tolerance_mm": tolerance_mm, "max": max}
+        if element_ids:
+            data["element_ids"] = element_ids
+        response = await revit_post("/analytical_status/", data, ctx, timeout=TIMEOUT_LECTURA)
+        return format_response(response, ms_puente=crono.ms())
+
+    @mcp.tool()
     async def read_log(last_n: int = 50, ctx: Context = None) -> str:
         """Last entries of mcp_log.jsonl, the log of every write made through this MCP
         (route, args, ok, ms, error). Check it before repeating a call that timed out.

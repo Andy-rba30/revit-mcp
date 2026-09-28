@@ -63,6 +63,52 @@ def vincular_cad(doc, file_path, mode, view, placement="origin"):
     return None
 
 
+def opciones_ifc(ifc_version="IFC2x3", export_base_quantities=True, view_id=None):
+    """IFCExportOptions con la version, las cantidades base y, si se da, la vista de filtro.
+
+    Lo reutiliza analitico.exportar_estructural (0.5.0, format="ifc_structural")."""
+    ifc_options = DB.IFCExportOptions()
+    if ifc_version == "IFC4":
+        ifc_options.FileVersion = DB.IFCVersion.IFC4
+    else:
+        ifc_options.FileVersion = DB.IFCVersion.IFC2x3
+    ifc_options.ExportBaseQuantities = bool(export_base_quantities)
+    if view_id is not None:
+        ifc_options.FilterViewId = view_id
+    return ifc_options
+
+
+def exportar_ifc(doc, file_path, ifc_options):
+    """doc.Export(carpeta, nombre, opciones) y tamano del archivo en KB. Dentro de una transaccion."""
+    output_dir = os.path.dirname(file_path)
+    file_name = os.path.basename(file_path)
+    doc.Export(output_dir or ".", file_name, ifc_options)
+    file_size_kb = 0
+    try:
+        if os.path.exists(file_path):
+            file_size_kb = int(os.path.getsize(file_path) / 1024)
+    except Exception:
+        pass
+    return file_size_kb
+
+
+def buscar_vista_por_nombre(doc, view_name):
+    """Vista (no plantilla) con ese nombre exacto, o None."""
+    views = (
+        DB.FilteredElementCollector(doc)
+        .OfClass(DB.View)
+        .WhereElementIsNotElementType()
+        .ToElements()
+    )
+    for v in views:
+        try:
+            if get_element_name(v) == view_name and not v.IsTemplate:
+                return v
+        except Exception:
+            continue
+    return None
+
+
 def register_interop_routes(api):
     """Register all interop routes with the API"""
 
@@ -97,7 +143,6 @@ def register_interop_routes(api):
 
             # Ensure output directory exists
             output_dir = os.path.dirname(file_path)
-            file_name = os.path.basename(file_path)
 
             if output_dir and not os.path.exists(output_dir):
                 try:
@@ -108,52 +153,22 @@ def register_interop_routes(api):
                         status=500,
                     )
 
-            # Set up IFC export options
-            ifc_options = DB.IFCExportOptions()
-
-            # Set IFC version
-            if ifc_version == "IFC4":
-                ifc_options.FileVersion = DB.IFCVersion.IFC4
-            else:
-                ifc_options.FileVersion = DB.IFCVersion.IFC2x3
-
-            ifc_options.ExportBaseQuantities = export_base_quantities
-
             # Filter by view if specified
-            if view_name:
-                views = (
-                    DB.FilteredElementCollector(doc)
-                    .OfClass(DB.View)
-                    .WhereElementIsNotElementType()
-                    .ToElements()
-                )
-                target_view = None
-                for v in views:
-                    if get_element_name(v) == view_name and not v.IsTemplate:
-                        target_view = v
-                        break
-                if target_view:
-                    ifc_options.FilterViewId = target_view.Id
+            target_view = buscar_vista_por_nombre(doc, view_name) if view_name else None
+            ifc_options = opciones_ifc(ifc_version, export_base_quantities,
+                                       target_view.Id if target_view is not None else None)
 
             t = DB.Transaction(doc, nombre_transaccion("Exportar IFC"))
             t.Start()
             suppress_warnings(t)
 
             try:
-                doc.Export(output_dir or ".", file_name, ifc_options)
+                file_size_kb = exportar_ifc(doc, file_path, ifc_options)
                 t.Commit()
             except Exception as tx_error:
                 if t.HasStarted() and not t.HasEnded():
                     t.RollBack()
                 raise tx_error
-
-            # Get file size
-            file_size_kb = 0
-            try:
-                if os.path.exists(file_path):
-                    file_size_kb = int(os.path.getsize(file_path) / 1024)
-            except Exception:
-                pass
 
             return routes.make_response(
                 data={

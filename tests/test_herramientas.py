@@ -98,7 +98,7 @@ def test_se_registran_todas_y_ninguna_retirada(servidor):
     mcp, _ = servidor
     nombres = sorted(t.name for t in mcp._tool_manager.list_tools())
     assert nombres == sorted(HERRAMIENTAS)
-    assert len(HERRAMIENTAS) == 50
+    assert len(HERRAMIENTAS) == 52
     assert not set(nombres) & set(HERRAMIENTAS_RETIRADAS)
     assert len(HERRAMIENTAS_RETIRADAS) == 51
     # cada sustituta empieza por una herramienta registrada
@@ -359,6 +359,14 @@ def test_export_formatos(tmp_path):
     with io.open(ruta, encoding="utf-8") as archivo:
         assert u"Baño,102," in archivo.read()
     assert "not supported" in _llamar(f, "export", format="xls")
+    # 0.5.0: exportacion estructural
+    puente.respuestas["/export_structural/"] = lambda d: {"data": d}
+    assert "file_path is required" in _llamar(f, "export", format="csv_nodes_members")
+    datos = _llamar(f, "export", format="csv_nodes_members", file_path="C:\\m.csv", element_ids=[1, 2])
+    assert puente.rutas()[-1] == "/export_structural/" and datos["data"] == {"format": "csv_nodes_members", "file_path": "C:\\m.csv",
+                                                                             "ifc_version": "IFC2x3", "element_ids": [1, 2]}
+    datos = _llamar(f, "export", format="IFC_structural", file_path="C:\\m.ifc", ifc_version="IFC4", view_name="3D")
+    assert datos["data"]["format"] == "ifc_structural" and datos["data"]["view_name"] == "3D" and puente.llamadas[-1][3] == 600.0
 
 
 def test_macros_de_usuario_y_codigo():
@@ -449,3 +457,15 @@ def test_herramientas_de_escritura_de_acero_despachan():
     datos = _llamar(f, "join_geometry", element_id_a=1, element_id_b=2)
     assert datos["data"] == {"element_id_a": 1, "element_id_b": 2, "unjoin": False, "simular": False}
     assert "required" in _llamar(f, "join_geometry", element_id_a=1)
+
+
+def test_analytical_status_y_fix_analytical_alignment():
+    puente = Puente({"/analytical_status/": lambda d: {"data": d}, "/fix_analytical/": lambda d: {"data": d}})
+    f = _herramientas(puente)
+    datos = _llamar(f, "analytical_status")
+    assert datos["data"] == {"tolerance_mm": 10, "max": 500} and puente.llamadas[-1][3] == 30.0
+    datos = _llamar(f, "analytical_status", element_ids=[1, 2], tolerance_mm=25)
+    assert datos["data"] == {"tolerance_mm": 25, "max": 500, "element_ids": [1, 2]}
+    datos = _llamar(f, "fix_analytical_alignment", element_ids=[1], simular=True)
+    assert datos["data"] == {"element_ids": [1], "tolerance_mm": 50, "simular": True, "forzar": False}
+    assert puente.llamadas[-1][3] == 600.0

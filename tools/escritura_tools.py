@@ -17,6 +17,7 @@ _KIND_COTA = ("dimension", "dimensions", "cota", "cotas", "dim")
 _KIND_ETIQUETA = ("tag", "tags", "etiqueta", "etiquetas")
 _MUROS = ("ost_walls", "walls", "muros", "wall", "muro")
 _FORMATOS_DOCUMENTO = ("pdf", "png", "jpg", "jpeg", "dwg")
+_FORMATOS_ESTRUCTURALES = ("ifc_structural", "csv_nodes_members")
 _ACCIONES = ("purge", "backup", "save")
 _KINDS_LARGOS = ("toposolid",)
 
@@ -483,23 +484,36 @@ def register_escritura_tools(mcp, revit_get, revit_post, revit_image=None):
         resolution: int = 300,
         ifc_version: str = "IFC2x3",
         export_base_quantities: bool = True,
+        element_ids: list[int] = None,
         ctx: Context = None,
     ) -> str:
-        """Export a view or sheet (pdf, png, jpg, dwg), the model to IFC, or the room data
-        (rooms_json, rooms_csv). Example: export(format="pdf", view_name="E-101");
-        export(format="ifc", file_path="C:\\\\Proyectos\\\\modelo.ifc");
-        export(format="rooms_csv", file_path="C:\\\\Proyectos\\\\habitaciones.csv").
+        """Export a view or sheet (pdf, png, jpg, dwg), the model to IFC, the room data
+        (rooms_json, rooms_csv) or the structural model (ifc_structural: IFC with base
+        quantities filtered by the active analytical view; csv_nodes_members: one row per
+        analytical member with nodes and releases). Example: export(format="pdf", view_name="E-101");
+        export(format="csv_nodes_members", file_path="C:\\\\Proyectos\\\\miembros.csv").
 
         Args:
-            format: "pdf", "png", "jpg", "dwg", "ifc", "rooms_json" or "rooms_csv"
-            file_path: Output path (required for ifc; optional for rooms_csv, written by the bridge)
+            format: "pdf", "png", "jpg", "dwg", "ifc", "rooms_json", "rooms_csv", "ifc_structural" or "csv_nodes_members"
+            file_path: Output path (required for ifc, ifc_structural and csv_nodes_members; optional for rooms_csv)
             view_name: View or sheet to export (default: active view; ifc: only its visible elements)
             resolution: DPI for png/jpg
             ifc_version: "IFC2x3" or "IFC4"
             export_base_quantities: IFC base quantities
+            element_ids: csv_nodes_members only: elements to export (empty = every steel element)
         """
         crono = Cronometro()
         formato = str(format or "").strip().lower()
+        if formato in _FORMATOS_ESTRUCTURALES:
+            if not file_path:
+                return format_response(_texto_error("file_path is required for format={}".format(formato)), ms_puente=crono.ms())
+            data = {"format": formato, "file_path": file_path, "ifc_version": ifc_version}
+            if view_name is not None:
+                data["view_name"] = view_name
+            if element_ids:
+                data["element_ids"] = element_ids
+            response = await revit_post("/export_structural/", data, ctx, timeout=TIMEOUT_LARGO)
+            return format_response(response, ms_puente=crono.ms())
         if formato in _FORMATOS_DOCUMENTO:
             data = {"view_name": view_name, "format": formato, "resolution": resolution}
             response = await revit_post("/export_document/", data, ctx, timeout=TIMEOUT_LARGO)
@@ -532,8 +546,8 @@ def register_escritura_tools(mcp, revit_get, revit_post, revit_image=None):
                 resultado["csv"] = texto
             return format_response(resultado, ms_puente=crono.ms())
         return format_response(_texto_error(
-            "format '{}' not supported: use pdf, png, jpg, dwg, ifc, rooms_json or rooms_csv".format(format)),
-            ms_puente=crono.ms())
+            "format '{}' not supported: use pdf, png, jpg, dwg, ifc, rooms_json, rooms_csv, ifc_structural or "
+            "csv_nodes_members".format(format)), ms_puente=crono.ms())
 
     @mcp.tool()
     async def link_file(
@@ -851,6 +865,30 @@ def register_escritura_tools(mcp, revit_get, revit_post, revit_image=None):
         crono = Cronometro()
         data = {"element_id": element_id, "at_mm": at_mm, "simular": simular}
         response = await revit_post("/split_beam/", data, ctx, timeout=TIMEOUT_ESCRITURA)
+        return format_response(response, ms_puente=crono.ms())
+
+    @mcp.tool()
+    async def fix_analytical_alignment(
+        element_ids: list[int],
+        tolerance_mm: float = 50,
+        simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Snap the loose analytical nodes of these elements to the nearest foreign node within
+        tolerance_mm (AnalyticalMember.SetCurve) in ONE transaction; antes/despues per node,
+        `sin_objetivo` for nodes with nothing near. Run analytical_status first and simular=true.
+        Example: fix_analytical_alignment(element_ids=[1234], tolerance_mm=50, simular=true).
+
+        Args:
+            element_ids: Physical elements whose analytical members are aligned
+            tolerance_mm: Maximum distance a node is moved (default 50)
+            simular: Only list the planned moves
+            forzar: Required above 200 node moves
+        """
+        crono = Cronometro()
+        data = {"element_ids": element_ids, "tolerance_mm": tolerance_mm, "simular": simular, "forzar": forzar}
+        response = await revit_post("/fix_analytical/", data, ctx, timeout=TIMEOUT_LARGO)
         return format_response(response, ms_puente=crono.ms())
 
     @mcp.tool()

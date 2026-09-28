@@ -29,14 +29,14 @@ HERRAMIENTAS = (
     "get_revit_status", "get_revit_model_info", "list_views", "describe_view", "capture_view",
     "query_elements", "describe_element", "dependency_graph", "list_types", "schedule_to_json",
     "list_warnings", "analyze_model", "check_clashes", "snapshot_model", "diff_snapshots", "read_log",
-    "list_steel_profiles", "steel_quantities",
+    "list_steel_profiles", "steel_quantities", "analytical_status",
     # escritura (19 + 8 de 0.5.0)
     "set_parameters", "create_elements", "transform_elements", "delete_elements",
     "change_element_type", "join_geometry", "set_workset", "set_project_location", "create_view",
     "set_active_view", "create_sheet_set", "create_schedule", "annotate", "color_elements", "export",
     "link_file", "load_family", "create_mep_system", "maintain_model",
     "load_steel_profile", "create_steel_frame", "create_bracing", "create_truss", "set_structural_properties",
-    "create_steel_connection", "add_plate_or_stiffener", "split_beam",
+    "create_steel_connection", "add_plate_or_stiffener", "split_beam", "fix_analytical_alignment",
     # macros (4)
     "create_grid_and_levels", "import_from_civil", "list_macros", "run_macro",
     # ultimo recurso (1)
