@@ -44,12 +44,12 @@ Pendiente tras la validación de la 0.3.0 (27/09/2026): `Grid.Create` (la herram
 | método | `JoinGeometryUtils.GetJoinedElements(Document, Element)` | 2012 | `/describe/`, `/dependency_graph/` | verificado (0.3.0 en Revit 2027 es, `/dependency_graph/` 32 aristas) |
 | propiedad | `Category.CategoryType` (`CategoryType.Model`) | 2011 | `/describe/`, `/dependency_graph/`, `/snapshot/` | verificado (0.3.0 en Revit 2027 es, `/describe/`, `/snapshot/`) |
 | propiedad | `Element.UniqueId`, `Element.ViewSpecific` | 2011 | `/describe/`, `/snapshot/` | verificado (0.3.0 en Revit 2027 es, `/snapshot/` 2746 elementos) |
-| propiedad | `Dimension.References` y `Reference.ElementId` | 2011 | `/describe/` (`referenced_by`) | por verificar (0.4.2: la cota entre muros daba 400; corregido en 0.4.3) |
+| propiedad | `Dimension.References` y `Reference.ElementId` | 2011 | `/describe/` (`referenced_by`) | verificado (0.4.3 en Revit 2027 es: la cota 615549 aparece en `referenced_by` del muro 165465) |
 | método | `IndependentTag.GetTaggedLocalElementIds()` (reserva `TaggedLocalElementId`) | 2022 | `/describe/` (`referenced_by`) | por verificar |
 | método | `Element.GetOrderedParameters()` | 2015 | `/describe/` | verificado (`/element_properties/`) |
 | propiedad | `Parameter.IsShared`, `Parameter.GUID` | 2011 | `/describe/`, `/query/` (proveedor por compartido) | por verificar |
 | propiedad | `InternalDefinition.BuiltInParameter` | 2011 | `/describe/` (`builtin`), `/query/` (proveedor) | verificado (0.3.0 en Revit 2027 es, `builtin: ALL_MODEL_MARK` en 2a.1) |
-| propiedad | `Element.CreatedPhaseId` | 2011 | `/query/` (`phase`) | por verificar (0.4.2: `phase="Fase 3"` devolvió 0 muros sin error, pero el muro 165465 es de "Fase 1"; repetir con "Fase 1") |
+| propiedad | `Element.CreatedPhaseId` | 2011 | `/query/` (`phase`) | verificado (0.4.3 en Revit 2027 es: `phase="Fase 1"` 68 muros, `"Fase 3"` 0; 68 = total de muros del modelo) |
 | constructor | `FilteredElementCollector(Document, ElementId vista)` | 2011 | `/query/` (`view_id`), `/describe/` | verificado (`/current_view_elements/`) |
 | clase | `ElementParameterFilter(FilterRule)` + `ParameterValueProvider(ElementId)` | 2011 | `/query/` (`filters` nativos) | verificado (0.3.0 en Revit 2027 es, `Length > 3000` nativo) |
 | constructor | `FilterStringRule(provider, evaluator, string)` (3 argumentos; el 4.º `caseSensitive` desapareció en 2023) | 2023 | `/query/` | por verificar |
@@ -121,7 +121,10 @@ Lo que queda por verificar se prueba con `herramientas-dev/VALIDACION_PENDIENTES
 Validación de pendientes (0.4.2, 28/09/2026, Revit 2027 en español con `/language ESP`): 22 pasos OK, el menú Deshacer OK (manual),
 1 no aplica (subproyectos) y un fallo, la cota entre muros (corregida en 0.4.3; el paso 21 quedó sin probar). Confirmados en español los nombres visibles
 (`Comentarios`, `Muros`, `Techos`, `Planos`...), el menú Deshacer (13 entradas `IA: ...`, sin entradas por elemento) y la
-copia diferida. Queda repetir la cota y el filtro por fase con la 0.4.3.
+copia diferida.
+
+Validación de la 0.4.3 (28/09/2026, `VALIDACION_043.md`, Revit 2027 en español): 9 de 9. La cota entre muros
+funciona y aparece en `referenced_by`; el filtro por fase devuelve los 68 muros en "Fase 1" y 0 en "Fase 3".
 
 | Tipo | Miembro | Versión mínima | Ruta que lo usa | Estado |
 |---|---|---|---|---|
@@ -137,4 +140,4 @@ copia diferida. Queda repetir la cota y el filtro por fase con la 0.4.3.
 | parámetro | `BuiltInParameter.VIEWER_SHEET_NUMBER` como `fields` de `/query/` sobre `OST_Views` (`---` = sin plano) | 2011 | herramienta `list_views(on_sheet=...)` | verificado (0.4.0: `list_views(view_type="floor_plans", on_sheet=false)`, 13 plantas) |
 | método | `Category.Id` comparado con `int(BuiltInCategory)` para resolver `OST_...` en `/list_category_parameters/` | 2011 | herramienta `list_types(with_parameters=true)` | verificado (0.4.0: `list_types(category="OST_Walls", with_parameters=true)` con `category_parameters`) |
 | módulo | `io.open(ruta, "r", encoding="utf-8")` en IronPython 2.7 | IronPython 2.7 | antes: `/log/` (`read_log`), `/diff_snapshots/`, manifiestos de macros, CSV y LandXML | no fiable: falla con `UnicodeDecodeError` si un carácter de dos bytes cae entre dos trozos (0.4.1, `read_log` con la ruta `Antón`); sustituido por `utils.leer_texto_utf8` (bytes + `decode` en bloque), por verificar en Revit |
-| método | `HostObjectUtils.GetSideFaces(Wall, ShellLayerType.Exterior)` como referencia de cota | 2011 | `/create_dimensions/` (`annotate(kind="dimension")`, `annotation._referencia`) | por verificar (0.4.3) |
+| método | `HostObjectUtils.GetSideFaces(Wall, ShellLayerType.Exterior)` como referencia de cota | 2011 | `/create_dimensions/` (`annotate(kind="dimension")`, `annotation._referencia`) | verificado (0.4.3 en Revit 2027 es: cota entre los muros 165465 y 165592, valor 6.50) |
