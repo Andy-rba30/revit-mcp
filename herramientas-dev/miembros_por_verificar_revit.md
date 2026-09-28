@@ -27,12 +27,12 @@ Pendiente tras la validación de la 0.3.0 (27/09/2026): `Grid.Create` (la herram
 | método | `Toposolid.Create(Document, IList<XYZ>, ElementId, ElementId)` (y la sobrecarga con `CurveLoop`) | 2024 | `/create_toposolid/` | verificado (0.3.0 en Revit 2027 es, `/import_civil/` CSV) |
 | método | `WallFoundation.Create(Document, ElementId, ElementId)` | 2014 | `/create_foundation/` (corrida) | por verificar |
 | método | `Document.Create.NewOpening(Element, CurveArray, bool)` | 2011 | `/create_opening/` (suelo, cubierta, techo) | por verificar |
-| método | `BasePoint.GetProjectBasePoint(Document)` / `BasePoint.GetSurveyPoint(Document)` | 2022 | `coordenadas._punto_base` (reserva por categoría si faltan) | por verificar |
-| propiedad | `ProjectPosition.Angle` | 2011 | `coordenadas.norte_verdadero_grados`, `/set_project_location/` | por verificar |
+| método | `BasePoint.GetProjectBasePoint(Document)` / `BasePoint.GetSurveyPoint(Document)` | 2022 | `coordenadas._punto_base` (reserva por categoría si faltan) | verificado (0.4.2 en Revit 2027 es: `get_revit_model_info(include=["location"])` con los dos puntos) |
+| propiedad | `ProjectPosition.Angle` | 2011 | `coordenadas.norte_verdadero_grados`, `/set_project_location/` | verificado (0.4.2 en Revit 2027 es: norte -123.0931 → -113.0931 → -123.0931) |
 | método | `Document.AcquireCoordinates(ElementId)` | 2018 | `/set_project_location/` (`acquire_from_link_id`) | por verificar |
 | método | `ElementTransformUtils.MoveElement` sobre `BasePoint` | 2012 | `/set_project_location/` | por verificar |
-| propiedad | `WorksetId.IntegerValue` | 2013 | `consulta._workset_id` (reserva `Value`) | por verificar |
-| propiedad | `OverrideGraphicSettings.ProjectionLineColor` + `Color.IsValid` | 2013 | `/color_splash/`, `/clear_colors/` | por verificar |
+| propiedad | `WorksetId.IntegerValue` | 2013 | `consulta._workset_id` (reserva `Value`) | no aplica en Modelo_Copia (no es de trabajo compartido) |
+| propiedad | `OverrideGraphicSettings.ProjectionLineColor` + `Color.IsValid` | 2013 | `/color_splash/`, `/clear_colors/` | verificado (0.4.2 en Revit 2027 es: 68 muros coloreados y limpiados, `con_color` 0) |
 
 ## Entrega 2a (0.3.0): Bloque A, navegación profunda
 
@@ -44,21 +44,21 @@ Pendiente tras la validación de la 0.3.0 (27/09/2026): `Grid.Create` (la herram
 | método | `JoinGeometryUtils.GetJoinedElements(Document, Element)` | 2012 | `/describe/`, `/dependency_graph/` | verificado (0.3.0 en Revit 2027 es, `/dependency_graph/` 32 aristas) |
 | propiedad | `Category.CategoryType` (`CategoryType.Model`) | 2011 | `/describe/`, `/dependency_graph/`, `/snapshot/` | verificado (0.3.0 en Revit 2027 es, `/describe/`, `/snapshot/`) |
 | propiedad | `Element.UniqueId`, `Element.ViewSpecific` | 2011 | `/describe/`, `/snapshot/` | verificado (0.3.0 en Revit 2027 es, `/snapshot/` 2746 elementos) |
-| propiedad | `Dimension.References` y `Reference.ElementId` | 2011 | `/describe/` (`referenced_by`) | por verificar |
+| propiedad | `Dimension.References` y `Reference.ElementId` | 2011 | `/describe/` (`referenced_by`) | por verificar (0.4.2: la cota entre muros daba 400; corregido en 0.4.3) |
 | método | `IndependentTag.GetTaggedLocalElementIds()` (reserva `TaggedLocalElementId`) | 2022 | `/describe/` (`referenced_by`) | por verificar |
 | método | `Element.GetOrderedParameters()` | 2015 | `/describe/` | verificado (`/element_properties/`) |
 | propiedad | `Parameter.IsShared`, `Parameter.GUID` | 2011 | `/describe/`, `/query/` (proveedor por compartido) | por verificar |
 | propiedad | `InternalDefinition.BuiltInParameter` | 2011 | `/describe/` (`builtin`), `/query/` (proveedor) | verificado (0.3.0 en Revit 2027 es, `builtin: ALL_MODEL_MARK` en 2a.1) |
-| propiedad | `Element.CreatedPhaseId` | 2011 | `/query/` (`phase`) | por verificar |
+| propiedad | `Element.CreatedPhaseId` | 2011 | `/query/` (`phase`) | por verificar (0.4.2: `phase="Fase 3"` devolvió 0 muros sin error, pero el muro 165465 es de "Fase 1"; repetir con "Fase 1") |
 | constructor | `FilteredElementCollector(Document, ElementId vista)` | 2011 | `/query/` (`view_id`), `/describe/` | verificado (`/current_view_elements/`) |
 | clase | `ElementParameterFilter(FilterRule)` + `ParameterValueProvider(ElementId)` | 2011 | `/query/` (`filters` nativos) | verificado (0.3.0 en Revit 2027 es, `Length > 3000` nativo) |
 | constructor | `FilterStringRule(provider, evaluator, string)` (3 argumentos; el 4.º `caseSensitive` desapareció en 2023) | 2023 | `/query/` | por verificar |
 | clase | `FilterDoubleRule`, `FilterIntegerRule`, `FilterElementIdRule` | 2011 | `/query/` | verificado (0.3.0 en Revit 2027 es, `FilterDoubleRule` con CURVE_ELEM_LENGTH; las otras dos por verificar) |
 | clase | `FilterStringEquals`, `FilterStringContains`, `FilterStringBeginsWith`, `FilterNumericEquals/Greater/GreaterOrEqual/Less/LessOrEqual` | 2011 | `/query/` | verificado (0.3.0 en Revit 2027 es, `FilterNumericGreater`; los de texto solo via 2a.2 sin confirmar la rama nativa) |
-| clase | `BoundingBoxIntersectsFilter(Outline)` | 2011 | `/query/` (`bbox_min_mm`/`bbox_max_mm`) | por verificar (ya lo usaba `/ai_filter/`) |
+| clase | `BoundingBoxIntersectsFilter(Outline)` | 2011 | `/query/` (`bbox_min_mm`/`bbox_max_mm`) | verificado (0.4.2 en Revit 2027 es: la caja del muro 151574 devuelve 151574 y 152894) |
 | clase | `ElementLevelFilter(ElementId)` | 2011 | `/query/` (`level` sin categoría), `/find_elements/` | verificado (0.3.0 en Revit 2027 es, `level: Zapata B.O`) |
-| clase | `ElementWorksetFilter(WorksetId)` + constructor `WorksetId(int)` | 2013 | `/query/` (`workset`) | por verificar |
-| clase | `ElementMulticategoryFilter(IList<BuiltInCategory>)` | 2014 | `/query/` (`category` como lista) | por verificar (ya lo usaba `/clash_check/`) |
+| clase | `ElementWorksetFilter(WorksetId)` + constructor `WorksetId(int)` | 2013 | `/query/` (`workset`) | no aplica en Modelo_Copia (no es de trabajo compartido) |
+| clase | `ElementMulticategoryFilter(IList<BuiltInCategory>)` | 2014 | `/query/` (`category` como lista) | verificado (0.4.2 en Revit 2027 es: `["OST_Walls", "OST_Floors"]`, 84 elementos) |
 | método | `FailureMessage.GetFailureDefinitionId().Guid` | 2011 | `/warnings/?group_by=description` | verificado (0.3.0 en Revit 2027 es, 15 grupos, 339 avisos) |
 | propiedades | `BuiltInFailures.OverlapFailures.WallsOverlap`, `.DuplicateInstances`, `.WallRoomSeparationOverlap`, `.RoomSeparationLinesOverlap`, `.FloorsOverlap`; `RoomFailures.RoomNotEnclosed`, `.RoomNotInPlaced`, `.RoomsInSameRegion`; `JoinElementsFailures.CannotKeepJoined`, `.CannotKeepJoinedWarning`; `InaccurateFailures.InaccurateLine`, `.InaccurateWall`, `.InaccurateBeamOrBrace`, `.InaccurateGrid`, `.InaccurateRefPlane`; `GeneralFailures.DuplicateValue`; `WallFailures.WallNotAttached`; `AreaFailures.AreaNotEnclosed` | 2012 | `/warnings/?group_by=description` (los nombres que no existan se ignoran; anotar cuáles) | verificado (0.3.0 en Revit 2027 es, 5 resueltos; 9 GUID sin miembro anadidos a `SUGERENCIAS_POR_GUID`) |
 | método | `ViewSchedule.GetTableData()`, `TableData.GetSectionData(SectionType.Body)`, `TableSectionData.NumberOfRows/NumberOfColumns` | 2014 | `/schedule/` | verificado (`/create_schedule/` lee `NumberOfRows`) |
@@ -73,8 +73,8 @@ Pendiente tras la validación de la 0.3.0 (27/09/2026): `Grid.Create` (la herram
 | método | `FilteredElementCollector(doc).WhereElementIsNotElementType()` sin más filtros (recorrido completo) | 2011 | `/snapshot/` por defecto, `/query/` sin criterios nativos | verificado (`/model_statistics/`) |
 | constructor | `ElementId(BuiltInParameter)` para `ParameterValueProvider` | 2011 | `/query/` (`navegacion.regla_nativa`) | verificado (0.3.0 en Revit 2027 es, `/query/` nativo) |
 | propiedad | `Solid.Volume`, `Solid.SurfaceArea`, `Solid.ComputeCentroid()` | 2011 | `/describe/` (`include_geometry`) | verificado (0.3.0 en Revit 2027 es, `geometry` en 2a.1) |
-| propiedad | `Document.Phases` (`PhaseArray`) | 2011 | `/query/` (`phase` por nombre) | por verificar |
-| método | `TableView.GetCellText(SectionType.Header, 0, 0)` (título de la tabla) | 2013 | `/schedule/` | por verificar (`SectionType.Body` también) |
+| propiedad | `Document.Phases` (`PhaseArray`) | 2011 | `/query/` (`phase` por nombre) | verificado (0.4.2 en Revit 2027 es: `include=["phases"]`, 5 fases; `phase` por nombre sin error) |
+| método | `TableView.GetCellText(SectionType.Header, 0, 0)` (título de la tabla) | 2013 | `/schedule/` | verificado (0.4.2 en Revit 2027 es: título "Sardineles y veredas") |
 
 ## Entrega 2a (0.3.0): Bloque D, macros de proyecto
 
@@ -85,12 +85,12 @@ Pendiente tras la validación de la 0.3.0 (27/09/2026): `Grid.Create` (la herram
 | método | `ViewSheet.Create(Document, ElementId cajetín)`, `ViewSheet.SheetNumber`, `View.Name` | 2013 | `/sheet_set/` (`documentation.crear_plano`), `/create_sheet/` | verificado (0.3.0 en Revit 2027 es, `/sheet_set/` MCP-01) |
 | método | `Viewport.CanAddViewToSheet(Document, ElementId, ElementId)` y `Viewport.Create(Document, ElementId, ElementId, XYZ)` | 2014 | `/sheet_set/` | verificado (0.3.0 en Revit 2027 es, 2 vistas colocadas) |
 | propiedad | `Viewport.ViewId`, `Viewport.SheetId` | 2014 | `/sheet_set/` (vistas ya colocadas) | verificado (0.3.0 en Revit 2027 es, `/sheet_set/`) |
-| método | `ScheduleSheetInstance.Create(Document, ElementId, ElementId, XYZ)`, `ScheduleSheetInstance.ScheduleId`, `.OwnerViewId` | 2014 | `/sheet_set/` (tablas) | por verificar |
+| método | `ScheduleSheetInstance.Create(Document, ElementId, ElementId, XYZ)`, `ScheduleSheetInstance.ScheduleId`, `.OwnerViewId` | 2014 | `/sheet_set/` (tablas) | verificado (0.4.2 en Revit 2027 es: tabla colocada en el plano MCP-99) |
 | método | `Element.get_BoundingBox(ViewSheet)` del cajetín para centrar la vista | 2011 | `/sheet_set/` (`position_mm` omitido) | verificado (0.3.0 en Revit 2027 es, centro 422.5 x 296) |
 | método | `Document.Link(string, DWGImportOptions, View, out ElementId)` | 2011 | `/import_civil/` (`interop.vincular_cad`), `/link_file/` | por verificar |
 | método | `Document.Link(string, DGNImportOptions, View, out ElementId)` (`.dgn`; la sobrecarga DWG no lo admite) | 2011 | `/import_civil/`, `/link_file/` con `.dgn` | por verificar |
 | método | `Document.Regenerate()` antes de `AcquireCoordinates` sobre el vínculo recién creado | 2011 | `/import_civil/` (`use_shared_coordinates`) | por verificar |
-| propiedad | `BasePoint.Pinned`, `BasePoint.Clipped` (409 si el punto base está fijado o recortado) | 2011 | `/import_civil/` (`coordenadas.comprobar_puntos_base_libres`), `/set_project_location/` | por verificar |
+| propiedad | `BasePoint.Pinned`, `BasePoint.Clipped` (409 si el punto base está fijado o recortado) | 2011 | `/import_civil/` (`coordenadas.comprobar_puntos_base_libres`), `/set_project_location/` | verificado (0.4.2 en Revit 2027 es: lectura: punto base `fijado` false, punto de replanteo `recortado` true) |
 | propiedad | `DWGImportOptions.Placement` = `ImportPlacement.Origin` / `Centered` / `Shared` / `Site` | 2011 | `/import_civil/` (`placement`), `/link_file/` | por verificar |
 | método | `Document.AcquireCoordinates(ElementId)` sobre un `ImportInstance` (DWG vinculado) | 2018 | `/import_civil/` (`use_shared_coordinates`) | por verificar (el caso RVT ya estaba pendiente) |
 | propiedad | `ProjectLocation.GetProjectPosition(XYZ)` → `EastWest`, `NorthSouth`, `Elevation`, `Angle` | 2011 | `/import_civil/` (409 si ya hay coordenadas compartidas) | por verificar |
@@ -118,17 +118,23 @@ dio 500 con `UnicodeDecodeError` en `io.open(..., encoding="utf-8").readlines()`
 (antes `"Walls"` daba 404 en un Revit en español) y `query_elements` admite `category` como lista en el esquema MCP.
 Lo que queda por verificar se prueba con `herramientas-dev/VALIDACION_PENDIENTES.md`.
 
+Validación de pendientes (0.4.2, 28/09/2026, Revit 2027 en español con `/language ESP`): 22 pasos OK, el menú Deshacer OK (manual),
+1 no aplica (subproyectos) y un fallo, la cota entre muros (corregida en 0.4.3; el paso 21 quedó sin probar). Confirmados en español los nombres visibles
+(`Comentarios`, `Muros`, `Techos`, `Planos`...), el menú Deshacer (13 entradas `IA: ...`, sin entradas por elemento) y la
+copia diferida. Queda repetir la cota y el filtro por fase con la 0.4.3.
+
 | Tipo | Miembro | Versión mínima | Ruta que lo usa | Estado |
 |---|---|---|---|---|
-| método | `Ceiling.Create(Document, IList<CurveLoop>, ElementId tipo, ElementId nivel)` + clase `CeilingType` | 2022 | `/create_elements/` y `/create_surface/` (kind `ceiling`; reserva: suelo como en 0.3.x) | por verificar |
-| enumeración | `BuiltInParameter.CEILING_HEIGHTABOVELEVEL_PARAM` (desfase del techo) | 2011 | `building.crear_superficie` (techo con `offset`) | por verificar |
+| método | `Ceiling.Create(Document, IList<CurveLoop>, ElementId tipo, ElementId nivel)` + clase `CeilingType` | 2022 | `/create_elements/` y `/create_surface/` (kind `ceiling`; reserva: suelo como en 0.3.x) | verificado (0.4.2 en Revit 2027 es: techo "Simple", categoría "Techos", sin reserva como suelo) |
+| enumeración | `BuiltInParameter.CEILING_HEIGHTABOVELEVEL_PARAM` (desfase del techo) | 2011 | `building.crear_superficie` (techo con `offset`) | verificado (0.4.2 en Revit 2027 es: "Desfase de altura desde nivel" = 2700) |
 | método | `ElementTransformUtils.CopyElement` repetido con `vector * i` en una transacción, también sobre un elemento fijado (0.4.1) | 2012 | `/transform_elements/` (`operation=array`) | verificado (0.4.1 en Revit 2027: `array` count 3 y `copy` sobre el muro fijado 151574; las copias salen con `pinned` false) |
 | método | `Element.GetOrderedParameters()` en cada elemento de la instantánea (antes `Parameters`) | 2015 | `/snapshot/` (`instantaneas._parametros_de`) | verificado (0.4.0: `parametros_ms` 950 en 2745 elementos; `total_ms` 3612 frente a 8200 en 0.3.1) |
 | método | `Element.get_BoundingBox(None)` solo con `include_bbox` | 2011 | `/snapshot/` | verificado (0.4.0: `total_ms` 2241 sin bbox frente a 3612 con bbox; `bbox_ms` 77 y 2, la diferencia está sobre todo en `escritura_ms`: 1729 y 916) |
-| módulo | `threading.Thread` + `System.IO.File.Copy` desde un hilo que no es el de Revit (solo E/S de archivos) | IronPython 2.7 | `escritura.CopiaDiferida` (todas las escrituras salvo `RUTAS_COPIA_SINCRONA`) | por verificar (0.4.0: `diferida` true y `estado` terminada en los pasos 8, 13 y 22, pero las tres con `reutilizada` true y `ms` 0, así que el hilo no llegó a copiar) |
+| módulo | `threading.Thread` + `System.IO.File.Copy` desde un hilo que no es el de Revit (solo E/S de archivos) | IronPython 2.7 | `escritura.CopiaDiferida` (todas las escrituras salvo `RUTAS_COPIA_SINCRONA`) | verificado (0.4.2 en Revit 2027 es: primera escritura de la sesión: `reutilizada` false, `ms` 196, copia de 41.316.352 bytes, igual que el .rvt) |
 | módulo | `imp.load_source(nombre, ruta)` para cargar `macro.py` y recargarlo al cambiar el `mtime` | IronPython 2.7 | `/macros/run/` (`macros_usuario.cargar_modulo`) | verificado (0.4.0: `reloaded` true tras editar `comentarios_por_nivel/macro.py`) |
-| propiedad | `ViewSheet.SheetNumber` asignada dos veces (número temporal y definitivo) para evitar duplicados | 2013 | macro de ejemplo `numerar_planos` | por verificar |
+| propiedad | `ViewSheet.SheetNumber` asignada dos veces (número temporal y definitivo) para evitar duplicados | 2013 | macro de ejemplo `numerar_planos` | verificado (0.4.2 en Revit 2027 es: `numerar_planos`: MCP-99 → MCP-07) |
 | argumento | `uidoc` inyectado por Routes en `/macros/run/` (`run(doc, uidoc, args, api)`) | pyRevit 4.8 | `/macros/run/` | verificado (0.4.0: `run_macro` se ejecuta con la firma de Routes; las macros de ejemplo no lo usan) |
 | parámetro | `BuiltInParameter.VIEWER_SHEET_NUMBER` como `fields` de `/query/` sobre `OST_Views` (`---` = sin plano) | 2011 | herramienta `list_views(on_sheet=...)` | verificado (0.4.0: `list_views(view_type="floor_plans", on_sheet=false)`, 13 plantas) |
 | método | `Category.Id` comparado con `int(BuiltInCategory)` para resolver `OST_...` en `/list_category_parameters/` | 2011 | herramienta `list_types(with_parameters=true)` | verificado (0.4.0: `list_types(category="OST_Walls", with_parameters=true)` con `category_parameters`) |
 | módulo | `io.open(ruta, "r", encoding="utf-8")` en IronPython 2.7 | IronPython 2.7 | antes: `/log/` (`read_log`), `/diff_snapshots/`, manifiestos de macros, CSV y LandXML | no fiable: falla con `UnicodeDecodeError` si un carácter de dos bytes cae entre dos trozos (0.4.1, `read_log` con la ruta `Antón`); sustituido por `utils.leer_texto_utf8` (bytes + `decode` en bloque), por verificar en Revit |
+| método | `HostObjectUtils.GetSideFaces(Wall, ShellLayerType.Exterior)` como referencia de cota | 2011 | `/create_dimensions/` (`annotate(kind="dimension")`, `annotation._referencia`) | por verificar (0.4.3) |
