@@ -929,7 +929,8 @@ class _FabricasFamilia(object):
     def _solido(self, clase, es_solido, volumen, nombre_categoria=u"Modelos genéricos"):
         forma = clase()
         forma.IsSolid = bool(es_solido)
-        forma.volumen = volumen
+        # Revit 2027 da volumen NEGATIVO a los vaciados (validacion 2c, 0.6.2: -1.3e-05 m3 por agujero)
+        forma.volumen = volumen if es_solido else -abs(volumen)
         forma.Parameters = [
             longitud_mm(u"Inicio de extrusión", 0, bip=DB.BuiltInParameter.EXTRUSION_START_PARAM),
             longitud_mm(u"Fin de extrusión", 0, bip=DB.BuiltInParameter.EXTRUSION_END_PARAM),

@@ -196,3 +196,14 @@ def test_build_cierra_sin_guardar_si_un_paso_falla(api, doc, tmp_path):
     import familias
 
     assert familias.DOCUMENTOS_ABIERTOS == {}
+
+
+def test_vaciados_con_volumen_negativo_no_cuentan_como_vacios():
+    """Revit 2027 da volumen negativo a los vaciados (validacion 2c con 0.6.2, paso 22)."""
+    import familias_spec
+
+    assert familias_spec._sin_volumen({"is_void": True, "volume_m3": -1.3e-05}) is False
+    assert familias_spec._sin_volumen({"is_void": True, "volume_m3": 0}) is True
+    assert familias_spec._sin_volumen({"is_void": False, "volume_m3": 0.0018}) is False
+    assert familias_spec._sin_volumen({"is_void": False, "volume_m3": 0}) is True
+    assert familias_spec._sin_volumen({"is_void": False, "volume_m3": None}) is True
