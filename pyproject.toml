@@ -1,6 +1,6 @@
 [project]
 name = "mcp-server-for-revit"
-version = "0.6.2"
+version = "0.6.3"
 description = "MCP server for Revit"
 readme = "README.md"
 requires-python = ">=3.11"

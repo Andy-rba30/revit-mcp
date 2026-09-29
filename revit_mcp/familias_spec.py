@@ -117,11 +117,24 @@ def planificar_casos(doc_familia, data, tipos_extra=()):
 
 
 def _volumenes(doc_familia):
-    """[{id, kind, volume_m3}] de cada GenericForm del documento."""
+    """[{id, kind, is_void, volume_m3}] de cada GenericForm del documento."""
     lista = []
     for forma in F.formas(doc_familia):
-        lista.append({"id": get_element_id_value(forma), "kind": F._kind_forma(forma), "volume_m3": F.volumen_m3(forma)})
+        try:
+            es_vaciado = not bool(forma.IsSolid)
+        except Exception:
+            es_vaciado = False
+        lista.append({"id": get_element_id_value(forma), "kind": F._kind_forma(forma), "is_void": es_vaciado,
+                      "volume_m3": F.volumen_m3(forma)})
     return lista
+
+
+def _sin_volumen(solido):
+    """Un solido sin volumen positivo, o un vaciado sin volumen (Revit da volumen negativo a los vaciados)."""
+    volumen = solido.get("volume_m3") or 0
+    if solido.get("is_void"):
+        return volumen == 0
+    return volumen <= 0
 
 
 def _grupo_transaccion(doc_familia, nombre):
@@ -172,7 +185,7 @@ def ejecutar_caso(doc_familia, caso, restaurar=True):
             resultado["motivo"] = u"Regenerate / Set failed: {}".format(error)
             resultado["revit_errors"] = list(getattr(_utils, "ULTIMOS_ERRORES", []) or [])
             return resultado
-        vacios = [s for s in resultado["solids"] if not s["volume_m3"] or s["volume_m3"] <= 0]
+        vacios = [s for s in resultado["solids"] if _sin_volumen(s)]
         resultado["empty_solids"] = [s["id"] for s in vacios]
         if vacios:
             resultado["motivo"] = u"{} solid(s) have no volume after regeneration: {}".format(len(vacios), resultado["empty_solids"])
