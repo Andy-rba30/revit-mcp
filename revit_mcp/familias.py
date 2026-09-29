@@ -49,6 +49,7 @@ from seguridad import requiere_token
 from escritura import (
     ejecutar, ejecutar_familia, transaccion, simulacion, EscrituraRechazada, resultado_creacion,
     comprobar_alcance, describir_elemento, datos_peticion, titulo_documento, ruta_documento,
+    esperar_copia_pendiente, nombre_transaccion,
 )
 from navegacion import _responder
 from pyrevit import routes, revit, DB
@@ -98,10 +99,12 @@ _ALIAS_TIPOS_DATO = {
 FACTORES = {"length": MM_TO_FEET, "area": MM_TO_FEET * MM_TO_FEET, "volume": MM_TO_FEET ** 3,
             "angle": math.pi / 180.0}
 UNIDADES = {"length": "mm", "area": "mm2", "volume": "mm3", "angle": "deg"}
-# ELEM_REFERENCE_NAME (Is Reference) -> indice del enumerado de Revit
+# ELEM_REFERENCE_NAME (Is Reference) -> valor de FamilyInstanceReferenceType. Verificado en Revit 2027
+# (0.6.2): la plantilla trae "Centro (Izquierda/Derecha)" = 1, "Centro (Frontal/Posterior)" = 4 y su
+# plano horizontal = 12. La tabla de 0.6.0 (0 = no referencia, 1 = fuerte, 3 = izquierda...) estaba desplazada.
 ES_REFERENCIA = {
-    "not_a_reference": 0, "strong": 1, "weak": 2, "left": 3, "center_left_right": 4, "right": 5,
-    "front": 6, "center_front_back": 7, "back": 8, "bottom": 9, "center_elevation": 10, "top": 11,
+    "left": 0, "center_left_right": 1, "right": 2, "front": 3, "center_front_back": 4, "back": 5,
+    "bottom": 6, "center_elevation": 7, "top": 8, "not_a_reference": 12, "strong": 13, "weak": 14,
 }
 _ALIAS_REFERENCIA = {
     "no": "not_a_reference", "none": "not_a_reference", "false": "not_a_reference", "fuerte": "strong",
@@ -850,6 +853,27 @@ def describir_parametro(doc_familia, param):
     }
 
 
+def asegurar_tipo(doc_familia, nombre=None):
+    """Dentro de una transaccion: deja un tipo actual en la familia. Devuelve el nombre del tipo creado o None.
+
+    Un documento nuevo desde plantilla no tiene tipos (FamilyManager.Types vacio, CurrentType None) y
+    Revit rechaza SetFormula ("There is no valid family type"). Si ya hay tipos, se hace actual el
+    primero; si no, se crea uno con `nombre` (el de la familia, como hace Revit al cargarla sin tipos)."""
+    gestor = doc_familia.FamilyManager
+    if gestor.CurrentType is not None:
+        return None
+    existentes = tipos_familia(doc_familia)
+    if existentes:
+        gestor.CurrentType = existentes[0]
+        return None
+    nombre = _texto_seguro(nombre).strip() or titulo_documento(doc_familia) or u"Tipo 1"
+    try:
+        gestor.NewType(nombre)
+    except Exception as error:
+        raise EscrituraRechazada(u"NewType('{}') failed: {}".format(nombre, error), 500)
+    return nombre
+
+
 def tipos_familia(doc_familia):
     try:
         return list(doc_familia.FamilyManager.Types)
@@ -1191,7 +1215,54 @@ def abrir_documento(doc, plan):
     except Exception:
         pass
     registrar_documento(doc_familia, plan["name"], origen=plan["modo"])
+    if plan["modo"] == "new":
+        # tipo inicial con el nombre de la familia: sin tipos, SetFormula y la flexion fallan
+        try:
+            with transaccion(doc_familia, u"Tipo de familia {}".format(plan["name"])):
+                asegurar_tipo(doc_familia, plan["name"])
+        except Exception as error:
+            logger.warning(u"No se pudo crear el tipo inicial de '%s': %s", plan["name"], error)
     return doc_familia
+
+
+def cargar_familia_en_proyecto(doc, doc_familia, opciones, nombre):
+    """doc_familia.LoadFamily(doc, opciones) SIN transaccion abierta en el proyecto. Devuelve (familia, avisos).
+
+    Revit 2027: "The document must not be modifiable before calling LoadFamily. Any open transaction
+    must be closed prior the call" (LoadFamily abre la suya). Se envuelve en un TransactionGroup
+    "IA: Cargar familia <nombre>" (un grupo no hace modificable el documento) para que el Deshacer
+    del proyecto muestre una sola entrada IA:. Si Revit rechaza la carga dentro del grupo, se
+    revierte el grupo y se reintenta una vez sin el."""
+    esperar_copia_pendiente()
+    avisos = []
+    grupo = None
+    try:
+        grupo = DB.TransactionGroup(doc, nombre_transaccion(u"Cargar familia {}".format(nombre)))
+        grupo.Start()
+    except Exception as error:
+        grupo = None
+        avisos.append(u"TransactionGroup no disponible: {}".format(error))
+    try:
+        familia = doc_familia.LoadFamily(doc, opciones)
+    except Exception as error:
+        if grupo is None:
+            raise EscrituraRechazada(u"LoadFamily(project) failed: {}".format(error), 500)
+        try:
+            grupo.RollBack()
+        except Exception:
+            pass
+        grupo = None
+        avisos.append(u"LoadFamily dentro del TransactionGroup fallo ({}); cargada sin grupo".format(error))
+        try:
+            familia = doc_familia.LoadFamily(doc, opciones)
+        except Exception as error:
+            raise EscrituraRechazada(u"LoadFamily(project) failed: {}".format(error), 500, {"avisos": avisos})
+    if grupo is not None:
+        try:
+            grupo.Assimilate()
+        except Exception as error:
+            avisos.append(u"No se pudo cerrar el TransactionGroup: {}".format(error))
+    return familia, avisos
 
 
 class _OpcionesCarga(DB.IFamilyLoadOptions):
@@ -1394,13 +1465,12 @@ def register_familias_routes(api):
                 return simulacion(haria, plan=haria[0])
             antes = set(get_element_id_value(s) for s in _simbolos_de_familia(doc, existente)) if existente is not None else set()
             opciones = _OpcionesCarga(sobrescribir)
-            with transaccion(doc, u"Cargar familia {}".format(nombre)):
-                if doc_familia is not None:
-                    try:
-                        familia = doc_familia.LoadFamily(doc, opciones)
-                    except Exception as error:
-                        raise EscrituraRechazada(u"LoadFamily(project) failed: {}".format(error), 500)
-                else:
+            avisos = []
+            if doc_familia is not None:
+                familia, avisos = cargar_familia_en_proyecto(doc, doc_familia, opciones, nombre)
+            else:
+                # LoadFamily(ruta) si va dentro de una transaccion del proyecto
+                with transaccion(doc, u"Cargar familia {}".format(nombre)):
                     referencia = clr.Reference[DB.Family]()
                     try:
                         cargada = doc.LoadFamily(ruta, opciones, referencia)
@@ -1423,6 +1493,7 @@ def register_familias_routes(api):
                 "reloaded": existente is not None, "overwrite_parameters": sobrescribir,
                 "family_doc": titulo_documento(doc_familia) if doc_familia is not None else None,
                 "message": u"Family '{}' loaded with {} type(s)".format(get_element_name(familia), len(simbolos)),
+                "avisos": avisos,
             })
             if not simbolos:
                 resultado["ok"] = False

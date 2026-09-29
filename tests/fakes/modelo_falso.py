@@ -575,7 +575,8 @@ class Aplicacion(object):
         if not os.path.isfile(ruta_plantilla) or ruta_plantilla in self.plantillas_invalidas:
             raise Exception("Revit: the family template could not be opened: {}".format(ruta_plantilla))
         numero = 1 + len([d for d in self.Documents if getattr(d, "IsFamilyDocument", False)])
-        doc = DocFamilia(self, titulo=u"Familia{}".format(numero), plantilla=ruta_plantilla)
+        # como en Revit 2027: una familia nueva desde plantilla no tiene tipos (Types vacio, CurrentType None)
+        doc = DocFamilia(self, titulo=u"Familia{}".format(numero), plantilla=ruta_plantilla, con_tipo=False)
         return doc
 
     def OpenDocumentFile(self, ruta):
@@ -839,7 +840,8 @@ class PlanoReferencia(DB.ReferencePlane):
         self.Normal = direccion.CrossProduct(cut).Normalize()
         self.plano = DB.Plane(self.Normal, bubble, direccion, cut.Normalize())
         self.vista_id = vista.Id if vista is not None else None
-        self.Parameters = [entero(u"Es referencia", 1, bip=DB.BuiltInParameter.ELEM_REFERENCE_NAME)]
+        # FamilyInstanceReferenceType: 12 = no es referencia (valores medidos en Revit 2027, 0.6.2)
+        self.Parameters = [entero(u"Es referencia", 12, bip=DB.BuiltInParameter.ELEM_REFERENCE_NAME)]
         self.Name = None
         DB._registrar_creado(doc, self, u"Planos de referencia", DB.BuiltInCategory.OST_CLines,
                              tipo_categoria=DB.CategoryType.Annotation)
@@ -1011,7 +1013,7 @@ class VistaFamilia(Elemento, DB.View):
 class DocFamilia(Doc):
     """Documento de familia: IsFamilyDocument, FamilyManager, FamilyCreate, OwnerFamily, SaveAs, Close, LoadFamily."""
 
-    def __init__(self, app, titulo=u"Familia1", plantilla=None, ruta=""):
+    def __init__(self, app, titulo=u"Familia1", plantilla=None, ruta="", con_tipo=True):
         Doc.__init__(self, ruta, titulo)
         self.Application = app
         self.IsFamilyDocument = True
@@ -1038,11 +1040,15 @@ class DocFamilia(Doc):
         centro_x.Name = u"Centro (izquierda/derecha)"
         centro_y = self.FamilyCreate.NewReferencePlane(DB.XYZ(-10, 0, 0), DB.XYZ(10, 0, 0), DB.XYZ(0, 0, 1), self.GetElement(DB.ElementId(11)))
         centro_y.Name = u"Centro (delante/detrás)"
+        # como la plantilla real: Centro (izquierda/derecha) = 1, Centro (delante/detrás) = 4
+        centro_x.Parameters[0]._valor = 1
+        centro_y.Parameters[0]._valor = 4
         self.IsModifiable = False
         self.FamilyManager.CurrentType = None
-        tipo = DB.FamilyType(u"Familia1")
-        self.FamilyManager.Types.append(tipo)
-        self.FamilyManager.CurrentType = tipo
+        if con_tipo:
+            tipo = DB.FamilyType(titulo)
+            self.FamilyManager.Types.append(tipo)
+            self.FamilyManager.CurrentType = tipo
         app.Documents.append(self)
 
     @property
@@ -1084,9 +1090,10 @@ class DocFamilia(Doc):
         return True
 
     def LoadFamily(self, proyecto, opciones=None):
-        """Carga esta familia en `proyecto` (dentro de una transaccion del proyecto). Devuelve la Family."""
-        if not proyecto.IsModifiable:
-            raise Exception("Revit: Attempt to modify the model outside of transaction")
+        """Carga esta familia en `proyecto` (SIN transaccion abierta en el proyecto, como Revit 2027). Devuelve la Family."""
+        if getattr(proyecto, "IsModifiable", False):
+            raise Exception("The document must not be modifiable before calling LoadFamily. "
+                            "Any open transaction must be closed prior the call.")
         nombre = self.OwnerFamily.Name or self._titulo
         existente = proyecto._familia_por_nombre(nombre)
         sobrescribir = None

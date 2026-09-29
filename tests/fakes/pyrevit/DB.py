@@ -634,6 +634,21 @@ class Transaction(object):
 
 
 class TransactionGroup(Transaction):
+    """Un grupo no hace modificable el documento (IsModifiable solo con una Transaction abierta)."""
+
+    def Start(self):
+        self.iniciada = True
+        self.estado = TransactionStatus.Started
+        return self.estado
+
+    def RollBack(self):
+        self.terminada = True
+        self.estado = TransactionStatus.RolledBack
+        return self.estado
+
+    def Commit(self):
+        return self.Assimilate()
+
     def Assimilate(self):
         self.terminada = True
         self.estado = TransactionStatus.Committed
@@ -1721,6 +1736,8 @@ class FamilyManager(object):
     def SetFormula(self, param, formula):
         if not getattr(self.doc, "IsModifiable", False):
             raise Exception("Revit: Attempt to modify the model outside of transaction")
+        if formula and self.CurrentType is None:
+            raise Exception("There is no valid family type.")   # Revit 2027 en una familia sin tipos
         if formula:
             for nombre in _nombres_en_formula(formula):
                 if self.get_Parameter(nombre) is None and not _es_numero_o_unidad(nombre):

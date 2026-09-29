@@ -32,14 +32,14 @@ def test_family_validate_por_tipo_y_casos(api, doc):
     assert r.status == 404
     grupos_antes = len([t for t in DB.Transaction.creadas if isinstance(t, DB.TransactionGroup)])
     r = _post(api, ruta, doc, {"family_doc": fd, "simular": True})
-    assert r.status == 200 and r.data["simulado"] is True and [h["type"] for h in r.data["haria"]] == [u"Familia1", u"PL300x300x20", u"PL400x400x25"]
+    assert r.status == 200 and r.data["simulado"] is True and [h["type"] for h in r.data["haria"]] == [u"Placa base", u"PL300x300x20", u"PL400x400x25"]
     assert len(r.data["solids"]) == 2
     r = _post(api, ruta, doc, {"family_doc": fd})
     assert r.status == 200, r.data
     assert r.data["ok"] is True and r.data["count"] == 3 and r.data["passed"] == 3 and r.data["failed_cases"] == []
     assert r.data["cases"][1]["type"] == u"PL300x300x20" and r.data["cases"][1]["solids"][0]["volume_m3"] > 0 and r.data["cases"][1]["restored"] is True
     grupos = [t for t in DB.Transaction.creadas if isinstance(t, DB.TransactionGroup)][grupos_antes:]
-    assert [g.nombre for g in grupos] == [u"IA: Validar Familia1", u"IA: Validar PL300x300x20", u"IA: Validar PL400x400x25"]
+    assert [g.nombre for g in grupos] == [u"IA: Validar Placa base", u"IA: Validar PL300x300x20", u"IA: Validar PL400x400x25"]
     assert all(g.estado == DB.TransactionStatus.RolledBack for g in grupos)
     assert familia.FamilyManager.CurrentType.Name == u"PL400x400x25"
 
@@ -146,17 +146,17 @@ def test_build_family_from_spec_simulado_y_real(api, doc, tmp_path):
     assert datos["ok"] is True and [p["step"] for p in datos["steps"]] == plan["steps"] + ["save", "load"]
     assert datos["family_doc"] == u"Placa base MCP" and datos["file_path"] == destino and os.path.isfile(destino)
     assert datos["validation"]["passed"] == 2 and datos["validation"]["failed"] == 0
-    assert [t["type"] for t in datos["loaded_types"]] == [u"Familia1", u"PL300x300x20", u"PL400x400x25"]
+    assert [t["type"] for t in datos["loaded_types"]] == [u"Placa base MCP", u"PL300x300x20", u"PL400x400x25"]
     assert datos["summary"]["category"] == "OST_StructConnections" and datos["summary"]["counts"]["solids"] == 5
     assert datos["summary"]["categoria"] == u"Conexiones estructurales"
     assert datos["avisos"] == []
     familia = doc.Application.Documents[-1]
     assert [t.nombre for t in familia.transacciones if not isinstance(t, DB.TransactionGroup)] == [
-        u"IA: Categoria de familia", u"IA: Parametros de familia (6)", u"IA: Planos de referencia (5)", u"IA: Cotas con etiqueta (2)",
+        u"IA: Tipo de familia Placa base MCP", u"IA: Categoria de familia", u"IA: Parametros de familia (6)", u"IA: Planos de referencia (5)", u"IA: Cotas con etiqueta (2)",
         u"IA: Solidos de familia (5)", u"IA: Tipos de familia (2)", u"IA: Flexionar PL300x300x20", u"IA: Flexionar PL400x400x25"]
     assert [t.nombre for t in familia.transacciones if isinstance(t, DB.TransactionGroup)] == [
         u"IA: Validar PL300x300x20", u"IA: Validar PL400x400x25"]
-    assert doc.transacciones[-1].nombre == u"IA: Cargar familia Placa base MCP"
+    assert isinstance(doc.transacciones[-1], DB.TransactionGroup) and doc.transacciones[-1].nombre == u"IA: Cargar familia Placa base MCP"
     assert doc._familia_por_nombre(u"Placa base MCP") is not None
     # la familia sigue abierta (close no pedido) y se puede cerrar
     r = _post(api, "/family/close/", doc, {"family_doc": u"Placa base MCP"})

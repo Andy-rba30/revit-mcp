@@ -175,7 +175,14 @@ def aplicar_parametros(doc_familia, planes):
         except Exception as error:
             raise EscrituraRechazada(u"AddParameter('{}') failed: {}".format(plan["name"], error), 500, {"index": plan["index"]})
         creados.append(param)
-    # las formulas despues de crear todos, porque pueden referirse a los del mismo lote
+    # las formulas despues de crear todos, porque pueden referirse a los del mismo lote; Revit
+    # exige un tipo actual para SetFormula ("There is no valid family type")
+    if any(plan["formula"] for plan in planes):
+        try:
+            nombre = get_element_name(doc_familia.OwnerFamily)
+        except Exception:
+            nombre = None
+        F.asegurar_tipo(doc_familia, nombre if nombre and nombre != "Unnamed" else None)
     for plan, param in zip(planes, creados):
         if plan["formula"]:
             try:
