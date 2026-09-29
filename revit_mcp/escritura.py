@@ -37,6 +37,13 @@ resuelve el parametro `simular` (con true no se abre transaccion ni se copia
 nada) y anade a la respuesta la copia, el tiempo y el resultado de la
 verificacion.
 
+0.6.0 (editor de familias): ejecutar_familia(doc, ruta, data, cuerpo, resolver)
+es la variante para un DOCUMENTO DE FAMILIA abierto por el MCP: registra en el
+mcp_log.jsonl del proyecto, comprueba IsModifiable sobre el documento de
+familia (409) y copia el .rfa solo si esta guardado en disco (un .rfa sin
+guardar no se copia; la respuesta lo dice en `nota_copia`). Cada escritura
+abre su propia transaccion(doc_familia, "...").
+
 Compatibilidad: IronPython 2.7 (sin f-strings, sin pathlib, sin anotaciones).
 Los mismos archivos se importan desde CPython 3 en las pruebas con un
 paquete `pyrevit` simulado.
@@ -264,14 +271,14 @@ def _marca_de(nombre_archivo):
         return None
 
 
-def _copias_existentes(carpeta, base):
+def _copias_existentes(carpeta, base, extension=".rvt"):
     """[(marca, ruta)] de las copias de `base` ordenadas de mas nueva a mas vieja."""
     copias = []
     if not os.path.isdir(carpeta):
         return copias
     prefijo = base + "_"
     for nombre in os.listdir(carpeta):
-        if not nombre.startswith(prefijo) or not nombre.lower().endswith(".rvt"):
+        if not nombre.startswith(prefijo) or not nombre.lower().endswith(extension.lower()):
             continue
         marca = _marca_de(nombre[len(base):])
         if marca is None:
@@ -281,8 +288,8 @@ def _copias_existentes(carpeta, base):
     return copias
 
 
-def _podar_copias(carpeta, base):
-    for marca, ruta in _copias_existentes(carpeta, base)[MAX_COPIAS:]:
+def _podar_copias(carpeta, base, extension=".rvt"):
+    for marca, ruta in _copias_existentes(carpeta, base, extension)[MAX_COPIAS:]:
         try:
             os.remove(ruta)
         except Exception as error:
@@ -303,11 +310,12 @@ def planificar_copia(doc, sufijo=None, forzar=False):
         return None, None
 
     carpeta = os.path.join(os.path.dirname(origen), CARPETA_COPIAS)
-    base = os.path.splitext(os.path.basename(origen))[0]
+    base, extension = os.path.splitext(os.path.basename(origen))
+    extension = extension or ".rvt"     # 0.6.0: un .rfa (documento de familia) se copia como .rfa
     ahora = _ahora()
 
     if not forzar:
-        existentes = _copias_existentes(carpeta, base)
+        existentes = _copias_existentes(carpeta, base, extension)
         if existentes:
             marca, ruta = existentes[0]
             edad = ahora - marca
@@ -325,7 +333,7 @@ def planificar_copia(doc, sufijo=None, forzar=False):
         limpio = re.sub(r"[^\w\-]+", "_", _texto(sufijo)).strip("_")
         if limpio:
             nombre = u"{}_{}".format(nombre, limpio)
-    destino = os.path.join(carpeta, nombre + u".rvt")
+    destino = os.path.join(carpeta, nombre + extension)
     info = {
         "ruta": destino,
         "refleja_guardado_de": _fecha_archivo(origen),
@@ -333,16 +341,16 @@ def planificar_copia(doc, sufijo=None, forzar=False):
         "nota": NOTA_COPIA,
         "ms": None,
     }
-    return info, (origen, destino, carpeta, base)
+    return info, (origen, destino, carpeta, base, extension)
 
 
 def _copiar_planificada(trabajo):
     """Copia el archivo planificado (vale desde otro hilo: solo E/S de archivos)."""
-    origen, destino, carpeta, base = trabajo
+    origen, destino, carpeta, base, extension = trabajo
     if not os.path.isdir(carpeta):
         os.makedirs(carpeta)
     _copiar_archivo(origen, destino)
-    _podar_copias(carpeta, base)
+    _podar_copias(carpeta, base, extension)
 
 
 def crear_copia(doc, sufijo=None, forzar=False):
@@ -945,4 +953,111 @@ def ejecutar(doc, ruta, data, cuerpo):
         doc, ruta, data, ok, ms,
         error=resultado.get("error"), resultado_resumen=_resumen(resultado), simulado=simulado,
     )
+    return routes.make_response(data=resultado)
+
+
+# ---------------------------------------------------------------------------
+# 0.6.0: ejecutar_familia, plantilla de las rutas que escriben en un documento de familia
+# ---------------------------------------------------------------------------
+def preparar_familia(doc_familia, nombre_ruta):
+    """Comprueba el documento de familia y copia el .rfa si esta guardado.
+
+    409 si `doc_familia.IsModifiable` (transaccion abierta) o `IsReadOnly`. La
+    copia va a <carpeta del rfa>\\backups\\ con la misma politica que el .rvt
+    (sincrona: un .rfa es pequeno). Un .rfa nunca guardado no se copia."""
+    if doc_familia is None:
+        raise EscrituraRechazada(u"family_doc is required", 400)
+    try:
+        solo_lectura = bool(doc_familia.IsReadOnly)
+    except Exception:
+        solo_lectura = False
+    if solo_lectura:
+        raise EscrituraRechazada(u"El documento de familia es de solo lectura (IsReadOnly)", 409)
+    try:
+        modificable = bool(doc_familia.IsModifiable)
+    except Exception:
+        modificable = False
+    if modificable:
+        raise EscrituraRechazada(
+            u"Hay una transaccion abierta en el documento de familia '{}' (IsModifiable es True)".format(
+                titulo_documento(doc_familia)),
+            409, {"open_transaction": True},
+        )
+    contexto = {"ruta": nombre_ruta, "copia": None, "nota": None}
+    if not ruta_documento(doc_familia):
+        contexto["nota"] = u"El documento de familia no esta guardado en disco: no hay copia que hacer."
+        return contexto
+    try:
+        contexto["copia"] = crear_copia(doc_familia)
+    except Exception as error:
+        logger.warning(u"[%s] No se pudo copiar el .rfa: %s", nombre_ruta, error)
+        contexto["nota"] = u"No se pudo hacer la copia de seguridad del .rfa: {}".format(error)
+    return contexto
+
+
+def ejecutar_familia(doc, ruta, data, cuerpo, resolver=None):
+    """Como `ejecutar`, pero la escritura va a un documento de familia.
+
+    `doc` es el proyecto activo (donde se registra en mcp_log.jsonl); `resolver(data)`
+    devuelve el documento de familia (o lanza EscrituraRechazada 404/400). El cuerpo
+    recibe el contexto con `doc_familia` ademas de `doc`, `data`, `simular`, `copia`.
+    Toda respuesta lleva `family_doc` (titulo actual del documento de familia)."""
+    inicio = time.time()
+    if doc is None:
+        return routes.make_response(data={"error": "No active Revit document"}, status=503)
+    if not isinstance(data, dict):
+        try:
+            data = datos_peticion(data)
+        except EscrituraRechazada as rechazo:
+            return routes.make_response(data={"error": rechazo.mensaje}, status=rechazo.status)
+    simulado = es_simulacion(data)
+    contexto = {
+        "ruta": ruta, "simular": simulado, "copia": None, "nota": None, "doc": doc, "data": data,
+        "doc_familia": None,
+    }
+
+    def _ms():
+        return int((time.time() - inicio) * 1000)
+
+    def _titulo():
+        return titulo_documento(contexto["doc_familia"]) if contexto["doc_familia"] is not None else None
+
+    try:
+        if resolver is not None:
+            contexto["doc_familia"] = resolver(data)
+        if not simulado and contexto["doc_familia"] is not None:
+            contexto.update(preparar_familia(contexto["doc_familia"], ruta))
+        resultado = cuerpo(contexto)
+    except EscrituraRechazada as rechazo:
+        registrar(doc, ruta, data, False, _ms(), error=rechazo.mensaje, simulado=simulado)
+        cuerpo_error = {"error": rechazo.mensaje, "family_doc": _titulo()}
+        cuerpo_error.update(rechazo.extra)
+        return routes.make_response(data=cuerpo_error, status=rechazo.status)
+    except Exception as error:
+        traza = traceback.format_exc()
+        logger.error(u"[%s] %s\n%s", ruta, error, traza)
+        registrar(doc, ruta, data, False, _ms(), error=_texto(error), simulado=simulado)
+        return routes.make_response(data={"error": _texto(error), "traceback": traza, "family_doc": _titulo()}, status=500)
+
+    ms = _ms()
+    if _es_respuesta(resultado):
+        datos = getattr(resultado, "data", None)
+        error = datos.get("error") if isinstance(datos, dict) else None
+        registrar(doc, ruta, data, (getattr(resultado, "status", 200) or 200) < 400 and not error, ms,
+                  error=error, resultado_resumen=_resumen(datos), simulado=simulado)
+        return resultado
+    if not isinstance(resultado, dict):
+        resultado = {"resultado": resultado}
+    ok = bool(resultado.get("ok", True)) and not resultado.get("error")
+    resultado["ok"] = ok
+    resultado["ms"] = ms
+    resultado.setdefault("family_doc", _titulo())
+    if simulado:
+        resultado.setdefault("simulado", True)
+    else:
+        resultado["copia"] = contexto.get("copia")
+        if contexto.get("nota"):
+            resultado["nota_copia"] = contexto["nota"]
+    registrar(doc, ruta, data, ok, ms, error=resultado.get("error"), resultado_resumen=_resumen(resultado),
+              simulado=simulado)
     return routes.make_response(data=resultado)

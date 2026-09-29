@@ -27,6 +27,20 @@ class SpecTypeId(object):
     Angle = DB._Enum("Angle")
     Number = DB._Enum("Number")
 
+    # 0.6.0 (editor de familias): los grupos anidados de SpecTypeId
+    class Int(object):
+        Integer = DB._Enum("Integer")
+
+    class String(object):
+        Text = DB._Enum("Text")
+        Url = DB._Enum("Url")
+
+    class Boolean(object):
+        YesNo = DB._Enum("YesNo")
+
+    class Reference(object):
+        Material = DB._Enum("Material")
+
 
 def activar_spec(monkeypatch):
     """Deja DB.SpecTypeId apuntando al de este modulo durante la prueba."""
@@ -204,7 +218,21 @@ class TipoMuro(Elemento, DB.WallType):
 
 
 class Familia(Elemento, DB.Family):
-    pass
+    IsInPlace = False
+    IsEditable = True
+
+    @property
+    def FamilyCategory(self):
+        return self.Category
+
+    @FamilyCategory.setter
+    def FamilyCategory(self, categoria):
+        self.Category = categoria
+        self.bic = categoria.BuiltInCategory if categoria is not None else None
+
+    def GetFamilySymbolIds(self):
+        return [e.Id for e in self.doc.elementos.values()
+                if isinstance(e, DB.FamilySymbol) and getattr(e, "Family", None) is self] if self.doc else []
 
 
 class Nivel(Elemento, DB.Level):
@@ -516,16 +544,50 @@ class _Fabricas(object):
         return linea
 
 
+class _FabricaAplicacion(object):
+    """app.Create: NewCurveLoopsProfile (barridos)."""
+
+    def NewCurveLoopsProfile(self, lazos):
+        return DB.SweepProfile(lazos)
+
+
 class Aplicacion(object):
-    """doc.Application: rutas de biblioteca de familias (0.5.0, list_steel_profiles)."""
+    """doc.Application: rutas de biblioteca (0.5.0) y, en 0.6.0, documentos abiertos,
+    plantillas de familia (FamilyTemplatePath), NewFamilyDocument, OpenDocumentFile y
+    el archivo de parametros compartidos."""
 
     def __init__(self):
         self.bibliotecas = {}
         self.Language = "Spanish"
         self.VersionNumber = "2027"
+        self.Documents = []
+        self.FamilyTemplatePath = ""
+        self.Create = _FabricaAplicacion()
+        self.archivo_compartidos = None
+        self.plantillas_invalidas = set()
 
     def GetLibraryPaths(self):
         return dict(self.bibliotecas)
+
+    def NewFamilyDocument(self, ruta_plantilla):
+        import os
+
+        if not os.path.isfile(ruta_plantilla) or ruta_plantilla in self.plantillas_invalidas:
+            raise Exception("Revit: the family template could not be opened: {}".format(ruta_plantilla))
+        numero = 1 + len([d for d in self.Documents if getattr(d, "IsFamilyDocument", False)])
+        doc = DocFamilia(self, titulo=u"Familia{}".format(numero), plantilla=ruta_plantilla)
+        return doc
+
+    def OpenDocumentFile(self, ruta):
+        import os
+
+        if not os.path.isfile(ruta):
+            raise Exception("Revit: file not found: {}".format(ruta))
+        titulo = os.path.splitext(os.path.basename(ruta))[0]
+        return DocFamilia(self, titulo=titulo, ruta=ruta)
+
+    def OpenSharedParameterFile(self):
+        return self.archivo_compartidos
 
 
 class Material(Elemento, DB.Material):
@@ -664,6 +726,7 @@ class Doc(object):
             familia = Familia(None, 0, nombre=nombre, categoria=categoria, bic=bic)
             familia.StructuralMaterialType = descripcion.get("material", DB.Structure.StructuralMaterialType.Steel)
             self.agregar(familia)
+            familia.doc = self
         simbolos = []
         for tipo in tipos:
             existente = [e for e in self.elementos.values()
@@ -760,3 +823,293 @@ class Doc(object):
             raise Exception("element not found")
         self.coordenadas_adquiridas.append(elem_id.Value)
         self.posicion = PosicionProyecto(1000.0, 2000.0, 10.0, 0.1)
+
+
+# ---------------------------------------------------------------------------
+# 0.6.0 (entrega 2c): documento de familia simulado
+# ---------------------------------------------------------------------------
+class PlanoReferencia(DB.ReferencePlane):
+    """ReferencePlane con Name, plano (Origin, Normal), referencia y ELEM_REFERENCE_NAME."""
+
+    def __init__(self, doc, bubble, free, cut, vista):
+        DB.ReferencePlane.__init__(self)
+        self.BubbleEnd = bubble
+        self.FreeEnd = free
+        direccion = free.Subtract(bubble).Normalize()
+        self.Normal = direccion.CrossProduct(cut).Normalize()
+        self.plano = DB.Plane(self.Normal, bubble, direccion, cut.Normalize())
+        self.vista_id = vista.Id if vista is not None else None
+        self.Parameters = [entero(u"Es referencia", 1, bip=DB.BuiltInParameter.ELEM_REFERENCE_NAME)]
+        self.Name = None
+        DB._registrar_creado(doc, self, u"Planos de referencia", DB.BuiltInCategory.OST_CLines,
+                             tipo_categoria=DB.CategoryType.Annotation)
+
+
+class CotaFamilia(DB.Dimension):
+    """Dimension de familia: References, FamilyLabel, AreSegmentsEqual."""
+
+    def __init__(self, doc, vista, linea, referencias):
+        DB.Dimension.__init__(self)
+        self.References = list(referencias)
+        self.linea = linea
+        self.FamilyLabel = None
+        self.AreSegmentsEqual = False
+        self.OwnerViewId = vista.Id
+        self.ViewSpecific = True
+        DB._registrar_creado(doc, self, u"Cotas", DB.BuiltInCategory.OST_Dimensions,
+                             tipo_categoria=DB.CategoryType.Annotation)
+
+    @property
+    def NumberOfSegments(self):
+        return max(len(self.References) - 1, 0)
+
+
+def _area_lazo(lazo):
+    """Area (pies2) del poligono/circulo de un CurveArray simulado."""
+    puntos = []
+    for curva in lazo:
+        if isinstance(curva, DB.Arc):
+            import math
+
+            return math.pi * curva.Radius ** 2 if len(list(lazo)) <= 2 else 0.0
+        puntos.append(curva.GetEndPoint(0))
+    if len(puntos) < 3:
+        return 0.0
+    area = 0.0
+    for i in range(len(puntos)):
+        a, b = puntos[i], puntos[(i + 1) % len(puntos)]
+        area += a.X * b.Y - b.X * a.Y
+    return abs(area) / 2.0
+
+
+def _caras_caja(solido, xmin, ymin, zmin, xmax, ymax, zmax):
+    """Seis caras planas con referencia para un prisma (bloqueos y conectores)."""
+    caras = []
+    for nombre, normal, origen in (
+        ("top", DB.XYZ(0, 0, 1), DB.XYZ((xmin + xmax) / 2, (ymin + ymax) / 2, zmax)),
+        ("bottom", DB.XYZ(0, 0, -1), DB.XYZ((xmin + xmax) / 2, (ymin + ymax) / 2, zmin)),
+        ("right", DB.XYZ(1, 0, 0), DB.XYZ(xmax, (ymin + ymax) / 2, (zmin + zmax) / 2)),
+        ("left", DB.XYZ(-1, 0, 0), DB.XYZ(xmin, (ymin + ymax) / 2, (zmin + zmax) / 2)),
+        ("back", DB.XYZ(0, 1, 0), DB.XYZ((xmin + xmax) / 2, ymax, (zmin + zmax) / 2)),
+        ("front", DB.XYZ(0, -1, 0), DB.XYZ((xmin + xmax) / 2, ymin, (zmin + zmax) / 2)),
+    ):
+        cara = DB.PlanarFace(normal, origen, area=1.0)
+        cara.Reference = DB.Reference(solido)
+        cara.Reference.cara = nombre
+        caras.append(cara)
+    return caras
+
+
+class _FabricasFamilia(object):
+    """doc.FamilyCreate: NewReferencePlane, NewDimension, NewExtrusion, NewSweep, NewRevolution, NewBlend, NewAlignment."""
+
+    def __init__(self, doc):
+        self.doc = doc
+        self.llamadas = []
+
+    def _exigir_transaccion(self):
+        if not self.doc.IsModifiable:
+            raise Exception("Revit: Attempt to modify the model outside of transaction")
+
+    def NewReferencePlane(self, bubble, free, cut, vista):
+        self._exigir_transaccion()
+        self.llamadas.append(("NewReferencePlane", (bubble, free, cut, vista)))
+        return PlanoReferencia(self.doc, bubble, free, cut, vista)
+
+    def NewDimension(self, vista, linea, referencias):
+        self._exigir_transaccion()
+        refs = list(getattr(referencias, "refs", referencias))
+        if len(refs) < 2:
+            raise Exception("Revit: a dimension needs at least two references")
+        self.llamadas.append(("NewDimension", (vista, linea, refs)))
+        return CotaFamilia(self.doc, vista, linea, refs)
+
+    def _solido(self, clase, es_solido, volumen, nombre_categoria=u"Modelos genéricos"):
+        forma = clase()
+        forma.IsSolid = bool(es_solido)
+        forma.volumen = volumen
+        forma.Parameters = [
+            longitud_mm(u"Inicio de extrusión", 0, bip=DB.BuiltInParameter.EXTRUSION_START_PARAM),
+            longitud_mm(u"Fin de extrusión", 0, bip=DB.BuiltInParameter.EXTRUSION_END_PARAM),
+            referencia(u"Material", None, bip=DB.BuiltInParameter.MATERIAL_ID_PARAM),
+        ]
+        DB._registrar_creado(self.doc, forma, nombre_categoria, self.doc.OwnerFamily.bic)
+        return forma
+
+    def NewExtrusion(self, es_solido, perfil, plano, altura):
+        self._exigir_transaccion()
+        if float(altura) == 0:
+            raise Exception("Revit: the extrusion end must differ from the start")
+        area = sum(_area_lazo(lazo) for lazo in perfil)
+        if area <= 0:
+            raise Exception("Revit: the sketch does not form a closed loop")
+        forma = self._solido(DB.Extrusion, es_solido, area * abs(float(altura)))
+        forma.perfil = perfil
+        forma.plano = plano
+        forma.get_Parameter(DB.BuiltInParameter.EXTRUSION_END_PARAM).Set(float(altura))
+        # caja aproximada a partir del primer lazo, para caras y bbox
+        puntos = [c.GetEndPoint(0) for lazo in perfil for c in lazo if not isinstance(c, DB.Arc)]
+        if puntos:
+            xs, ys = [p.X for p in puntos], [p.Y for p in puntos]
+            z0 = (plano.plano.Origin.Z if plano.plano is not None else 0.0)
+            forma.caja = DB.BoundingBoxXYZ(DB.XYZ(min(xs), min(ys), z0), DB.XYZ(max(xs), max(ys), z0 + float(altura)))
+            forma.caras = _caras_caja(forma, min(xs), min(ys), z0, max(xs), max(ys), z0 + float(altura))
+        self.llamadas.append(("NewExtrusion", (es_solido, perfil, plano, altura)))
+        return forma
+
+    def NewSweep(self, es_solido, camino, plano, perfil, indice, ubicacion):
+        self._exigir_transaccion()
+        if sum(1 for lazo in camino for _ in lazo) == 0:
+            raise Exception("Revit: the sweep path is empty")
+        forma = self._solido(DB.Sweep, es_solido, 1.0)
+        forma.camino, forma.perfil = camino, perfil
+        self.llamadas.append(("NewSweep", (es_solido, camino, plano, perfil, indice, ubicacion)))
+        return forma
+
+    def NewRevolution(self, es_solido, perfil, plano, eje, inicio, fin):
+        self._exigir_transaccion()
+        if abs(float(fin) - float(inicio)) <= 0:
+            raise Exception("Revit: the revolution angle must be positive")
+        forma = self._solido(DB.Revolution, es_solido, 1.0)
+        forma.perfil, forma.eje, forma.angulos = perfil, eje, (inicio, fin)
+        self.llamadas.append(("NewRevolution", (es_solido, perfil, plano, eje, inicio, fin)))
+        return forma
+
+    def NewBlend(self, es_solido, superior, base, plano):
+        self._exigir_transaccion()
+        if _area_lazo(superior) <= 0 or _area_lazo(base) <= 0:
+            raise Exception("Revit: the blend profiles must be closed loops")
+        forma = self._solido(DB.Blend, es_solido, 1.0)
+        forma.superior, forma.base = superior, base
+        self.llamadas.append(("NewBlend", (es_solido, superior, base, plano)))
+        return forma
+
+    def NewAlignment(self, vista, ref_a, ref_b):
+        self._exigir_transaccion()
+        if ref_a is None or ref_b is None:
+            raise Exception("Revit: NewAlignment needs two references")
+        self.llamadas.append(("NewAlignment", (vista, ref_a, ref_b)))
+        bloqueo = Elemento(None, 0, categoria=None)
+        bloqueo.referencias = (ref_a, ref_b)
+        self.doc.agregar(bloqueo)
+        self.doc.alineaciones.append(bloqueo)
+        return bloqueo
+
+
+class VistaFamilia(Elemento, DB.View):
+    def __init__(self, doc, identificador, nombre, tipo, nivel=None, direccion=None, **kw):
+        kw.setdefault("categoria", u"Vistas")
+        kw.setdefault("bic", DB.BuiltInCategory.OST_Views)
+        kw.setdefault("categoria_tipo", DB.CategoryType.Annotation)
+        Elemento.__init__(self, doc, identificador, nombre=nombre, **kw)
+        self.ViewType = tipo
+        self.GenLevel = nivel
+        self.IsTemplate = False
+        self.ViewDirection = direccion if direccion is not None else DB.XYZ(0, 0, 1)
+
+
+class DocFamilia(Doc):
+    """Documento de familia: IsFamilyDocument, FamilyManager, FamilyCreate, OwnerFamily, SaveAs, Close, LoadFamily."""
+
+    def __init__(self, app, titulo=u"Familia1", plantilla=None, ruta=""):
+        Doc.__init__(self, ruta, titulo)
+        self.Application = app
+        self.IsFamilyDocument = True
+        self.IsModified = False
+        self.plantilla = plantilla
+        self.FamilyManager = DB.FamilyManager(self)
+        self.FamilyCreate = _FabricasFamilia(self)
+        self.OwnerFamily = Familia(self, 5, nombre=titulo, categoria=u"Modelos genéricos",
+                                   bic=DB.BuiltInCategory.OST_GenericModel)
+        self.alineaciones = []
+        self.cerrado = False
+        self.guardados = []
+        self.al_regenerar = None
+        self.cargas_en_proyecto = []
+        # nivel de referencia, planta, alzado frontal y una vista 3D, como en una plantilla metrica
+        nivel = Nivel(self, 10, u"Nivel de referencia", 0)
+        VistaFamilia(self, 11, u"Nivel de referencia", DB.ViewType.FloorPlan, nivel=nivel)
+        VistaFamilia(self, 12, u"Frontal", DB.ViewType.Elevation, direccion=DB.XYZ(0, -1, 0))
+        VistaFamilia(self, 13, u"Izquierda", DB.ViewType.Elevation, direccion=DB.XYZ(-1, 0, 0))
+        VistaFamilia(self, 14, u"Vista 3D", DB.ViewType.ThreeD)
+        # planos de referencia centrales de la plantilla
+        self.IsModifiable = True
+        centro_x = self.FamilyCreate.NewReferencePlane(DB.XYZ(0, -10, 0), DB.XYZ(0, 10, 0), DB.XYZ(0, 0, 1), self.GetElement(DB.ElementId(11)))
+        centro_x.Name = u"Centro (izquierda/derecha)"
+        centro_y = self.FamilyCreate.NewReferencePlane(DB.XYZ(-10, 0, 0), DB.XYZ(10, 0, 0), DB.XYZ(0, 0, 1), self.GetElement(DB.ElementId(11)))
+        centro_y.Name = u"Centro (delante/detrás)"
+        self.IsModifiable = False
+        self.FamilyManager.CurrentType = None
+        tipo = DB.FamilyType(u"Familia1")
+        self.FamilyManager.Types.append(tipo)
+        self.FamilyManager.CurrentType = tipo
+        app.Documents.append(self)
+
+    @property
+    def Title(self):
+        return self._titulo
+
+    @Title.setter
+    def Title(self, valor):
+        self._titulo = valor
+
+    def Regenerate(self):
+        Doc.Regenerate(self)
+        if self.al_regenerar is not None:
+            self.al_regenerar(self)
+
+    def SaveAs(self, ruta, opciones=None):
+        import os
+
+        if self.IsModifiable:
+            raise Exception("Revit: cannot save with an open transaction")
+        if os.path.exists(ruta) and not (opciones is not None and opciones.OverwriteExistingFile):
+            raise Exception("Revit: the file already exists: {}".format(ruta))
+        with open(ruta, "wb") as archivo:
+            archivo.write(b"RFA" + self._titulo.encode("utf-8"))
+        self.PathName = ruta
+        self._titulo = os.path.splitext(os.path.basename(ruta))[0]
+        self.OwnerFamily.Name = self._titulo
+        self.guardados.append(ruta)
+        self.IsModified = False
+
+    def Close(self, guardar=False):
+        if self.IsModifiable:
+            raise Exception("Revit: cannot close with an open transaction")
+        if guardar and not self.PathName:
+            raise Exception("Revit: the document has never been saved")
+        self.cerrado = True
+        if self in self.Application.Documents:
+            self.Application.Documents.remove(self)
+        return True
+
+    def LoadFamily(self, proyecto, opciones=None):
+        """Carga esta familia en `proyecto` (dentro de una transaccion del proyecto). Devuelve la Family."""
+        if not proyecto.IsModifiable:
+            raise Exception("Revit: Attempt to modify the model outside of transaction")
+        nombre = self.OwnerFamily.Name or self._titulo
+        existente = proyecto._familia_por_nombre(nombre)
+        sobrescribir = None
+        if opciones is not None:
+            caja = DB.clr_StrongBox(False)
+            try:
+                opciones.OnFamilyFound(existente is not None, caja)
+            except TypeError:
+                pass
+            sobrescribir = caja.Value
+        if existente is not None and not sobrescribir:
+            raise Exception("Revit: the family '{}' is already loaded and overwrite was refused".format(nombre))
+        familia = existente
+        if familia is None:
+            familia = Familia(None, 0, nombre=nombre, categoria=self.OwnerFamily.Category.Name, bic=self.OwnerFamily.bic)
+            proyecto.agregar(familia)
+            familia.doc = proyecto
+        for tipo in self.FamilyManager.Types:
+            ya = [e for e in proyecto.elementos.values()
+                  if isinstance(e, DB.FamilySymbol) and getattr(e, "Family", None) is familia and e.Name == tipo.Name]
+            if ya:
+                continue
+            simbolo = TipoFamilia(None, 0, familia=familia, nombre=tipo.Name, categoria=familia.Category.Name, bic=familia.bic)
+            proyecto.agregar(simbolo)
+        self.cargas_en_proyecto.append((proyecto, sobrescribir))
+        return familia
