@@ -274,6 +274,10 @@ def register_routes():
 
         register_analitico_routes(api)
 
+        from revit_mcp.familias import register_familias_routes
+
+        register_familias_routes(api)
+
         logger.info("All MCP routes registered successfully")
 
     except Exception as e:

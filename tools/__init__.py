@@ -1,16 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Registro de las herramientas MCP (0.5.0): 52 herramientas en cuatro modulos.
+"""Registro de las herramientas MCP (0.6.0): 66 herramientas en cuatro modulos.
 
-  lectura_tools        19 herramientas de lectura (estado, modelo, vistas, consulta,
+  lectura_tools        20 herramientas de lectura (estado, modelo, vistas, consulta,
                        tipos, tablas, avisos, analisis, colisiones, instantaneas, log;
-                       0.5.0: perfiles de acero, cantidades de acero, estado analitico)
-  escritura_tools      28 herramientas de escritura (lotes, transformar, borrar,
+                       0.5.0: perfiles de acero, cantidades de acero, estado analitico;
+                       0.6.0: family_info)
+  escritura_tools      39 herramientas de escritura (lotes, transformar, borrar,
                        tipos, uniones, subproyectos, coordenadas, vistas, planos,
                        tablas, anotar, colores, exportar, vincular, familias, MEP,
                        mantenimiento; 0.5.0: cargar perfiles, portico metalico,
                        arriostres, cerchas, propiedades estructurales, conexiones,
-                       placas, dividir viga, alinear el modelo analitico)
-  macro_tools           4 macros (rejilla y niveles, Civil 3D, macros propias)
+                       placas, dividir viga, alinear el modelo analitico; 0.6.0: editor
+                       de familias: abrir, parametros, planos, cotas, solidos, bloqueos,
+                       tipos, conectores, guardar, cargar, cerrar)
+  macro_tools           6 macros (rejilla y niveles, Civil 3D, macros propias;
+                       0.6.0: family_validate, build_family_from_spec)
   code_execution_tools  1 (execute_revit_code, ultimo recurso)
 
 La consolidacion de 0.4.0 (de 78 a 40 herramientas) ocurre aqui, en el puente:
@@ -25,24 +29,30 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Las 52 herramientas de 0.5.0: las 40 de 0.4.0 (39 sin capture_view, que se
-# mantiene aparte porque devuelve una imagen y no un texto JSON) mas las 12 de
-# la entrega 2b (estructuras metalicas y modelo analitico).
+# Las 66 herramientas de 0.6.0: las 40 de 0.4.0 (39 sin capture_view, que se
+# mantiene aparte porque devuelve una imagen y no un texto JSON), las 12 de la
+# entrega 2b (estructuras metalicas y modelo analitico) y las 14 de la entrega
+# 2c (editor de familias).
 HERRAMIENTAS = (
-    # lectura (16 + 2 de 0.5.0)
+    # lectura (16 + 2 de 0.5.0 + 1 de 0.6.0)
     "get_revit_status", "get_revit_model_info", "list_views", "describe_view", "capture_view",
     "query_elements", "describe_element", "dependency_graph", "list_types", "schedule_to_json",
     "list_warnings", "analyze_model", "check_clashes", "snapshot_model", "diff_snapshots", "read_log",
     "list_steel_profiles", "steel_quantities", "analytical_status",
-    # escritura (19 + 8 de 0.5.0)
+    "family_info",
+    # escritura (19 + 8 de 0.5.0 + 11 de 0.6.0)
     "set_parameters", "create_elements", "transform_elements", "delete_elements",
     "change_element_type", "join_geometry", "set_workset", "set_project_location", "create_view",
     "set_active_view", "create_sheet_set", "create_schedule", "annotate", "color_elements", "export",
     "link_file", "load_family", "create_mep_system", "maintain_model",
     "load_steel_profile", "create_steel_frame", "create_bracing", "create_truss", "set_structural_properties",
     "create_steel_connection", "add_plate_or_stiffener", "split_beam", "fix_analytical_alignment",
-    # macros (4)
+    "family_open", "family_add_parameters", "family_add_reference_planes", "family_add_dimensions",
+    "family_create_solids", "family_lock_faces", "family_set_type_values", "family_add_connectors",
+    "family_save", "family_load_into_project", "family_close",
+    # macros (4 + 2 de 0.6.0)
     "create_grid_and_levels", "import_from_civil", "list_macros", "run_macro",
+    "family_validate", "build_family_from_spec",
     # ultimo recurso (1)
     "execute_revit_code",
 )
@@ -176,7 +186,7 @@ def instalar_retiradas(mcp_server):
 
 
 def register_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func):
-    """Registra las 52 herramientas y la interceptacion de nombres retirados."""
+    """Registra las 66 herramientas y la interceptacion de nombres retirados."""
     from .lectura_tools import register_lectura_tools
     from .escritura_tools import register_escritura_tools
     from .macro_tools import register_macro_tools

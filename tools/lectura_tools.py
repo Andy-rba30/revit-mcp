@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Herramientas de lectura (0.4.0, 16): ninguna cambia el modelo (snapshot_model
+"""Herramientas de lectura (0.6.0, 20): ninguna cambia el modelo (snapshot_model
 solo escribe un .json en snapshots\\). Varias combinan dos rutas existentes en
 una sola llamada MCP (get_revit_model_info con `include`, list_views con
 `on_sheet`, describe_view sin `view_id`, query_elements con `current_view` o
@@ -46,7 +46,7 @@ def _texto_error(mensaje, **extra):
 
 
 def register_lectura_tools(mcp, revit_get, revit_post, revit_image=None):
-    """Registra las 16 herramientas de lectura."""
+    """Registra las 20 herramientas de lectura."""
 
     @mcp.tool()
     async def get_revit_status(ctx: Context = None) -> str:
@@ -613,6 +613,33 @@ def register_lectura_tools(mcp, revit_get, revit_post, revit_image=None):
         if element_ids:
             data["element_ids"] = element_ids
         response = await revit_post("/analytical_status/", data, ctx, timeout=TIMEOUT_LECTURA)
+        return format_response(response, ms_puente=crono.ms())
+
+    @mcp.tool()
+    async def family_info(
+        family_doc: str = None,
+        include_templates: bool = False,
+        contains: str = None,
+        ctx: Context = None,
+    ) -> str:
+        """Family editor (0.6.0): summary of an open family document (parameters with data
+        type, group, formula; types with values in mm; reference planes; views by ViewType;
+        solids with constraints; dimensions; connectors). Without family_doc: the family
+        documents open in Revit and, with include_templates, the .rft templates.
+        Example: family_info(family_doc="Placa base").
+
+        Args:
+            family_doc: Title of an open family document (or the name given to family_open)
+            include_templates: Also list the .rft files of Application.FamilyTemplatePath
+            contains: Filter the template names (accents ignored)
+        """
+        crono = Cronometro()
+        data = {"include_templates": include_templates}
+        if family_doc:
+            data["family_doc"] = family_doc
+        if contains:
+            data["contains"] = contains
+        response = await revit_post("/family/info/", data, ctx, timeout=TIMEOUT_LECTURA)
         return format_response(response, ms_puente=crono.ms())
 
     @mcp.tool()

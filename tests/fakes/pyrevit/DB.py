@@ -177,7 +177,32 @@ class Line(object):
 
 
 class Arc(object):
-    pass
+    """0.6.0: arco por centro, radio y angulos (Arc.Create) o vacio (rejilla curva)."""
+
+    def __init__(self, centro=None, radio=0.0, inicio=0.0, fin=0.0):
+        self.Center = centro
+        self.Radius = float(radio)
+        self.inicio = float(inicio)
+        self.fin = float(fin)
+        self.IsBound = True
+
+    @staticmethod
+    def Create(centro, radio, inicio, fin, eje_x, eje_y):
+        arco = Arc(centro, radio, inicio, fin)
+        arco.eje_x = eje_x
+        arco.eje_y = eje_y
+        return arco
+
+    @property
+    def Length(self):
+        return self.Radius * abs(self.fin - self.inicio)
+
+    def GetEndPoint(self, indice):
+        import math
+
+        angulo = self.inicio if indice == 0 else self.fin
+        centro = self.Center or XYZ()
+        return XYZ(centro.X + self.Radius * math.cos(angulo), centro.Y + self.Radius * math.sin(angulo), centro.Z)
 
 
 class CurveLoop(object):
@@ -192,7 +217,26 @@ class CurveLoop(object):
 
 
 class CurveArray(CurveLoop):
-    pass
+    @property
+    def Size(self):
+        return len(self.curvas)
+
+
+class CurveArrArray(object):
+    """0.6.0: lista de CurveArray (perfiles de extrusiones, barridos, revoluciones)."""
+
+    def __init__(self):
+        self.lazos = []
+
+    def Append(self, lazo):
+        self.lazos.append(lazo)
+
+    def __iter__(self):
+        return iter(self.lazos)
+
+    @property
+    def Size(self):
+        return len(self.lazos)
 
 
 class Outline(object):
@@ -238,6 +282,21 @@ class Category(object):
         self.Id = ElementId(bic) if bic is not None else ElementId(-1)
         self.CategoryType = tipo if tipo is not None else CategoryType.Model
         self.HasMaterialQuantities = True
+
+    @staticmethod
+    def GetCategory(doc, bic):
+        """0.6.0: Category.GetCategory(doc, BuiltInCategory); nombres visibles en espanol."""
+        nombres = getattr(doc, "nombres_categorias", None) or {}
+        nombre = nombres.get(str(bic)) or NOMBRES_CATEGORIAS.get(str(bic)) or str(bic)
+        return Category(nombre, bic)
+
+
+NOMBRES_CATEGORIAS = {
+    "OST_GenericModel": u"Modelos genéricos", "OST_StructConnections": u"Conexiones estructurales",
+    "OST_StructuralStiffener": u"Rigidizadores estructurales", "OST_StructuralFraming": u"Armazón estructural",
+    "OST_StructuralColumns": u"Pilares estructurales", "OST_MechanicalEquipment": u"Equipos mecánicos",
+    "OST_Furniture": u"Mobiliario", "OST_Doors": u"Puertas", "OST_Windows": u"Ventanas", "OST_Walls": u"Muros",
+}
 
 
 class BuiltInParameter(object):
@@ -303,6 +362,14 @@ class BuiltInParameter(object):
     STRUCTURAL_SECTION_COMMON_WEB_THICKNESS = _Enum("STRUCTURAL_SECTION_COMMON_WEB_THICKNESS", -1001256)
     STRUCTURAL_SECTION_COMMON_FLANGE_THICKNESS = _Enum("STRUCTURAL_SECTION_COMMON_FLANGE_THICKNESS", -1001257)
     STRUCTURAL_SECTION_NOMINAL_WEIGHT = _Enum("STRUCTURAL_SECTION_NOMINAL_WEIGHT", -1001258)
+    # 0.6.0 (entrega 2c): editor de familias
+    ELEM_REFERENCE_NAME = _Enum("ELEM_REFERENCE_NAME", -1001259)
+    EXTRUSION_START_PARAM = _Enum("EXTRUSION_START_PARAM", -1001260)
+    EXTRUSION_END_PARAM = _Enum("EXTRUSION_END_PARAM", -1001261)
+    MATERIAL_ID_PARAM = _Enum("MATERIAL_ID_PARAM", -1001262)
+    CONNECTOR_RADIUS = _Enum("CONNECTOR_RADIUS", -1001263)
+    CONNECTOR_WIDTH = _Enum("CONNECTOR_WIDTH", -1001264)
+    CONNECTOR_HEIGHT = _Enum("CONNECTOR_HEIGHT", -1001265)
 
 
 class BuiltInCategory(object):
@@ -337,6 +404,11 @@ class BuiltInCategory(object):
     OST_StructuralTruss = _Enum("OST_StructuralTruss", -2001336)
     OST_StructConnections = _Enum("OST_StructConnections", -2009030)
     OST_Materials = _Enum("OST_Materials", -2000700)
+    # 0.6.0 (entrega 2c)
+    OST_CLines = _Enum("OST_CLines", -2000530)
+    OST_StructuralStiffener = _Enum("OST_StructuralStiffener", -2001354)
+    OST_MechanicalEquipment = _Enum("OST_MechanicalEquipment", -2001140)
+    OST_ConnectorElem = _Enum("OST_ConnectorElem", -2009611)
 
 
 class CategoryType(object):
@@ -767,17 +839,43 @@ class ModelCurveArray(object):
 
 class SketchPlane(Element):
     @staticmethod
-    def Create(doc, nivel_id):
+    def Create(doc, argumento):
+        """Create(doc, ElementId nivel) | Create(doc, Reference plano) | Create(doc, Plane) (0.6.0)."""
         plano = SketchPlane()
-        plano.nivel_id = nivel_id
+        plano.nivel_id = None
+        plano.referencia = None
+        plano.plano = None
+        if isinstance(argumento, ElementId):
+            plano.nivel_id = argumento
+            nivel = doc.GetElement(argumento)
+            if nivel is not None and hasattr(nivel, "ProjectElevation"):
+                plano.plano = Plane(XYZ(0, 0, 1), XYZ(0, 0, nivel.ProjectElevation))
+        elif isinstance(argumento, Reference):
+            plano.referencia = argumento
+            elemento = doc.GetElement(argumento.ElementId)
+            if elemento is not None and hasattr(elemento, "GetPlane"):
+                plano.plano = elemento.GetPlane()
+        elif isinstance(argumento, Plane):
+            plano.plano = argumento
+        else:
+            raise Exception("SketchPlane.Create: argumento no admitido {!r}".format(argumento))
         doc.agregar(plano)
         return plano
 
+    def GetPlane(self):
+        return self.plano
+
 
 class Plane(object):
-    def __init__(self, normal=None, origen=None):
+    def __init__(self, normal=None, origen=None, xvec=None, yvec=None):
         self.Normal = normal
         self.Origin = origen
+        if xvec is None and normal is not None:
+            # como Revit: XVec perpendicular a la normal
+            auxiliar = XYZ(0, 0, 1) if abs(normal.Z) < 0.9 else XYZ(1, 0, 0)
+            xvec = auxiliar.CrossProduct(normal).Normalize()
+        self.XVec = xvec
+        self.YVec = yvec if yvec is not None else (normal.CrossProduct(xvec).Normalize() if normal is not None and xvec is not None else None)
 
     @staticmethod
     def CreateByNormalAndOrigin(normal, origen):
@@ -951,7 +1049,11 @@ class Mechanical(object):
         pass
 
     class DuctSystemType(object):
-        SupplyAir = _Enum("SupplyAir")
+        UndefinedSystemType = _Enum("UndefinedSystemType", 0)
+        SupplyAir = _Enum("SupplyAir", 1)
+        ReturnAir = _Enum("ReturnAir", 2)
+        ExhaustAir = _Enum("ExhaustAir", 3)
+        Global = _Enum("Global", 7)
 
     class Duct(Element):
         @staticmethod
@@ -970,7 +1072,11 @@ class Plumbing(object):
         pass
 
     class PipeSystemType(object):
-        DomesticHotWater = _Enum("DomesticHotWater")
+        UndefinedSystemType = _Enum("UndefinedSystemType", 0)
+        DomesticHotWater = _Enum("DomesticHotWater", 6)
+        DomesticColdWater = _Enum("DomesticColdWater", 7)
+        Sanitary = _Enum("Sanitary", 8)
+        FireProtectWet = _Enum("FireProtectWet", 12)
 
     class Pipe(Element):
         @staticmethod
@@ -979,6 +1085,21 @@ class Plumbing(object):
             tuberia.sistema_id = sistema_id
             tuberia.Location = _UbicacionCurva(Line.CreateBound(inicio, fin))
             return _registrar_creado(doc, tuberia, u"Tuberías", BuiltInCategory.OST_PipeCurves, tipo_id, nivel_id)
+
+
+class Electrical(object):
+    class ElectricalSystemType(object):
+        UndefinedSystemType = _Enum("UndefinedSystemType", 0)
+        Data = _Enum("Data", 1)
+        PowerCircuit = _Enum("PowerCircuit", 5)
+        Telephone = _Enum("Telephone", 6)
+
+
+class ConnectorProfileType(object):
+    Invalid = _Enum("Invalid", 0)
+    Round = _Enum("Round", 1)
+    Rectangular = _Enum("Rectangular", 2)
+    Oval = _Enum("Oval", 3)
 
 
 class Toposolid(Element):
@@ -1045,6 +1166,7 @@ class Grid(Element):
 class View(Element):
     IsTemplate = False
     ViewType = ViewType.Undefined
+    ViewDirection = XYZ(0, 0, 1)
     AreAnalyticalModelCategoriesHidden = True
     Scale = 100
     CropBoxActive = False
@@ -1318,6 +1440,349 @@ class SATImportOptions(object):
 
 class SKPImportOptions(object):
     pass
+
+
+# ---------------------------------------------------------------------------
+# 0.6.0 (entrega 2c): editor de familias
+# ---------------------------------------------------------------------------
+class GroupTypeId(object):
+    """Grupos de parametros (2022+): GroupTypeId.Geometry, .Materials, .Data..."""
+    Geometry = _Enum("Geometry")
+    Materials = _Enum("Materials")
+    Data = _Enum("Data")
+    Constraints = _Enum("Constraints")
+    Construction = _Enum("Construction")
+    Dimensions = _Enum("Dimensions")
+    IdentityData = _Enum("IdentityData")
+    Text = _Enum("Text")
+    Graphics = _Enum("Graphics")
+    Mechanical = _Enum("Mechanical")
+    Electrical = _Enum("Electrical")
+    Plumbing = _Enum("Plumbing")
+    Structural = _Enum("Structural")
+    Visibility = _Enum("Visibility")
+    General = _Enum("General")
+    Other = _Enum("Other")
+
+
+class ReferencePlane(Element):
+    """Plano de referencia de una familia: GetPlane, GetReference, Name, ELEM_REFERENCE_NAME."""
+
+    def __init__(self):
+        Element.__init__(self)
+        self.BubbleEnd = None
+        self.FreeEnd = None
+        self.Normal = None
+        self.plano = None
+
+    def GetPlane(self):
+        return self.plano
+
+    def GetReference(self):
+        return Reference(self)
+
+
+class GenericForm(Element):
+    IsSolid = True
+    volumen = 1.0     # pies3; las pruebas lo cambian para simular una regeneracion que anula el solido
+
+    def __init__(self):
+        Element.__init__(self)
+        self.caras = []
+
+    def get_Geometry(self, opciones):
+        solido = Solid(volumen=self.volumen, area=6.0, caras=list(self.caras))
+        return [solido]
+
+
+class Extrusion(GenericForm):
+    pass
+
+
+class Sweep(GenericForm):
+    pass
+
+
+class Revolution(GenericForm):
+    pass
+
+
+class Blend(GenericForm):
+    TopOffset = 0.0
+    BottomOffset = 0.0
+
+
+class SweepProfile(object):
+    def __init__(self, lazos):
+        self.lazos = lazos
+
+
+class ProfilePlaneLocation(object):
+    Start = _Enum("Start", 0)
+    End = _Enum("End", 1)
+
+
+class ConnectorElement(Element):
+    """Conector de familia (conducto, tuberia, electrico) creado sobre una cara."""
+    Domain = None
+    SystemClassification = None
+    Radius = 0.0
+    Width = 0.0
+    Height = 0.0
+    Shape = ConnectorProfileType.Round
+
+    @staticmethod
+    def _crear(doc, dominio, sistema, referencia):
+        conector = ConnectorElement()
+        conector.Domain = dominio
+        conector.SystemClassification = sistema
+        conector.referencia = referencia
+        conector.Shape = ConnectorProfileType.Round
+        return _registrar_creado(doc, conector, u"Conectores", BuiltInCategory.OST_ConnectorElem)
+
+    @staticmethod
+    def CreateDuctConnector(doc, sistema, referencia):
+        return ConnectorElement._crear(doc, "DomainHvac", sistema, referencia)
+
+    @staticmethod
+    def CreatePipeConnector(doc, sistema, referencia):
+        return ConnectorElement._crear(doc, "DomainPiping", sistema, referencia)
+
+    @staticmethod
+    def CreateElectricalConnector(doc, sistema, referencia):
+        return ConnectorElement._crear(doc, "DomainElectrical", sistema, referencia)
+
+
+class SaveAsOptions(object):
+    def __init__(self):
+        self.OverwriteExistingFile = False
+        self.Compact = False
+
+
+class IFamilyLoadOptions(object):
+    pass
+
+
+class clr_StrongBox(object):
+    """Argumento `out` (como System.Runtime.CompilerServices.StrongBox): el manejador fija .Value."""
+
+    def __init__(self, valor=None):
+        self.Value = valor
+
+
+class FamilySource(object):
+    Project = _Enum("Project", 0)
+    Family = _Enum("Family", 1)
+
+
+class ExternalDefinition(object):
+    """Definicion de un parametro compartido (archivo de parametros compartidos)."""
+
+    def __init__(self, nombre, guid, spec=None):
+        self.Name = nombre
+        self.GUID = guid
+        self._spec = spec
+
+    def GetDataType(self):
+        return self._spec
+
+
+class _Definiciones(object):
+    def __init__(self, definiciones):
+        self.definiciones = list(definiciones)
+
+    def __iter__(self):
+        return iter(self.definiciones)
+
+
+class DefinitionGroup(object):
+    def __init__(self, nombre, definiciones):
+        self.Name = nombre
+        self.Definitions = _Definiciones(definiciones)
+
+
+class DefinitionFile(object):
+    def __init__(self, grupos):
+        self.Groups = list(grupos)
+
+
+class FamilyParameter(object):
+    """Parametro de familia: Definition (Name, GetDataType, GetGroupTypeId), IsInstance, Formula, IsShared, GUID."""
+
+    def __init__(self, nombre, spec, grupo, es_ejemplar, storage, identificador, compartido=False, guid=None, categoria=None):
+        self.Definition = _DefinicionFamilia(nombre, spec, grupo)
+        self.IsInstance = bool(es_ejemplar)
+        self.Formula = None
+        self.IsShared = compartido
+        self._guid = guid
+        self.StorageType = storage
+        self.Id = ElementId(identificador)
+        self.IsReadOnly = False
+        self.IsDeterminedByFormula = False
+        self.CanAssignFormula = True
+        self.categoria = categoria
+
+    @property
+    def GUID(self):
+        if not self.IsShared:
+            raise Exception("Parameter is not shared")
+        return self._guid
+
+
+class _DefinicionFamilia(object):
+    def __init__(self, nombre, spec, grupo):
+        self.Name = nombre
+        self._spec = spec
+        self._grupo = grupo
+        self.BuiltInParameter = BuiltInParameter.INVALID
+
+    def GetDataType(self):
+        if self._spec is None:
+            raise Exception("no data type")
+        return self._spec
+
+    def GetGroupTypeId(self):
+        return self._grupo
+
+
+class FamilyType(object):
+    """Tipo de familia: valores por parametro (unidades internas)."""
+
+    def __init__(self, nombre):
+        self.Name = nombre
+        self.valores = {}
+
+    def HasValue(self, param):
+        return self.valores.get(param.Definition.Name) is not None
+
+    def AsDouble(self, param):
+        valor = self.valores.get(param.Definition.Name)
+        return float(valor) if valor is not None else 0.0
+
+    def AsInteger(self, param):
+        valor = self.valores.get(param.Definition.Name)
+        return int(valor) if valor is not None else 0
+
+    def AsString(self, param):
+        valor = self.valores.get(param.Definition.Name)
+        return valor if isinstance(valor, str) else None
+
+    def AsElementId(self, param):
+        valor = self.valores.get(param.Definition.Name)
+        return valor if isinstance(valor, ElementId) else ElementId.InvalidElementId
+
+    def AsValueString(self, param):
+        valor = self.valores.get(param.Definition.Name)
+        return None if valor is None else str(valor)
+
+
+class FamilyManager(object):
+    """FamilyManager simulado: Parameters, Types, CurrentType, AddParameter, SetFormula, NewType, Set."""
+
+    def __init__(self, doc):
+        self.doc = doc
+        self.Parameters = []
+        self.Types = []
+        self.CurrentType = None
+        self._siguiente = -700000
+        self.asociaciones = {}   # id del parametro del elemento -> FamilyParameter
+
+    def _nuevo(self, nombre, spec, grupo, es_ejemplar, storage, **extra):
+        if self.get_Parameter(nombre) is not None:
+            raise Exception("Revit: a parameter named '{}' already exists".format(nombre))
+        if not getattr(self.doc, "IsModifiable", False):
+            raise Exception("Revit: Attempt to modify the model outside of transaction")
+        self._siguiente -= 1
+        param = FamilyParameter(nombre, spec, grupo, es_ejemplar, storage, self._siguiente, **extra)
+        self.Parameters.append(param)
+        return param
+
+    def AddParameter(self, *args):
+        """AddParameter(nombre, GroupTypeId, SpecTypeId, isInstance) | (nombre, GroupTypeId, Category, isInstance)
+        | (ExternalDefinition, GroupTypeId, isInstance)."""
+        if isinstance(args[0], ExternalDefinition):
+            definicion, grupo, es_ejemplar = args
+            return self._nuevo(definicion.Name, definicion.GetDataType(), grupo, es_ejemplar,
+                               _storage_de(definicion.GetDataType()), compartido=True, guid=definicion.GUID)
+        nombre, grupo, tipo, es_ejemplar = args
+        if isinstance(tipo, Category):
+            return self._nuevo(nombre, "FamilyType", grupo, es_ejemplar, StorageType.ElementId, categoria=tipo)
+        return self._nuevo(nombre, tipo, grupo, es_ejemplar, _storage_de(tipo))
+
+    def get_Parameter(self, nombre):
+        for param in self.Parameters:
+            if param.Definition.Name == nombre:
+                return param
+        return None
+
+    def GetParameters(self):
+        return list(self.Parameters)
+
+    def SetFormula(self, param, formula):
+        if not getattr(self.doc, "IsModifiable", False):
+            raise Exception("Revit: Attempt to modify the model outside of transaction")
+        if formula:
+            for nombre in _nombres_en_formula(formula):
+                if self.get_Parameter(nombre) is None and not _es_numero_o_unidad(nombre):
+                    raise Exception(u"Revit: the formula refers to an undefined parameter '{}'".format(nombre))
+        param.Formula = formula
+        param.IsDeterminedByFormula = bool(formula)
+
+    def NewType(self, nombre):
+        if not getattr(self.doc, "IsModifiable", False):
+            raise Exception("Revit: Attempt to modify the model outside of transaction")
+        for tipo in self.Types:
+            if tipo.Name == nombre:
+                raise Exception("Revit: a type named '{}' already exists".format(nombre))
+        tipo = FamilyType(nombre)
+        for otro in self.Types:
+            tipo.valores.update(otro.valores)
+            break
+        self.Types.append(tipo)
+        self.CurrentType = tipo
+        return tipo
+
+    def Set(self, param, valor):
+        if not getattr(self.doc, "IsModifiable", False):
+            raise Exception("Revit: Attempt to modify the model outside of transaction")
+        if self.CurrentType is None:
+            raise Exception("Revit: there is no current type")
+        if param.IsDeterminedByFormula:
+            raise Exception("Revit: the parameter is determined by a formula")
+        self.CurrentType.valores[param.Definition.Name] = valor
+        return True
+
+    def AssociateElementParameterToFamilyParameter(self, param_elemento, param_familia):
+        if not getattr(self.doc, "IsModifiable", False):
+            raise Exception("Revit: Attempt to modify the model outside of transaction")
+        self.asociaciones[id(param_elemento)] = param_familia
+        param_elemento.asociado = param_familia
+
+    def GetAssociatedFamilyParameter(self, param_elemento):
+        return getattr(param_elemento, "asociado", None)
+
+
+def _storage_de(spec):
+    nombre = str(spec)
+    if nombre in ("Text", "Url"):
+        return StorageType.String
+    if nombre in ("Integer", "YesNo"):
+        return StorageType.Integer
+    if nombre in ("Material", "FamilyType", "Image"):
+        return StorageType.ElementId
+    return StorageType.Double
+
+
+def _nombres_en_formula(formula):
+    import re
+
+    return [n.strip() for n in re.split(r"[+\-*/()<>=,]| and | or | if | then | else |\bnot\b", formula) if n.strip()]
+
+
+def _es_numero_o_unidad(texto):
+    import re
+
+    return bool(re.match(r"^[0-9.]+\s*(mm|m|cm|ft|\"|'|°|deg)?$", texto)) or texto.lower() in ("true", "false", "pi", "abs", "sqrt", "max", "min", "round")
 
 
 # ---------------------------------------------------------------------------

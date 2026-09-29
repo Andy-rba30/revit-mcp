@@ -98,7 +98,7 @@ def test_se_registran_todas_y_ninguna_retirada(servidor):
     mcp, _ = servidor
     nombres = sorted(t.name for t in mcp._tool_manager.list_tools())
     assert nombres == sorted(HERRAMIENTAS)
-    assert len(HERRAMIENTAS) == 52
+    assert len(HERRAMIENTAS) == 66
     assert not set(nombres) & set(HERRAMIENTAS_RETIRADAS)
     assert len(HERRAMIENTAS_RETIRADAS) == 51
     # cada sustituta empieza por una herramienta registrada
@@ -468,4 +468,46 @@ def test_analytical_status_y_fix_analytical_alignment():
     assert datos["data"] == {"tolerance_mm": 25, "max": 500, "element_ids": [1, 2]}
     datos = _llamar(f, "fix_analytical_alignment", element_ids=[1], simular=True)
     assert datos["data"] == {"element_ids": [1], "tolerance_mm": 50, "simular": True, "forzar": False}
+    assert puente.llamadas[-1][3] == 600.0
+
+
+def test_herramientas_del_editor_de_familias_despachan():
+    rutas = ["/family/info/", "/family/open/", "/family/parameters/", "/family/reference_planes/", "/family/dimensions/",
+             "/family/solids/", "/family/locks/", "/family/types/", "/family/connectors/", "/family/save/", "/family/load/",
+             "/family/close/", "/family/validate/", "/family/build/"]
+    puente = Puente(dict((ruta, (lambda d: {"data": d})) for ruta in rutas))
+    f = _herramientas(puente)
+    datos = _llamar(f, "family_info")
+    assert datos["data"] == {"include_templates": False} and puente.llamadas[-1][3] == 30.0
+    datos = _llamar(f, "family_info", family_doc="Placa base", include_templates=True, contains="generico")
+    assert datos["data"] == {"include_templates": True, "family_doc": "Placa base", "contains": "generico"}
+    assert "required" in _llamar(f, "family_open")
+    datos = _llamar(f, "family_open", template="Modelo generico metrico.rft", name="Placa base", simular=True)
+    assert datos["data"] == {"simular": True, "template": "Modelo generico metrico.rft", "name": "Placa base"} and puente.llamadas[-1][3] == 120.0
+    datos = _llamar(f, "family_open", family_name="Rigidizador")
+    assert datos["data"] == {"simular": False, "family_name": "Rigidizador"}
+    for herramienta, clave, ruta in (("family_add_parameters", "parameters", "/family/parameters/"),
+                                     ("family_add_reference_planes", "planes", "/family/reference_planes/"),
+                                     ("family_add_dimensions", "dimensions", "/family/dimensions/"),
+                                     ("family_create_solids", "solids", "/family/solids/"),
+                                     ("family_lock_faces", "locks", "/family/locks/"),
+                                     ("family_set_type_values", "types", "/family/types/"),
+                                     ("family_add_connectors", "connectors", "/family/connectors/")):
+        datos = _llamar(f, herramienta, **{"family_doc": "Placa base", clave: [{"name": "x"}], "simular": True})
+        assert datos["data"] == {"family_doc": "Placa base", clave: [{"name": "x"}], "simular": True, "forzar": False}, herramienta
+        assert puente.llamadas[-1][1] == ruta and puente.llamadas[-1][3] == 120.0
+    datos = _llamar(f, "family_save", family_doc="Placa base", file_path="C:\\F\\placa.rfa", overwrite=True)
+    assert datos["data"] == {"family_doc": "Placa base", "file_path": "C:\\F\\placa.rfa", "overwrite": True, "simular": False}
+    assert "required" in _llamar(f, "family_load_into_project")
+    datos = _llamar(f, "family_load_into_project", family_doc="Placa base", overwrite_parameters=True)
+    assert datos["data"] == {"overwrite_parameters": True, "simular": False, "family_doc": "Placa base"} and puente.llamadas[-1][3] == 600.0
+    datos = _llamar(f, "family_close", family_doc="Placa base", save=True)
+    assert datos["data"] == {"family_doc": "Placa base", "save": True, "simular": False}
+    datos = _llamar(f, "family_validate", family_doc="Placa base")
+    assert datos["data"] == {"family_doc": "Placa base", "restore": True, "simular": False, "forzar": False} and puente.llamadas[-1][3] == 600.0
+    datos = _llamar(f, "family_validate", family_doc="Placa base", flex_cases=[{"name": "x"}], restore=False)
+    assert datos["data"]["flex_cases"] == [{"name": "x"}] and datos["data"]["restore"] is False
+    datos = _llamar(f, "build_family_from_spec", spec={"name": "P"}, save_path="C:\\F\\p.rfa", load_into_project=True, simular=True)
+    assert datos["data"] == {"spec": {"name": "P"}, "load_into_project": True, "overwrite": False, "overwrite_parameters": False,
+                             "close": False, "simular": True, "forzar": False, "save_path": "C:\\F\\p.rfa"}
     assert puente.llamadas[-1][3] == 600.0

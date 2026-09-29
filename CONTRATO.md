@@ -3,7 +3,7 @@
 Este documento describe el servidor HTTP que la extensión de pyRevit levanta
 dentro de Revit, cómo se protege, cómo escribe en el modelo y qué rutas
 expone. Es la referencia para el puente `main.py` y para cualquier cliente que
-quiera hablar con Revit directamente. Versión del conector: **0.5.0**.
+quiera hablar con Revit directamente. Versión del conector: **0.6.0**.
 
 ## El servidor
 
@@ -14,7 +14,7 @@ quiera hablar con Revit directamente. Versión del conector: **0.5.0**.
 | Prefijo de las rutas | `http://127.0.0.1:48884/revit_mcp/...` |
 | Motor | IronPython 2.7 (los manejadores viven en `revit_mcp/`) |
 | Puente MCP | `main.py` (CPython 3.11+, SDK mcp 2.2) en `http://127.0.0.1:8000` |
-| Herramientas MCP | **52** (19 de lectura, 28 de escritura con `simular`, 4 macros, `execute_revit_code`); 0.4.0 consolida las 78 de 0.3.x en 40 sin cambiar las rutas HTTP, añade los lotes `/set_parameters/` y `/create_elements/` (una transacción por llamada) y las macros propias del usuario (`/macros/`, `/macros/run/`); 0.5.0 (entrega 2b) añade 12 herramientas de estructuras metálicas y modelo analítico (`revit_mcp/acero.py`, `revit_mcp/analitico.py`) y amplía `describe_element`, `list_types`, `join_geometry` y `export` |
+| Herramientas MCP | **66** (20 de lectura, 39 de escritura con `simular`, 6 macros, `execute_revit_code`); 0.4.0 consolida las 78 de 0.3.x en 40 sin cambiar las rutas HTTP, añade los lotes `/set_parameters/` y `/create_elements/` (una transacción por llamada) y las macros propias del usuario (`/macros/`, `/macros/run/`); 0.5.0 (entrega 2b) añade 12 herramientas de estructuras metálicas y modelo analítico (`revit_mcp/acero.py`, `revit_mcp/analitico.py`) y amplía `describe_element`, `list_types`, `join_geometry` y `export`; 0.6.0 (entrega 2c) añade 14 herramientas del editor de familias (`revit_mcp/familias.py`, `familias_edicion.py`, `familias_spec.py`) que escriben en un documento de familia |
 
 El servidor debe usarse **solo desde loopback**. pyRevit Routes escucha en
 todas las interfaces, así que el usuario aplica a mano esta regla de firewall
@@ -28,7 +28,7 @@ netsh advfirewall firewall add rule name="Block pyRevit Routes" dir=in action=bl
 La regla bloquea el tráfico entrante desde la red; las conexiones locales
 (`127.0.0.1`) del puente y de las pruebas siguen funcionando.
 
-## Herramientas MCP (0.5.0)
+## Herramientas MCP (0.6.0)
 
 La consolidación ocurre en el puente (`tools/`): cada herramienta que queda
 despacha a las rutas HTTP de 0.3.x (que siguen todas existiendo) o a las tres
@@ -53,6 +53,19 @@ varios elementos es un **lote**: recibe una lista, valida todo antes de abrir la
 transacción, aplica en una sola transacción y responde con `fallidos[]` sin
 abortar por un elemento; `create_steel_frame` es una **macro** (valida, `plan`
 con `simular`, una transacción, `creados` agrupado).
+
+La entrega 2c (0.6.0) añade 14 herramientas del **editor de familias** (las 18
+del bloque C original de `PROMPT_FASE2.md`, reunidas con las reglas de la
+consolidación: `family_new` se absorbe en `family_open`; `family_create_extrusion`,
+`family_create_sweep`, `family_create_revolve` y `family_create_blend` en
+`family_create_solids(kind=...)`; `family_add_parameter`,
+`family_add_reference_plane`, `family_add_dimension_with_label`,
+`family_lock_face_to_plane`, `family_set_type_values` y `family_add_connector`
+pasan a **lotes** con una lista). Ninguna existió antes como herramienta MCP, así
+que no están en `HERRAMIENTAS_RETIRADAS`. Todas escriben en el **documento de
+familia** (`family_doc`) mediante `escritura.ejecutar_familia`, salvo
+`family_load_into_project`, que escribe en el proyecto; `family_validate` y
+`build_family_from_spec` son **macros**.
 
 | Herramienta | Sustituye a | Ruta(s) HTTP | Cómo |
 |---|---|---|---|
@@ -107,6 +120,20 @@ con `simular`, una transacción, `creados` agrupado).
 | `add_plate_or_stiffener` | nuevo (0.5.0) | **`POST /add_plate/`** | familia alojada en cara (`top`, `bottom`, `web`) o de punto sobre una viga o pilar |
 | `split_beam` | nuevo (0.5.0) | **`POST /split_beam/`** | 0.5.1: `FamilyInstance.Split`; sin él, `CopyElement` por tramo y `LocationCurve` con la unión del extremo suelta; `metodo`, `avisos` |
 | `fix_analytical_alignment` | nuevo (0.5.0), lote | **`POST /fix_analytical/`** | `AnalyticalMember.SetCurve` hacia el nodo ajeno más cercano dentro de `tolerance_mm` |
+| `family_info` | nuevo (0.6.0) | **`POST /family/info/`** | resumen de un documento de familia abierto (parámetros, tipos, planos, vistas por `ViewType`, sólidos, cotas, conectores); sin `family_doc`, los documentos abiertos y, con `include_templates`, las `.rft` de `FamilyTemplatePath` |
+| `family_open` | nuevo (0.6.0); absorbe `family_new` del bloque C original | **`POST /family/open/`** | `template` + `name` (`NewFamilyDocument`), `file_path` (`OpenDocumentFile`) o `family_name` (`doc.EditFamily`; 409 con transacción abierta en el proyecto, 400 in situ / no editable) |
+| `family_add_parameters` | nuevo (0.6.0), lote | **`POST /family/parameters/`** | `FamilyManager.AddParameter` con `GroupTypeId` y `SpecTypeId` / `Category` / `ExternalDefinition`, `SetFormula` |
+| `family_add_reference_planes` | nuevo (0.6.0), lote | **`POST /family/reference_planes/`** | `NewReferencePlane` con nombre y `ELEM_REFERENCE_NAME` |
+| `family_add_dimensions` | nuevo (0.6.0), lote | **`POST /family/dimensions/`** | `NewDimension` + `FamilyLabel` / `AreSegmentsEqual` |
+| `family_create_solids` | nuevo (0.6.0), lote; absorbe `family_create_extrusion` / `sweep` / `revolve` / `blend` | **`POST /family/solids/`** | `kind` = `extrusion` / `sweep` / `revolution` / `blend`, `is_void`, `lock_ends_to`, `lock_faces`, `material_parameter` |
+| `family_lock_faces` | nuevo (0.6.0), lote de `family_lock_face_to_plane` | **`POST /family/locks/`** | `NewAlignment` entre una cara (`ComputeReferences`) y un plano de referencia |
+| `family_set_type_values` | nuevo (0.6.0), lote | **`POST /family/types/`** | `NewType`, `CurrentType`, `Set`; `antes` / `despues` por tipo |
+| `family_add_connectors` | nuevo (0.6.0), lote | **`POST /family/connectors/`** | `ConnectorElement.CreateDuctConnector` / `CreatePipeConnector` / `CreateElectricalConnector` |
+| `family_save` | nuevo (0.6.0) | **`POST /family/save/`** | `SaveAs` con `OverwriteExistingFile`; 409 si existe |
+| `family_load_into_project` | nuevo (0.6.0) | **`POST /family/load/`** | `LoadFamily(proyecto, IFamilyLoadOptions)` en `IA: Cargar familia <nombre>`; 409 `already_loaded` salvo `overwrite_parameters` |
+| `family_close` | nuevo (0.6.0) | **`POST /family/close/`** | `Close(save)` solo de documentos abiertos por el MCP y nunca el activo |
+| `family_validate` | nuevo (0.6.0), **macro** | **`POST /family/validate/`** | un `TransactionGroup` por caso de flexión; sólidos con volumen; `failed_cases` |
+| `build_family_from_spec` | nuevo (0.6.0), **macro** | **`POST /family/build/`** | valida el `spec` entero antes de abrir nada y ejecuta los pasos en orden; cierra sin guardar si uno falla |
 | `execute_revit_code` | — | `POST /execute_code/` | igual, último recurso |
 
 Todas las de escritura devuelven `ms` (tiempo en Revit) y, desde 0.4.0,
@@ -146,6 +173,7 @@ las 4 macros y todas las rutas de escritura de 0.3.x que siguen existiendo:
 | **Verificación** | Cada manejador vuelve a leer lo que cambió: creación → `"creados": [{"id", "categoria", "tipo", "nivel", "bbox_mm"}]`; parámetros → `"antes"` / `"despues"`; borrado → `"eliminados"` / `"en_cascada"`. La respuesta lleva `"ok"` y `"verificacion": {"coincide": bool, "detalle"}`. Si lo releído no coincide con lo pedido, `ok=false` con explicación y **nunca** se reintenta solo. |
 | **Límite de alcance** | `delete_elements`, `transform_elements` (en `array`, `elementos × (count-1)`), `change_type`, `set_workset`, las macros de 0.3.0 (`/grid_levels/`, `/sheet_set/`, `/import_civil/`, sobre el total de elementos que crean), los lotes de 0.4.0 (`/set_parameters/` sobre `elementos × parámetros`, `/create_elements/` sobre `elements`), las macros del usuario (sobre `plan()["count"]`) y los lotes de 0.5.0 (`/create_steel_frame/` sobre pilares + vigas, `/create_bracing/` sobre las barras, `/create_truss/`, `/set_structural_properties/` sobre `elementos × propiedades`, `/create_steel_connection/`, `/add_plate/`, `/split_beam/` sobre los tramos, `/fix_analytical/` sobre los nodos a mover, `/join_geometry/` con `element_ids`) rechazan (`400`, con `limite` y `cantidad`) más de 200 por llamada salvo `forzar=true`. `execute_code` exige `description` (`400` si falta) y rechaza código con `doc.Delete(<colección>)` salvo `forzar=true`. |
 | **Respuesta** | Éxito: `200` con los datos, `ok`, `ms`, `copia` (o `simulado`/`haria`). Error controlado: `400`/`404`/`409` con `{"error", ...detalles}`. Excepción: `500` con `error`, `traceback` y `copia` si ya se había hecho. |
+| **Documento de familia (0.6.0)** | `escritura.ejecutar_familia(doc, ruta, data, cuerpo, resolver)` es la variante para las rutas `/family/...`: `resolver(data)` devuelve el documento de familia por `family_doc` (404 con `available_family_docs`), `preparar_familia` responde `409` si ese documento tiene una transacción abierta (`IsModifiable`) o es de solo lectura, la copia del `.rfa` se hace **solo si está guardado en disco** (a `<carpeta del rfa>\backups\<nombre>_<marca>.rfa`; un `.rfa` sin guardar no se copia y `nota_copia` lo dice), el registro va al `mcp_log.jsonl` **del proyecto** y toda respuesta lleva `family_doc` (título actual). Cada llamada abre su propia `transaccion(doc_familia, "...")`. Los documentos que abre el MCP quedan en `familias.DOCUMENTOS_ABIERTOS` (título y alias) y solo esos se pueden cerrar. |
 
 Comandos de ejemplo (PowerShell; `$token` como arriba):
 
@@ -449,6 +477,227 @@ Escritura (todas con `simular`, patrón `escritura.ejecutar`):
 | POST | `/join_geometry/` | nuevo: `element_ids[]` (≥ 2, parejas consecutivas), `coping`, `unjoin`, `simular`, `forzar` (`element_id_a` / `element_id_b` siguen igual) | `JoinGeometryUtils.JoinGeometry` (o `Unjoin`) por pareja consecutiva en una transacción `IA: Unir geometria en cadena (<n> elementos)`; las parejas ya unidas van a `skipped_pairs`; 0.5.1: una pareja que Revit rechaza ("The elements cannot be joined", dos perfiles de acero) va a `fallidos[]` con `nota` y no aborta el lote. Con `coping=true` (0.5.1) **solo** `FamilyInstance.AddCoping`, sin `JoinGeometry`: se recorta la viga (Armazón estructural) contra el otro elemento sea cual sea el orden; `antes`/`despues` con `coped` (`GetCopingIds`), `coped_pairs`, transacción `IA: Recortar acero en cadena (<n> elementos)` |
 | POST | `/fix_analytical/` | `element_ids`*, `tolerance_mm` (50), `simular`, `forzar` | **Lote.** Para cada nodo de cada `AnalyticalMember` asociado: el nodo ajeno más cercano; a menos de 1 mm ya está unido (`already_joined`), a menos de `tolerance_mm` se mueve con `AnalyticalMember.SetCurve` (los dos extremos del miembro en una sola llamada), más lejos va a `sin_objetivo[]` (`nearest_mm`). Una transacción `IA: Alinear analitico`. `moves[]` (`end`, `from_mm`, `to_mm`, `distance_mm`, `target_analytical_id`, `target_element_id`, `coincide`, `despues_mm`), `antes` / `despues` por nodo (`"<id>.start"`), `fallidos[]` (`SetCurve`), `sin_analitico[]`, `plan.counts`; sin movimientos, `count: 0` y ninguna transacción. Con `simular`, `haria` = los movimientos previstos |
 
+### Editor de familias (0.6.0)
+
+Entrega 2c (bloque C de `herramientas-dev/PROMPT_FASE2.md`, adaptado por
+`PROMPT_FASE2C.md`). Manejadores en `revit_mcp/familias.py` (documentos,
+plantillas, vistas, resumen, abrir / guardar / cargar / cerrar),
+`familias_edicion.py` (lotes de edición) y `familias_spec.py` (macros). Reglas
+propias del bloque:
+
+- **Documento de familia.** Se identifica por `family_doc`: el `Title` del
+  documento entre `Application.Documents` con `IsFamilyDocument`, o el `name`
+  con que el MCP lo abrió (`family_open` devuelve el título real, `Familia1`
+  para una familia nueva; tras `family_save` pasa a ser el nombre del archivo y
+  la respuesta lo dice en `family_doc` / `previous_family_doc`; los alias
+  antiguos siguen valiendo). `doc.EditFamily` no se llama con una transacción
+  abierta en el proyecto (`409`), ni sobre familias in situ o no editables
+  (`400`); una familia del sistema no es una `Family` y responde `404` con
+  `available_families`.
+- **Escritura.** Patrón `escritura.ejecutar_familia` (ver "Escritura segura"):
+  registro en el `mcp_log.jsonl` del proyecto, `409` si el documento de familia
+  tiene una transacción abierta, copia del `.rfa` solo si está guardado, una
+  transacción `IA: ...` en el documento de familia por llamada. Todas las rutas
+  de edición son **lotes**: reciben una lista, validan todo antes de abrir la
+  transacción (`400` / `404` / `409` con `index`), aplican en una transacción y
+  responden `creados[]` o `antes` / `despues`; con `simular`, `haria[]`.
+  `comprobar_alcance` (200 salvo `forzar`) sobre el número de elementos del
+  lote.
+- **API 2024+.** `FamilyManager.AddParameter(nombre, GroupTypeId, SpecTypeId,
+  is_instance)`; `family_type:<BuiltInCategory>` usa la sobrecarga con
+  `Category`; `shared_parameter_guid` la de `ExternalDefinition` (buscada por
+  GUID en el archivo de parámetros compartidos activo, `409`
+  `sin_archivo_compartido` si no hay). Los grupos son nombres de `GroupTypeId`
+  (`Geometry`, `Materials`, `Data`, `Constraints`, `Construction`,
+  `Dimensions`, `IdentityData`, `Text`, `Graphics`, `Mechanical`, `Electrical`,
+  `Plumbing`, `Structural`, `Visibility`, `General`, `Other`; alias en
+  español), nunca el texto visible. Los `data_type`: `length`, `number`,
+  `integer`, `text`, `yes_no`, `material`, `angle`, `area`, `volume`,
+  `family_type:<OST_...>`.
+- **Idioma.** Plantillas `.rft` por nombre de archivo dentro de
+  `Application.FamilyTemplatePath` (y sus subcarpetas; sin tildes ni mayúsculas
+  al comparar; `404` con `available_templates` si no está). Vistas por
+  `ViewType` y nivel (`{"view_type": "FloorPlan", "level": "..."}`: el nivel se
+  resuelve por el primer `Level` si el nombre no coincide) o por dirección
+  (`{"view_type": "Elevation", "direction": "front"}`, a partir de
+  `View.ViewDirection`), o por `id`; nunca por el nombre visible. Categorías por
+  `BuiltInCategory`. Si no se da `view`, los planos y cotas verticales van a la
+  primera planta y los horizontales al primer alzado.
+- **Referencias de caras** (`NewAlignment`, conectores): `Options.ComputeReferences
+  = True`, `IncludeNonVisibleObjects = True` y `Options.View` = la vista donde el
+  plano y la cara son visibles; el sólido se regenera antes. La cara se elige
+  por su normal (`top` +Z, `bottom` -Z, `right` +X, `left` -X, `back` +Y,
+  `front` -Y o `{"x","y","z"}`), la más avanzada en esa dirección.
+- **Planos de referencia.** `direction` = `x` (plano paralelo a X, normal Y, se
+  dibuja en planta), `y` (normal X, en planta) u `horizontal` (normal Z, en un
+  alzado), con `origin_mm`; `is_reference` = `not_a_reference`, `strong`,
+  `weak`, `left`, `center_left_right`, `right`, `front`, `center_front_back`,
+  `back`, `bottom`, `center_elevation`, `top` (o `true` / `false`), fijado en
+  `ELEM_REFERENCE_NAME`.
+- **Perfiles y planos de boceto.** Un perfil es un lazo (lista de puntos
+  `{x, y, z}` en mm, `{"rect": {"min_mm", "max_mm"}}` o `{"circle":
+  {"center_mm", "radius_mm"}}`) o una lista de lazos (`{"loops": [...]}` o lista
+  de listas); los puntos se proyectan sobre el `sketch_plane`, que es el nombre
+  de un plano de referencia (`SketchPlane.Create(doc, referencia)`) o
+  `{"view_type": "FloorPlan", "level": ...}` (plano del nivel,
+  `SketchPlane.Create(doc, nivel.Id)`).
+
+Lectura (sin transacción):
+
+| Método | Ruta | Parámetros | Respuesta |
+|--------|------|------------|-----------|
+| POST | `/family/info/` | `family_doc`, `include_templates`, `contains` | Con `family_doc`: `family_doc`, `file_path`, `opened_by_mcp`, `category` (`OST_...`), `categoria`, `parameters[]` (`id`, `name`, `data_type`, `group`, `is_instance`, `formula`, `is_shared`, `guid`, `storage_type`, `unit`), `types[]` (`name`, `is_current`, `values` en unidades del contrato), `reference_planes[]` (`id`, `name`, `origin_mm`, `normal`, `is_reference`), `views[]` (`id`, `view_type`, `name`, `level`, `direction`), `levels[]`, `solids[]` (`id`, `kind`, `class`, `is_void`, `volume_m3`, `bbox_mm`, `material_parameter`, `start_mm`, `end_mm`), `dimensions[]` (`id`, `label`, `equal`, `references[]`), `connectors[]` (`id`, `domain`, `system_type`, `shape`, `radius_mm`, `width_mm`, `height_mm`), `counts`, `is_modified`. Sin `family_doc`: `open_family_docs[]` (`family_doc`, `file_path`, `opened_by_mcp`, `name`, `aliases`, `is_active`), `family_template_path` y, con `include_templates`, `templates[]` (`name`, `path`, `folder`; filtro `contains` sin tildes; hasta 80, `templates_truncated`) |
+
+Escritura en el documento de familia (todas con `simular`, patrón
+`escritura.ejecutar_familia`; la respuesta lleva siempre `family_doc`):
+
+| Método | Ruta | Parámetros | Respuesta |
+|--------|------|------------|-----------|
+| POST | `/family/open/` | `template` + `name`, o `file_path` (`.rfa`), o `family_name`; `simular` | Nueva (`Application.NewFamilyDocument(rft)`), abierta (`OpenDocumentFile`) o `doc.EditFamily(Family)`. Sin copia ni transacción (no escribe en el proyecto), con registro. Responde el resumen de `/family/info/` más `mode` (`new` / `open` / `edit`), `name` y `message`; `family_doc` es el título que hay que usar después. `404` con `available_templates` / `available_families`; `409` `open_transaction` (EditFamily con transacción abierta); `400` in situ / no editable |
+| POST | `/family/parameters/` | `family_doc`*, `parameters[]` de {`name`*, `data_type`*, `group`*, `is_instance`, `formula`, `shared_parameter_guid`}, `simular`, `forzar` | **Lote.** `AddParameter` por parámetro y después `SetFormula` (las fórmulas pueden usar parámetros del mismo lote; `400` con `undefined` si usan uno no definido). `409` con `existing` si el nombre ya existe; `400` con `available_data_types` / `available_groups`; `404` con `available_shared_parameters` si el GUID no está. Transacción `IA: Parametros de familia (<n>)`. `creados[]` (descripción de cada parámetro), `parameters[]` (todos) |
+| POST | `/family/reference_planes/` | `family_doc`*, `planes[]` de {`name`*, `origin_mm`, `direction` (`x`, `y`, `horizontal`), `view`, `is_reference`}, `simular`, `forzar` | **Lote.** `NewReferencePlane(bubble, free, cutVector, view)` (6 m de largo centrado en `origin_mm`), `Name` y `ELEM_REFERENCE_NAME`. `409` si el nombre existe. Transacción `IA: Planos de referencia (<n>)`. `creados[]` con `origin_mm`, `normal`, `is_reference`; `avisos` si `is_reference` no se pudo fijar |
+| POST | `/family/dimensions/` | `family_doc`*, `dimensions[]` de {`reference_planes[]`* (≥ 2 nombres, paralelos), `parameter` (etiqueta), `equal` (≥ 3 planos), `view`, `offset_mm` (500)}, `simular`, `forzar` | **Lote.** `NewDimension(view, línea, ReferenceArray)` con la línea paralela a la normal de los planos entre el primero y el último (ordenados), desplazada `offset_mm`; `Dimension.FamilyLabel = parámetro`; `AreSegmentsEqual` con `equal`. `400` si no son paralelos o falta etiqueta y `equal`; `404` con `available_reference_planes` / `available_parameters`. Transacción `IA: Cotas con etiqueta (<n>)`. `creados[]` con `label`, `equal`, `reference_planes`, `length_mm` |
+| POST | `/family/solids/` | `family_doc`*, `solids[]` de {`name`, `kind` (`extrusion` \| `sweep` \| `revolution` \| `blend`), `sketch_plane`, `is_void`, `material_parameter`, `lock_ends_to` {`start`, `end`} (solo extrusión), `lock_faces[]` {`face`, `reference_plane`, `view`}; extrusión: `profile`*, `start_mm` (0), `end_mm`*; barrido: `path`* (puntos sobre el plano), `profile`* (en el plano perpendicular al inicio de la trayectoria); revolución: `profile`*, `axis`* {`start_mm`, `end_mm`}, `start_angle_deg` (0), `end_angle_deg` (360); fundido: `base_profile`*, `top_profile`*, `end_mm`*}, `simular`, `forzar` | **Lote.** `NewExtrusion(is_solid, CurveArrArray, SketchPlane, end - start)` (+ `EXTRUSION_START_PARAM` / `EXTRUSION_END_PARAM` si `start_mm` ≠ 0), `NewSweep(..., NewCurveLoopsProfile, 0, ProfilePlaneLocation.Start)`, `NewRevolution(..., Line eje, radianes)`, `NewBlend(top, base, plano)` + `TopOffset`. Con `material_parameter`, `AssociateElementParameterToFamilyParameter(MATERIAL_ID_PARAM, parámetro)`. Con bloqueos, `Regenerate` y `NewAlignment` de la cara (por normal) al plano. Transacción `IA: Solidos de familia (<n>)`. `creados[]` con `kind`, `is_void`, `volume_m3`, `start_mm`, `end_mm`, `material_parameter`; `avisos` (bloqueo o material no aplicado) |
+| POST | `/family/locks/` | `family_doc`*, `locks[]` de {`solid_id`*, `face` (`top`), `reference_plane`*, `view`}, `simular`, `forzar` | **Lote.** `NewAlignment(view, referencia de la cara, plano.GetReference())`. `404` con `available_solids` / `available_reference_planes`; `400` "No '<face>' face with a reference". Transacción `IA: Bloquear caras (<n>)`. `locks[]` con `id` |
+| POST | `/family/types/` | `family_doc`*, `types[]` de {`type_name`*, `values` {parámetro: valor}, `create_if_missing` (true)}, `simular`, `forzar` | **Lote.** `NewType` si falta, `CurrentType = tipo`, `Set(parámetro, valor)`; longitudes en mm, áreas mm², volúmenes mm³, ángulos en grados, `yes_no` como booleano, materiales y tipos de familia por nombre (o id). `400` si el parámetro está determinado por fórmula; `404` con `available_parameters` / `available_types`. Transacción `IA: Tipos de familia (<n>)`. `types[]` (`type_name`, `created`, `antes`, `despues`, `fallidos`), `antes` / `despues` por tipo, `fallidos[]`, `family_types[]` |
+| POST | `/family/connectors/` | `family_doc`*, `connectors[]` de {`domain`* (`hvac`, `piping`, `electrical`), `solid_id`*, `face` (`top`), `system_type`* (nombre de `DuctSystemType` / `PipeSystemType` / `ElectricalSystemType`), `size_mm` (diámetro, o {`width`, `height`}; obligatorio salvo eléctrico)}, `simular`, `forzar` | **Lote.** `ConnectorElement.CreateDuctConnector` / `CreatePipeConnector` / `CreateElectricalConnector(doc, sistema, referencia de la cara)` y `Radius` / `Width` + `Height` (+ `Shape = Rectangular`). El dominio estructural no existe: `400`. `400` con `available_system_types`. Transacción `IA: Conectores de familia (<n>)`. `creados[]` con `domain`, `system_type`, `shape`, `radius_mm`, `width_mm`, `height_mm` |
+| POST | `/family/save/` | `family_doc`*, `file_path`* (`.rfa`), `overwrite`, `simular` | `SaveAs(ruta, SaveAsOptions{OverwriteExistingFile})`. `409` con `exists` si el archivo existe y no `overwrite`; `404` si la carpeta no existe. Sin transacción. `file_path`, `size_kb`, `overwritten`, `family_doc` (nuevo título = nombre del archivo), `previous_family_doc`, `verificacion` |
+| POST | `/family/load/` | `family_doc`* o `file_path`*, `overwrite_parameters`, `simular` | Escribe en el **proyecto** (`escritura.ejecutar`): `doc_familia.LoadFamily(proyecto, IFamilyLoadOptions)` o `doc.LoadFamily(rfa, opciones, out Family)` en `IA: Cargar familia <nombre>`. `409` `already_loaded` (con `family_id` y `types`) si la familia ya está cargada y no `overwrite_parameters`. `creados[]` (símbolos nuevos), `family`, `family_id`, `types[]`, `reloaded` |
+| POST | `/family/close/` | `family_doc`*, `save`, `simular` | `Close(save)` solo de documentos abiertos por el MCP (`400` "was not opened by the MCP") y que no sean el activo (`409`); `save=true` exige que el documento esté guardado (`400`). `closed`, `saved`, `open_family_docs[]` |
+| POST | `/family/validate/` | `family_doc`*, `flex_cases[]` de {`name`, `type`, `values` {parámetro: valor}} (vacío = un caso por tipo), `restore` (true), `simular`, `forzar` | **Macro.** Por caso, un `TransactionGroup` `IA: Validar <caso>` con una transacción `IA: Flexionar <caso>`: `CurrentType`, `Set`, `doc.Regenerate()` y lectura del volumen de cada `GenericForm`; `RollBack` del grupo con `restore` (o `Assimilate`). Los errores de regeneración no salen en `GetWarnings()`: llegan como fallos al preprocesador (`ULTIMOS_ERRORES` → `revit_errors`) o como excepción en `Regenerate` / `Commit`. `cases[]` (`name`, `type`, `values`, `ok`, `motivo`, `solids[]`, `empty_solids[]`, `revit_errors[]`), `passed`, `failed`, `failed_cases[]`, `ok`. Con `simular`, `haria` (los casos) y `solids` actuales |
+| POST | `/family/build/` | `spec`*, `save_path`, `load_into_project`, `overwrite`, `overwrite_parameters`, `close`, `simular`, `forzar` | **Macro.** Valida el `spec` completo **antes de abrir nada** (`400` / `404` con `spec_error: true`, `section`, `index` y el detalle: plantilla inexistente con `available_templates`, plano no definido en `reference_planes`, fórmula con parámetros no definidos, tipo o caso con parámetros desconocidos, `material_parameter` no declarado, conector sobre un sólido que no existe, `category` que no es `BuiltInCategory`). Después, en orden y cada paso en su transacción: `open` → `category` → `parameters` → `reference_planes` → `dimensions` → `solids` → `connectors` → `types` → `validate` (un caso por tipo del `spec`, o `flex_cases`) → `save` → `load` → `close`. Ante cualquier fallo cierra sin guardar y responde con `failed_step`, `steps` (los completados) y `closed_without_saving`. `comprobar_alcance` sobre el total de elementos del `spec`. Con `simular`, `plan` (`name`, `template`, `counts`, `steps`, `parameters`, `reference_planes`, `solids`, `types`, `total`). Éxito: `steps[]`, `family_doc`, `file_path`, `family_id`, `loaded_types[]`, `validation`, `summary` (el de `/family/info/`), `avisos` |
+
+**Formato de `spec`** (unidades del contrato: mm y grados). `view` y
+`sketch_plane` se dan como `{"view_type": "FloorPlan", "level": "Nivel de
+referencia"}` (el nivel se resuelve por el primer `Level` si el nombre no
+coincide) o como el nombre de un plano de referencia **del propio `spec`**: los
+planos de la plantilla tienen nombres que dependen del idioma y no se validan
+sin abrirla. `template` es un nombre de archivo que se busca en
+`FamilyTemplatePath`, o una ruta; `category` es un `BuiltInCategory`; `group`
+un `GroupTypeId`; todo parámetro usado en `material_parameter`, en una cota o
+en un tipo debe estar declarado en `parameters`; los conectores nombran el
+sólido del `spec` (`solid`).
+
+Ejemplo 1: placa base con cuatro agujeros (dos tipos):
+
+```json
+{
+  "name": "Placa base MCP",
+  "template": "Modelo genérico métrico.rft",
+  "category": "OST_StructConnections",
+  "parameters": [
+    {"name": "Ancho", "data_type": "length", "group": "Geometry"},
+    {"name": "Largo", "data_type": "length", "group": "Geometry"},
+    {"name": "Espesor", "data_type": "length", "group": "Geometry"},
+    {"name": "Diámetro perno", "data_type": "length", "group": "Geometry"},
+    {"name": "Diámetro agujero", "data_type": "length", "group": "Geometry", "formula": "Diámetro perno + 2 mm"},
+    {"name": "Material placa", "data_type": "material", "group": "Materials"}
+  ],
+  "reference_planes": [
+    {"name": "Izquierda", "origin_mm": {"x": -150, "y": 0, "z": 0}, "direction": "y", "is_reference": "left"},
+    {"name": "Derecha", "origin_mm": {"x": 150, "y": 0, "z": 0}, "direction": "y", "is_reference": "right"},
+    {"name": "Delante", "origin_mm": {"x": 0, "y": -150, "z": 0}, "direction": "x", "is_reference": "front"},
+    {"name": "Detrás", "origin_mm": {"x": 0, "y": 150, "z": 0}, "direction": "x", "is_reference": "back"},
+    {"name": "Cara superior", "origin_mm": {"x": 0, "y": 0, "z": 20}, "direction": "horizontal", "is_reference": "top"}
+  ],
+  "dimensions": [
+    {"reference_planes": ["Izquierda", "Derecha"], "parameter": "Ancho"},
+    {"reference_planes": ["Delante", "Detrás"], "parameter": "Largo"}
+  ],
+  "solids": [
+    {"name": "placa", "kind": "extrusion", "sketch_plane": {"view_type": "FloorPlan"},
+     "profile": {"rect": {"min_mm": {"x": -150, "y": -150, "z": 0}, "max_mm": {"x": 150, "y": 150, "z": 0}}},
+     "start_mm": 0, "end_mm": 20, "material_parameter": "Material placa",
+     "lock_ends_to": {"end": "Cara superior"},
+     "lock_faces": [{"face": "left", "reference_plane": "Izquierda"}, {"face": "right", "reference_plane": "Derecha"},
+                    {"face": "front", "reference_plane": "Delante"}, {"face": "back", "reference_plane": "Detrás"}]},
+    {"name": "agujero 1", "kind": "extrusion", "is_void": true, "sketch_plane": {"view_type": "FloorPlan"},
+     "profile": {"circle": {"center_mm": {"x": 100, "y": 100, "z": 0}, "radius_mm": 11}}, "start_mm": -5, "end_mm": 30},
+    {"name": "agujero 2", "kind": "extrusion", "is_void": true, "sketch_plane": {"view_type": "FloorPlan"},
+     "profile": {"circle": {"center_mm": {"x": -100, "y": 100, "z": 0}, "radius_mm": 11}}, "start_mm": -5, "end_mm": 30},
+    {"name": "agujero 3", "kind": "extrusion", "is_void": true, "sketch_plane": {"view_type": "FloorPlan"},
+     "profile": {"circle": {"center_mm": {"x": 100, "y": -100, "z": 0}, "radius_mm": 11}}, "start_mm": -5, "end_mm": 30},
+    {"name": "agujero 4", "kind": "extrusion", "is_void": true, "sketch_plane": {"view_type": "FloorPlan"},
+     "profile": {"circle": {"center_mm": {"x": -100, "y": -100, "z": 0}, "radius_mm": 11}}, "start_mm": -5, "end_mm": 30}
+  ],
+  "types": [
+    {"name": "PL300x300x20", "values": {"Ancho": 300, "Largo": 300, "Espesor": 20, "Diámetro perno": 20}},
+    {"name": "PL400x400x25", "values": {"Ancho": 400, "Largo": 400, "Espesor": 25, "Diámetro perno": 24}}
+  ]
+}
+```
+
+Las cotas etiquetadas con `Ancho` y `Largo` y los bloqueos de las caras a los
+planos hacen que los tipos cambien la placa; el espesor se gobierna con la cota
+de la cara superior si se añade `{"reference_planes": ["<plano horizontal en
+z=0>", "Cara superior"], "parameter": "Espesor"}` (con un plano horizontal
+propio en z = 0). Los agujeros son vaciados fijos; para que sigan a la placa se
+añaden planos de referencia y cotas por agujero.
+
+Ejemplo 2: perfil W paramétrico (extrusión del alma y las alas con fórmulas):
+
+```json
+{
+  "name": "Perfil W MCP",
+  "template": "Modelo genérico métrico.rft",
+  "category": "OST_StructuralFraming",
+  "parameters": [
+    {"name": "d", "data_type": "length", "group": "Dimensions"},
+    {"name": "bf", "data_type": "length", "group": "Dimensions"},
+    {"name": "tw", "data_type": "length", "group": "Dimensions"},
+    {"name": "tf", "data_type": "length", "group": "Dimensions"},
+    {"name": "Longitud", "data_type": "length", "group": "Geometry", "is_instance": true},
+    {"name": "Altura alma", "data_type": "length", "group": "Dimensions", "formula": "d - 2 * tf"},
+    {"name": "Material acero", "data_type": "material", "group": "Materials"}
+  ],
+  "reference_planes": [
+    {"name": "Ala inferior", "origin_mm": {"x": 0, "y": 0, "z": 0}, "direction": "horizontal", "is_reference": "bottom"},
+    {"name": "Ala superior", "origin_mm": {"x": 0, "y": 0, "z": 310}, "direction": "horizontal", "is_reference": "top"},
+    {"name": "Borde izquierdo", "origin_mm": {"x": 0, "y": -83, "z": 0}, "direction": "x", "is_reference": "left"},
+    {"name": "Borde derecho", "origin_mm": {"x": 0, "y": 83, "z": 0}, "direction": "x", "is_reference": "right"},
+    {"name": "Inicio", "origin_mm": {"x": 0, "y": 0, "z": 0}, "direction": "y", "is_reference": "front"},
+    {"name": "Fin", "origin_mm": {"x": 6000, "y": 0, "z": 0}, "direction": "y", "is_reference": "back"}
+  ],
+  "dimensions": [
+    {"reference_planes": ["Ala inferior", "Ala superior"], "parameter": "d"},
+    {"reference_planes": ["Borde izquierdo", "Borde derecho"], "parameter": "bf"},
+    {"reference_planes": ["Inicio", "Fin"], "parameter": "Longitud"}
+  ],
+  "solids": [
+    {"name": "ala inferior", "kind": "extrusion", "sketch_plane": "Inicio", "start_mm": 0, "end_mm": 6000,
+     "profile": {"rect": {"min_mm": {"x": 0, "y": -83, "z": 0}, "max_mm": {"x": 0, "y": 83, "z": 12.7}}},
+     "material_parameter": "Material acero", "lock_ends_to": {"start": "Inicio", "end": "Fin"},
+     "lock_faces": [{"face": "bottom", "reference_plane": "Ala inferior"}, {"face": "left", "reference_plane": "Borde izquierdo"},
+                    {"face": "right", "reference_plane": "Borde derecho"}]},
+    {"name": "alma", "kind": "extrusion", "sketch_plane": "Inicio", "start_mm": 0, "end_mm": 6000,
+     "profile": {"rect": {"min_mm": {"x": 0, "y": -4.3, "z": 12.7}, "max_mm": {"x": 0, "y": 4.3, "z": 297.3}}},
+     "material_parameter": "Material acero", "lock_ends_to": {"start": "Inicio", "end": "Fin"}},
+    {"name": "ala superior", "kind": "extrusion", "sketch_plane": "Inicio", "start_mm": 0, "end_mm": 6000,
+     "profile": {"rect": {"min_mm": {"x": 0, "y": -83, "z": 297.3}, "max_mm": {"x": 0, "y": 83, "z": 310}}},
+     "material_parameter": "Material acero", "lock_ends_to": {"start": "Inicio", "end": "Fin"},
+     "lock_faces": [{"face": "top", "reference_plane": "Ala superior"}, {"face": "left", "reference_plane": "Borde izquierdo"},
+                    {"face": "right", "reference_plane": "Borde derecho"}]}
+  ],
+  "types": [
+    {"name": "W12X26", "values": {"d": 310, "bf": 165, "tw": 5.8, "tf": 9.7, "Longitud": 6000}},
+    {"name": "W16X31", "values": {"d": 403, "bf": 140, "tw": 7, "tf": 11.2, "Longitud": 6000}}
+  ],
+  "flex_cases": [
+    {"name": "W12X26", "type": "W12X26"},
+    {"name": "W16X31 largo", "type": "W16X31", "values": {"Longitud": 12000}},
+    {"name": "alas finas", "type": "W12X26", "values": {"tf": 3}}
+  ]
+}
+```
+
+En el ejemplo 2 los perfiles se dibujan sobre el plano `Inicio` (normal X) y se
+extruyen 6000 mm hacia `Fin`; `d` y `bf` gobiernan la altura y el ancho por las
+cotas y los bloqueos de las alas, y `Longitud` la extrusión por `lock_ends_to`.
+`tw` y `tf` quedan declarados (y `Altura alma` con fórmula) para cotas
+adicionales entre planos propios del alma y las alas, que se añaden con
+`family_add_reference_planes` y `family_add_dimensions` si se quiere que también
+flexionen.
+
 ### Ejecución de código
 
 | Método | Ruta | Parámetros | Respuesta |
@@ -574,6 +823,25 @@ curl -X POST $R/fix_analytical/ -H "Content-Type: application/json" -d '{"token"
 # 0.5.0: exportacion estructural (IFC con la vista analitica activa; CSV de nodos y miembros)
 curl -X POST $R/export_structural/ -H "Content-Type: application/json" -d '{"token":"TOKEN","format":"ifc_structural","file_path":"C:\\\\Proyectos\\\\estructura.ifc","ifc_version":"IFC4"}'
 curl -X POST $R/export_structural/ -H "Content-Type: application/json" -d '{"token":"TOKEN","format":"csv_nodes_members","file_path":"C:\\\\Proyectos\\\\miembros.csv"}'
+# 0.6.0: editor de familias. Plantillas disponibles y familia nueva (family_doc = titulo devuelto, "Familia1")
+curl -X POST $R/family/info/ -H "Content-Type: application/json" -d '{"token":"TOKEN","include_templates":true,"contains":"generico"}'
+curl -X POST $R/family/open/ -H "Content-Type: application/json" -d '{"token":"TOKEN","template":"Modelo genérico métrico.rft","name":"Placa base"}'
+# 0.6.0: parametros, planos de referencia y cotas con etiqueta (lotes, una transaccion en la familia)
+curl -X POST $R/family/parameters/ -H "Content-Type: application/json" -d '{"token":"TOKEN","family_doc":"Placa base","parameters":[{"name":"Ancho","data_type":"length","group":"Geometry"},{"name":"Espesor","data_type":"length","group":"Geometry"},{"name":"Material placa","data_type":"material","group":"Materials"}]}'
+curl -X POST $R/family/reference_planes/ -H "Content-Type: application/json" -d '{"token":"TOKEN","family_doc":"Placa base","planes":[{"name":"Izquierda","origin_mm":{"x":-150,"y":0,"z":0},"direction":"y","is_reference":"left"},{"name":"Derecha","origin_mm":{"x":150,"y":0,"z":0},"direction":"y","is_reference":"right"}]}'
+curl -X POST $R/family/dimensions/ -H "Content-Type: application/json" -d '{"token":"TOKEN","family_doc":"Placa base","dimensions":[{"reference_planes":["Izquierda","Derecha"],"parameter":"Ancho"}],"simular":true}'
+# 0.6.0: extrusion con material y bloqueos, vaciado circular, bloqueo suelto, tipos y conector
+curl -X POST $R/family/solids/ -H "Content-Type: application/json" -d '{"token":"TOKEN","family_doc":"Placa base","solids":[{"name":"placa","kind":"extrusion","sketch_plane":{"view_type":"FloorPlan"},"profile":{"rect":{"min_mm":{"x":-150,"y":-150,"z":0},"max_mm":{"x":150,"y":150,"z":0}}},"end_mm":20,"material_parameter":"Material placa","lock_faces":[{"face":"left","reference_plane":"Izquierda"},{"face":"right","reference_plane":"Derecha"}]},{"name":"agujero","kind":"extrusion","is_void":true,"sketch_plane":{"view_type":"FloorPlan"},"profile":{"circle":{"center_mm":{"x":100,"y":100,"z":0},"radius_mm":11}},"start_mm":-5,"end_mm":30}]}'
+curl -X POST $R/family/locks/ -H "Content-Type: application/json" -d '{"token":"TOKEN","family_doc":"Placa base","locks":[{"solid_id":1234,"face":"top","reference_plane":"Cara superior"}]}'
+curl -X POST $R/family/types/ -H "Content-Type: application/json" -d '{"token":"TOKEN","family_doc":"Placa base","types":[{"type_name":"PL300x300x20","values":{"Ancho":300,"Espesor":20}}]}'
+curl -X POST $R/family/connectors/ -H "Content-Type: application/json" -d '{"token":"TOKEN","family_doc":"Difusor","connectors":[{"domain":"hvac","solid_id":1234,"face":"top","system_type":"SupplyAir","size_mm":200}]}'
+# 0.6.0: validar (TransactionGroup por caso), guardar, cargar en el proyecto y cerrar
+curl -X POST $R/family/validate/ -H "Content-Type: application/json" -d '{"token":"TOKEN","family_doc":"Placa base","flex_cases":[{"name":"extremo","type":"PL300x300x20","values":{"Espesor":2}}]}'
+curl -X POST $R/family/save/ -H "Content-Type: application/json" -d '{"token":"TOKEN","family_doc":"Placa base","file_path":"C:\\\\Familias\\\\Placa base.rfa"}'
+curl -X POST $R/family/load/ -H "Content-Type: application/json" -d '{"token":"TOKEN","family_doc":"Placa base"}'
+curl -X POST $R/family/close/ -H "Content-Type: application/json" -d '{"token":"TOKEN","family_doc":"Placa base","save":false}'
+# 0.6.0: toda la familia desde un spec (ver el ejemplo 1); primero con simular para ver plan.counts y plan.steps
+curl -X POST $R/family/build/ -H "Content-Type: application/json" -d '{"token":"TOKEN","spec":{"name":"Placa base MCP","template":"Modelo genérico métrico.rft","parameters":[{"name":"Ancho","data_type":"length","group":"Geometry"}],"reference_planes":[],"solids":[{"name":"placa","kind":"extrusion","sketch_plane":{"view_type":"FloorPlan"},"profile":{"rect":{"min_mm":{"x":-150,"y":-150,"z":0},"max_mm":{"x":150,"y":150,"z":0}}},"end_mm":20}],"types":[{"name":"PL300","values":{"Ancho":300}}]},"save_path":"C:\\\\Familias\\\\Placa base MCP.rfa","load_into_project":true,"simular":true}'
 ```
 
 ### Add-ins en C# y comandos de pyRevit existentes
@@ -676,6 +944,21 @@ correctas:
 
 Termina con `Resultado: 14/14 pruebas correctas`.
 
+Con `--fase 2c` (0.6.0) se añaden las pruebas del editor de familias, sin
+nombres visibles en inglés: la plantilla se elige de `/family/info/` con
+`include_templates` (la primera cuyo nombre, sin tildes, contiene `gener` y
+`metric` y no `cara` ni `face`; `--template` la fija a mano), la familia se
+guarda en `%LOCALAPPDATA%\RevitMcp\pruebas\` y al final se cierra el
+documento, se borra la familia del proyecto y el `.rfa`:
+
+| Prueba | Petición | Esperado |
+|--------|----------|----------|
+| 2c.1 | `POST .../family/build/` con el ejemplo 1 (placa base) y `simular: true`; después sin `simular`, con `save_path` | `plan.counts` con 6 parámetros, 5 planos, 1 sólido, 4 vaciados y 2 tipos, sin `copia`; después `ok: true`, `steps` con `save`, el `.rfa` existe y `validation.passed: 2` |
+| 2c.2 | `POST .../family/validate/` sobre ese documento (un caso por tipo) y con un caso extremo (`Espesor: 2`) | `ok: true`, `passed` = número de tipos, `failed_cases: []`; el caso extremo responde `200` con su `ok` (se anota) |
+| 2c.3 | `POST .../family/load/` con `family_doc` | `ok: true`, `family_id`, `types[]` con `PL300x300x20` y `PL400x400x25`; la familia aparece en `POST .../element_types/` de `OST_StructConnections` (o `OST_GenericModel`); después `/family/close/`, `/delete_elements/` de la familia y borrado del `.rfa` |
+
+Termina con `Resultado: 12/12 pruebas correctas`.
+
 Sin Revit, en CPython: `uv run pytest` ejecuta las pruebas de
 `tests/` (formato JSON de `format_response`, gestor `transaccion` simulado,
 rotación del log, rutas de escritura contra un `pyrevit` simulado, lector CSV,
@@ -696,7 +979,16 @@ estructural, `describe` con `include_structural` y `no_disponibles`,
 `fixed` y diccionario parcial; `create_bracing` con cada `pattern` y un nivel
 cuya elevación mostrada difiere de la interna; `create_steel_connection` sin el
 módulo) y `test_analitico.py` (`analytical_status` con dos miembros cuyos nodos
-distan menos y más que la tolerancia, `fix_analytical`, `export_structural`)).
+distan menos y más que la tolerancia, `fix_analytical`, `export_structural`);
+desde 0.6.0, `test_familias.py` (cada ruta del editor de familias: 401,
+`simular` sin transacción, 400/404/409, `creados` / `antes`-`despues`,
+resolución de vistas por `ViewType`, plantillas sin tildes, `EditFamily` con
+transacción abierta e in situ, guardar / cargar / cerrar) y
+`test_familias_spec.py` (la validación del `spec`: plantilla inexistente,
+planos no definidos, fórmulas con parámetros no definidos, tipos con
+parámetros desconocidos; `family_validate` con un caso que deja un sólido sin
+volumen y otro que Revit rechaza; `build_family_from_spec` completo y el cierre
+sin guardar cuando un paso falla)).
 
 ## Deshacer
 

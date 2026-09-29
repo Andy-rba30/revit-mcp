@@ -1,6 +1,6 @@
 # Revit MCP Server
 
-MCP server for Autodesk Revit 2024/2025/2026/2027 via pyRevit — **52 tools** (40 consolidated from 78 in 0.4.0, plus 12 for steel structures and the analytical model in 0.5.0) for building design, structure, coordinates, editing, analysis, clash detection, MEP, interop, documentation, model persistence, deep navigation (element relations, parameter queries, schedules, snapshots), project macros (grids + levels, sheet sets, Civil 3D import, steel frames), **steel structures** (profiles, quantities, bracing, trusses, releases, connections, plates, analytical model) and **the user's own macros**, with **batch routes** (many parameters or many elements in ONE transaction) and a safe-write layer (backups, action log, dry-run `simular`, verification and `IA:` undo entries). Version **0.5.0**.
+MCP server for Autodesk Revit 2024/2025/2026/2027 via pyRevit — **66 tools** (40 consolidated from 78 in 0.4.0, 12 for steel structures and the analytical model in 0.5.0, and 14 for the family editor in 0.6.0) for building design, structure, coordinates, editing, analysis, clash detection, MEP, interop, documentation, model persistence, deep navigation (element relations, parameter queries, schedules, snapshots), project macros (grids + levels, sheet sets, Civil 3D import, steel frames), **steel structures** (profiles, quantities, bracing, trusses, releases, connections, plates, analytical model), **the family editor** (new families from a template, parameters, reference planes, labelled dimensions, solids and voids, locks, types, connectors, flexing, save and load, or a whole family from a spec) and **the user's own macros**, with **batch routes** (many parameters or many elements in ONE transaction) and a safe-write layer (backups, action log, dry-run `simular`, verification and `IA:` undo entries). Version **0.6.0**.
 
 Why 0.4.0: in the 0.3.1 validation Revit answered each call in under a second and simple tasks still took minutes, because the time went to the agent layer: 78 tools in context, one call per element and repetitive tasks driven step by step. 0.4.0 attacks that without changing the existing HTTP routes: the consolidation lives in `tools/`, and only two batch routes and the user-macro routes are new.
 
@@ -135,7 +135,10 @@ and a real `create_steel_frame` on a 2x2 auxiliary grid with
 `analytical_status` on the result, `set_structural_properties` reflected by
 `describe_element(include_structural=true)` and `steel_quantities`); expected
 `14/14`, with 2b.2-2b.5 marked `NO_APLICA` when the model has no steel profiles
-loaded.
+loaded. `--fase 2c` adds the 0.6.0 family editor checks (the base plate example
+of CONTRATO.md built with `build_family_from_spec` into a `.rfa`, `family_validate`
+passing on its two types, and the family loaded into the project and removed
+again); expected `12/12`.
 
 Without Revit, `uv run pytest` runs the CPython tests in `tests/` (JSON
 formatting, simulated transactions, log rotation, write routes against a fake
@@ -188,7 +191,7 @@ mcp dev main.py
 
 Then open `http://127.0.0.1:6274` in your browser.
 
-## Supported Tools (52)
+## Supported Tools (66)
 
 Rule: **a usual task takes one or two calls.** Every write tool accepts
 `simular` (dry run: validates and returns `haria`, and `plan` in batches and
@@ -198,7 +201,7 @@ seen from the bridge). Calling one of the 51 names retired in 0.4.0 answers
 with the replacement tool and its arguments (see the full table with the
 "Sustituye a" column in [CONTRATO.md](CONTRATO.md#herramientas-mcp-040)).
 
-### Read (19)
+### Read (20)
 
 | Tool | Description | Replaces |
 |------|-------------|----------|
@@ -221,8 +224,9 @@ with the replacement tool and its arguments (see the full table with the
 | `list_steel_profiles` | Steel profiles loaded (family, type, shape W/HSS/L/C/WT/Pipe, standard AISC/EN, section dimensions in mm) and, with `loaded_only=false`, the library `.rfa` files with a type catalog (0.5.0) | new |
 | `steel_quantities` | Count, length (mm) and weight (kg = volume x structural asset density, or nominal weight x length) by type / level / family / mark; `sin_peso` with the reason (0.5.0) | new |
 | `analytical_status` | Associated `AnalyticalMember`, end nodes in mm, connected members per node, `loose_nodes` (0.5.0) | new |
+| `family_info` | Summary of an open family document (parameters, types with values in mm, reference planes, views by `ViewType`, solids, dimensions, connectors); without `family_doc`, the open family documents and, with `include_templates`, the `.rft` templates (0.6.0) | new |
 
-### Write (28)
+### Write (39)
 
 | Tool | Description | Replaces |
 |------|-------------|----------|
@@ -254,8 +258,19 @@ with the replacement tool and its arguments (see the full table with the
 | `add_plate_or_stiffener` | Face-based family on the top / bottom / web face (references from `get_Geometry`) or point-based family along a beam or column (0.5.0) | new |
 | `split_beam` | Split a straight beam: the original keeps the first segment, each further segment is a copy; `avisos` about lost joins and connections (0.5.0) | new |
 | `fix_analytical_alignment` | Snap loose analytical nodes to the nearest foreign node within `tolerance_mm` (`AnalyticalMember.SetCurve`) in ONE transaction (0.5.0) | new |
+| `family_open` | Open a family document: new from a `.rft` template (`template` + `name`), from a `.rfa`, or `EditFamily` of a loaded family (never system or in-place families); returns the summary and the `family_doc` to use next (0.6.0) | new (absorbs `family_new`) |
+| `family_add_parameters` | Family parameters in ONE transaction: `data_type` (length, number, integer, text, yes_no, material, angle, area, volume, `family_type:<BuiltInCategory>`), `group` as `GroupTypeId`, `formula`, `shared_parameter_guid` (0.6.0) | new (batch) |
+| `family_add_reference_planes` | Named reference planes (`direction` x / y / horizontal, `is_reference` left / right / front / back / top / bottom / strong / weak) in ONE transaction (0.6.0) | new (batch) |
+| `family_add_dimensions` | Dimensions between parallel reference planes labelled with a parameter (`FamilyLabel`) or with equal segments, in ONE transaction (0.6.0) | new (batch) |
+| `family_create_solids` | Extrusions, sweeps, revolutions and blends (solids or voids) with `lock_ends_to`, `lock_faces` and `material_parameter`, in ONE transaction (0.6.0) | new (absorbs `family_create_extrusion` / `sweep` / `revolve` / `blend`) |
+| `family_lock_faces` | `NewAlignment` between a face of a solid (top, bottom, left...) and a reference plane, in ONE transaction (0.6.0) | new (batch of `family_lock_face_to_plane`) |
+| `family_set_type_values` | Create types and set their values (mm, degrees, booleans, materials by name) with `antes`/`despues` and `fallidos`, in ONE transaction (0.6.0) | new (batch) |
+| `family_add_connectors` | Duct, pipe or electrical connectors on a face of a solid (`system_type`, `size_mm`); no structural connector exists (0.6.0) | new (batch) |
+| `family_save` | `SaveAs` to a `.rfa` (409 if it exists unless `overwrite`); the document title becomes the file name (0.6.0) | new |
+| `family_load_into_project` | Load the open family document (or a `.rfa`) into the project with `IFamilyLoadOptions`; 409 if already loaded unless `overwrite_parameters` (0.6.0) | new |
+| `family_close` | `Close(save)` of a document opened by the MCP, never the active one (0.6.0) | new |
 
-### Macros (4)
+### Macros (6)
 
 | Tool | Description |
 |------|-------------|
@@ -263,6 +278,8 @@ with the replacement tool and its arguments (see the full table with the
 | `import_from_civil` | LandXML / CSV → toposolid; DWG → link and, optionally, shared coordinates |
 | `list_macros` | Catalogue of the user's own macros (`%LOCALAPPDATA%\RevitMcp\macros\<name>\macro.json` + `macro.py`, or `REVIT_MCP_MACROS`) with their arguments, and the invalid ones with their error |
 | `run_macro` | Run one with its arguments; a `writes` macro runs inside `IA: Macro <name>` with backup, log and verification, `simular` returns its `plan` |
+| `family_validate` | Flex the family: one `TransactionGroup` per case (type + values + `Regenerate`), every solid must keep a volume, Revit regeneration errors reported per case, rolled back with `restore` (0.6.0) | new |
+| `build_family_from_spec` | Whole family from a spec: validated completely before opening anything, then new family → parameters → planes → dimensions → solids → connectors → types → validate → save → load; any failure closes without saving (0.6.0) | new |
 
 ### Last resort (1)
 
@@ -308,6 +325,26 @@ grids → `list_steel_profiles` → `load_steel_profile` if needed →
 Steel Connections for Revit module (409 `no_soportado` otherwise), and the
 analytical routes need Revit 2023+ (`AnalyticalMember`). Validation prompt:
 `herramientas-dev/VALIDACION_2B.md`.
+
+### Family editor (0.6.0)
+
+Delivery 2c (block C of `herramientas-dev/PROMPT_FASE2.md`): 14 tools in
+`revit_mcp/familias.py`, `familias_edicion.py` and `familias_spec.py`. They write
+to a **family document** identified by `family_doc` (the title returned by
+`family_open`, or the `name` given to it) through `escritura.ejecutar_familia`:
+logged in the project's `mcp_log.jsonl`, `409` when the family document has an
+open transaction, the `.rfa` backed up only when it is already saved, and one
+`IA: ...` transaction in the family document per call. Templates are found by
+file name in `Application.FamilyTemplatePath` (`family_info(include_templates=true)`
+lists them as that Revit names them), views by `ViewType` plus level or
+direction, categories by `BuiltInCategory` and parameter groups by `GroupTypeId`,
+so nothing depends on English display names. `build_family_from_spec` validates
+the whole spec (template, referenced planes, formulas, types) before opening
+anything and closes without saving if any step fails; `family_validate` flexes
+the family in a rolled-back `TransactionGroup` per case. The agent flow is in
+`INSTRUCCIONES_AGENTE.md` (section 2e); the spec format and two complete
+examples (a base plate with four holes and a parametric W profile) are in
+CONTRATO.md. Validation prompt: `herramientas-dev/VALIDACION_2C.md`.
 
 ## Seguridad de escritura
 
@@ -398,7 +435,7 @@ This server supports Revit 2024, 2025, 2026, and 2027 through centralized helper
 
 No configuration needed — version detection is automatic via try/except at runtime.
 
-> **Revit 2027 note:** Revit 2027 runs on **.NET 10** (vs .NET 8 in 2025/2026). This MCP server is pyRevit-based, so .NET compatibility is handled by pyRevit itself — ensure you run a **pyRevit build with Revit 2027 support**. None of the 52 tools use APIs removed in 2027 (AXM/FormIt import, `Mechanical.Zone` members, legacy rebar creation, or the dropped `EnergyDataSettings` properties). `create_elements(kind="toposolid")` and `import_from_civil` (LandXML/CSV) need Revit 2024+ (`DB.Toposolid`); `kind="ceiling"` uses `DB.Ceiling.Create` (2022+) and falls back to a floor. The API members added in 0.3.0, 0.4.0 and 0.5.0 that are still pending a check inside Revit are listed in `herramientas-dev/miembros_por_verificar_revit.md`; the 0.5.0 steel routes read releases from the `AnalyticalMember` (2023+) when the physical element has no release parameters, and report any `BuiltInParameter` missing in the running version in `no_disponibles`.
+> **Revit 2027 note:** Revit 2027 runs on **.NET 10** (vs .NET 8 in 2025/2026). This MCP server is pyRevit-based, so .NET compatibility is handled by pyRevit itself — ensure you run a **pyRevit build with Revit 2027 support**. None of the 66 tools use APIs removed in 2027 (AXM/FormIt import, `Mechanical.Zone` members, legacy rebar creation, or the dropped `EnergyDataSettings` properties). `create_elements(kind="toposolid")` and `import_from_civil` (LandXML/CSV) need Revit 2024+ (`DB.Toposolid`); `kind="ceiling"` uses `DB.Ceiling.Create` (2022+) and falls back to a floor. The API members added in 0.3.0, 0.4.0, 0.5.0 and 0.6.0 that are still pending a check inside Revit are listed in `herramientas-dev/miembros_por_verificar_revit.md`; the 0.5.0 steel routes read releases from the `AnalyticalMember` (2023+) when the physical element has no release parameters, and report any `BuiltInParameter` missing in the running version in `no_disponibles`; the 0.6.0 family editor uses the 2022+ `FamilyManager.AddParameter(name, GroupTypeId, SpecTypeId, isInstance)` overload.
 
 ## Unit Handling
 
