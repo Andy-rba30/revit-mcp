@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import logging
 import httpx
 import anyio
@@ -138,9 +139,11 @@ async def _enviar(method: str, endpoint: str, token: str, data: Dict = None,
         return await client.get(endpoint, params=query, timeout=timeout)
     cuerpo = dict(data or {})
     cuerpo["token"] = token
+    # JSON solo ASCII (tildes como \u00e9): httpx >= 0.28 manda UTF-8 crudo con
+    # json=, y el servidor de pyRevit lo lee como Latin-1 ("genÃ©rico").
     return await client.post(
         endpoint,
-        json=cuerpo,
+        content=json.dumps(cuerpo, ensure_ascii=True).encode("ascii"),
         headers={"Content-Type": "application/json"},
         timeout=timeout,
     )

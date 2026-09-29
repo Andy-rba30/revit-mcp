@@ -36,7 +36,8 @@ respuesta; anota también `ms` y `ms_puente` de la respuesta). Reglas:
    `C:\Users\Andy Bayona Antón\Proyectos\revit-mcp`: `git status --short` (si hay algún archivo con `M` que no sea
    `uv.lock`, detente y pregúntame; si es `uv.lock`, `git restore uv.lock`), `git fetch origin`, `git checkout main`,
    `git pull origin main` y `git log --oneline -3`. Entre esos commits debe estar el merge de la entrega 2c (0.6.0)
-   y `revit_mcp\__init__.py` debe decir `0.6.0`. Si no, detente y avísame.
+   y `revit_mcp\__init__.py` debe decir `0.6.1` (0.6.0 + corrección de nombres con tildes que llegaban como
+   `genÃ©rico` y daban 404 en el paso 5). Si no, detente y avísame.
 2. Anota la fecha de modificación y el tamaño de `C:\Users\Andy Bayona Antón\Desktop\Modelo_Copia.rvt`
    (`Get-Item ... | Select-Object LastWriteTime, Length`). Crea la carpeta `C:\IA\salidas\familias` si no existe.
 3. Cierra Revit y ábrelo en español:

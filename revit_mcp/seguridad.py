@@ -110,6 +110,61 @@ def _tokens_iguales(recibido, esperado):
     return diferencia == 0
 
 
+# Texto recibido con tildes mal decodificado ("Modelo genÃ©rico" en vez de
+# "Modelo genérico"): el cuerpo llega en UTF-8 pero el servidor de pyRevit lo
+# interpreta byte a byte (Latin-1 / cp1252) antes de que lo vea el manejador.
+# httpx >= 0.28 envia el JSON con ensure_ascii=False, asi que cualquier nombre
+# con tildes o eñes llegaba roto (plantillas .rft, familias, parametros...).
+try:
+    _TIPOS_TEXTO = (basestring,)  # noqa: F821 (IronPython 2.7)
+except NameError:  # pragma: no cover
+    _TIPOS_TEXTO = (str,)
+
+
+def _reparar_texto(texto):
+    """Deshace la doble decodificacion UTF-8 -> Latin-1/cp1252 si la hubo.
+
+    Solo cambia el texto si, al volver a sus bytes originales, estos forman
+    UTF-8 valido; un texto ya correcto ("genérico") no lo cumple y se deja igual.
+    """
+    if not isinstance(texto, _TIPOS_TEXTO) or all(ord(c) < 128 for c in texto):
+        return texto
+    try:
+        crudo = bytearray()
+        for caracter in texto:
+            codigo = ord(caracter)
+            if codigo < 256:
+                crudo.append(codigo)
+            else:
+                crudo.extend(bytearray(caracter.encode("cp1252")))
+        reparado = crudo.decode("utf-8")
+    except Exception:
+        return texto
+    return reparado
+
+
+def reparar_utf8(valor):
+    """Aplica _reparar_texto a textos, claves y valores de dicts y listas."""
+    if isinstance(valor, dict):
+        return dict((_reparar_texto(clave), reparar_utf8(dato)) for clave, dato in valor.items())
+    if isinstance(valor, list):
+        return [reparar_utf8(dato) for dato in valor]
+    return _reparar_texto(valor)
+
+
+def _reparar_peticion(request):
+    """Repara en su sitio request.data y request.query_params."""
+    if request is None:
+        return
+    for atributo in ("data", "query_params"):
+        try:
+            valor = getattr(request, atributo, None)
+            if isinstance(valor, (dict, list)) or isinstance(valor, _TIPOS_TEXTO):
+                setattr(request, atributo, reparar_utf8(valor))
+        except Exception as error:
+            logger.debug(u"No se pudo reparar request.%s: %s", atributo, error)
+
+
 def _extraer_token(request):
     """Saca el token de la peticion y lo elimina del cuerpo.
 
@@ -169,6 +224,7 @@ def requiere_token(funcion):
         firma.append("request")
 
     def _ejecutar(request, kwargs):
+        _reparar_peticion(request)
         recibido = _extraer_token(request)
         if not _tokens_iguales(recibido, token_actual()):
             ruta = getattr(request, "path", "?")
