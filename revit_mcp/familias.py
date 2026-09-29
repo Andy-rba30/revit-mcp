@@ -1468,3 +1468,6 @@ def register_familias_routes(api):
     from familias_edicion import register_edicion_routes
 
     register_edicion_routes(api)
+    from familias_spec import register_spec_routes
+
+    register_spec_routes(api)
