@@ -36,8 +36,9 @@ respuesta; anota también `ms` y `ms_puente` de la respuesta). Reglas:
    `C:\Users\Andy Bayona Antón\Proyectos\revit-mcp`: `git status --short` (si hay algún archivo con `M` que no sea
    `uv.lock`, detente y pregúntame; si es `uv.lock`, `git restore uv.lock`), `git fetch origin`, `git checkout main`,
    `git pull origin main` y `git log --oneline -3`. Entre esos commits debe estar el merge de la entrega 2c (0.6.0)
-   y `revit_mcp\__init__.py` debe decir `0.6.1` (0.6.0 + corrección de nombres con tildes que llegaban como
-   `genÃ©rico` y daban 404 en el paso 5). Si no, detente y avísame.
+   y `revit_mcp\__init__.py` debe decir `0.6.2` (0.6.1: nombres con tildes que llegaban como `genÃ©rico`;
+   0.6.2: tipo inicial para `SetFormula`, `LoadFamily` fuera de transacción y tabla de `is_reference`). Si no,
+   detente y avísame.
 2. Anota la fecha de modificación y el tamaño de `C:\Users\Andy Bayona Antón\Desktop\Modelo_Copia.rvt`
    (`Get-Item ... | Select-Object LastWriteTime, Length`). Crea la carpeta `C:\IA\salidas\familias` si no existe.
 3. Cierra Revit y ábrelo en español:
@@ -67,9 +68,12 @@ respuesta; anota también `ms` y `ms_puente` de la respuesta). Reglas:
    `haria[0].accion` = `nueva_familia` y `haria[0].template` con la ruta completa; sin `copia`. Sin `simular` →
    esperado: `ok: true`, `mode: new`, `family_doc` (anótalo como `FD`; en una familia nueva suele ser `Familia1`),
    `category` (`OST_GenericModel`), `categoria` en español, `reference_planes[]` con los planos de la plantilla
-   (nombres en español; **pega `name`, `normal` e `is_reference` de cada uno**: confirman `ELEM_REFERENCE_NAME`),
+   (nombres en español; **pega `name`, `normal` e `is_reference` de cada uno**: confirman `ELEM_REFERENCE_NAME`;
+   esperado "Centro (Izquierda/Derecha)" `center_left_right`, "Centro (Frontal/Posterior)" `center_front_back` y
+   el plano horizontal `not_a_reference`),
    `views[]` con `view_type`, `level` y `direction` (**pega la lista**: confirma la lectura de `ViewDirection`),
-   `levels[]` y `types[]`. Pídeme que compruebe en Revit (manual) que se abrió el editor de familias.
+   `levels[]` y `types[]` con **un** tipo llamado `Placa base 2C` (Revit crea la familia sin tipos y el MCP le da
+   uno: sin él, `SetFormula` falla). Pídeme que compruebe en Revit (manual) que se abrió el editor de familias.
 6. `family_add_parameters(family_doc=FD, parameters=[{"name": "Ancho", "data_type": "length", "group":
    "Geometry"}, {"name": "Largo", "data_type": "length", "group": "Geometry"}, {"name": "Espesor", "data_type":
    "length", "group": "Geometry"}, {"name": "Diámetro perno", "data_type": "length", "group": "Geometry"},
@@ -126,8 +130,8 @@ respuesta; anota también `ms` y `ms_puente` de la respuesta). Reglas:
     300, "Espesor": 20, "Diámetro perno": 20}}, {"type_name": "PL400x400x25", "values": {"Ancho": 400, "Largo":
     400, "Espesor": 25, "Diámetro perno": 24}}], simular=true)` → esperado: `haria[]` con `accion: crear_tipo` y
     `values` con `"300 mm"`. Sin `simular` → esperado: `ok: true`, `count: 2`, `types[]` con `created: true`,
-    `antes` (nulos) y `despues` (`Ancho: 300`...), `fallidos: []`, `family_types[]` con los dos tipos y el de la
-    plantilla, entrada `IA: Tipos de familia (2)`. Después `family_set_type_values(family_doc=FD,
+    `antes` (nulos) y `despues` (`Ancho: 300`...), `fallidos: []`, `family_types[]` con los dos tipos y el inicial
+    (`Placa base 2C`), entrada `IA: Tipos de familia (2)`. Después `family_set_type_values(family_doc=FD,
     types=[{"type_name": "PL300x300x20", "values": {"Diámetro agujero": 30}}])` → esperado: `400` "determined by
     a formula".
 14. `family_info(family_doc=FD)` → esperado: `counts` = 7 parámetros, 3 tipos, 7 planos (5 propios + los de la
@@ -151,10 +155,11 @@ respuesta; anota también `ms` y `ms_puente` de la respuesta). Reglas:
 17. `family_load_into_project(family_doc=FD2, simular=true)` → esperado: `haria[0]` con `accion:
     cargar_en_proyecto`, `already_loaded: false`. Sin `simular` → esperado: `ok: true`, `family: "Placa base 2C"`,
     `family_id`, `types[]` con 3 tipos, `creados[]` con `categoria` en español, entrada `IA: Cargar familia Placa
-    base 2C` en el Deshacer **del proyecto** (manual). Guarda `family_id` como `FAMILIA`. Repite sin
+    base 2C` en el Deshacer **del proyecto** (manual), `avisos: []` (si dice "cargada sin grupo", pégalo: Revit no
+    admitió el `TransactionGroup` y la entrada del Deshacer tendrá el nombre de Revit). Guarda `family_id` como `FAMILIA`. Repite sin
     `overwrite_parameters` → esperado: `409` con `already_loaded: true` y `types`. Repite con
-    `overwrite_parameters=true` → esperado: `ok: true`, `reloaded: true`. Si `LoadFamily` falla dentro de la
-    transacción, pega el error literal (es el punto a verificar de `IFamilyLoadOptions` en IronPython).
+    `overwrite_parameters=true` → esperado: `ok: true`, `reloaded: true`. Si `LoadFamily` falla, pega el error
+    literal (es el punto a verificar de `IFamilyLoadOptions` en IronPython).
 18. `list_types(category="OST_GenericModel", family="Placa base 2C")` → esperado: los 3 tipos de la familia con
     `familia: "Placa base 2C"` (la familia se creó con la categoría de la plantilla; si el paso 5 dio otra
     `category`, usa esa).

@@ -552,8 +552,8 @@ def construir_familia(doc, spec, plan, data):
         if cargar:
             paso_actual[0] = "load"
             opciones = F._OpcionesCarga(F._es_verdadero(data.get("overwrite_parameters")))
-            with transaccion(doc, u"Cargar familia {}".format(plan["name"])):
-                familia = doc_familia.LoadFamily(doc, opciones)
+            familia, avisos_carga = F.cargar_familia_en_proyecto(doc, doc_familia, opciones, plan["name"])
+            resultado["avisos"].extend(avisos_carga)
             if familia is None:
                 familia, _ = F._familia_proyecto(doc, plan["name"])
             simbolos = F._simbolos_de_familia(doc, familia) if familia is not None else []

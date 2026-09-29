@@ -72,6 +72,7 @@ def _transacciones():
 def _abrir(api, doc, nombre=u"Placa base"):
     r = _post(api, "/family/open/", doc, {"template": PLANTILLA, "name": nombre})
     assert r.status == 200, r.data
+    DB.Transaction.creadas = []     # la del tipo inicial se comprueba en test_family_open_nueva_desde_plantilla
     return r.data["family_doc"], doc.Application.Documents[-1]
 
 
@@ -136,11 +137,15 @@ def test_family_open_nueva_desde_plantilla(api, doc):
     assert datos["category"] == "OST_GenericModel" and datos["categoria"] == u"Modelos genéricos"
     assert [p["name"] for p in datos["reference_planes"]] == [u"Centro (izquierda/derecha)", u"Centro (delante/detrás)"]
     assert datos["reference_planes"][0]["normal"] == {"x": 1.0, "y": 0.0, "z": 0.0}
+    # ELEM_REFERENCE_NAME de la plantilla como en Revit 2027 (1 y 4 en FamilyInstanceReferenceType)
+    assert [p["is_reference"] for p in datos["reference_planes"]] == ["center_left_right", "center_front_back"]
     tipos = dict((v["view_type"], v) for v in datos["views"])
     assert tipos["FloorPlan"]["level"] == u"Nivel de referencia" and tipos["Elevation"]["direction"] in ("front", "left")
-    assert datos["levels"][0]["elevation_mm"] == 0 and datos["types"][0]["name"] == u"Familia1"
+    # Revit crea la familia sin tipos; el MCP le da uno con el nombre pedido (sin el, SetFormula falla)
+    assert datos["levels"][0]["elevation_mm"] == 0 and [t["name"] for t in datos["types"]] == [u"Placa base"]
+    assert doc.Application.Documents[-1].FamilyManager.CurrentType.Name == u"Placa base"
     assert datos["copia"] is None
-    assert _transacciones() == []
+    assert _transacciones() == [u"IA: Tipo de familia Placa base"]
     # se puede pedir por el titulo o por el nombre dado
     for pedido in (u"Familia1", u"Placa base", u"Familia1.rfa"):
         r = _post(api, "/family/info/", doc, {"family_doc": pedido})
@@ -263,7 +268,11 @@ def test_family_reference_planes_lote(api, doc):
     assert creados[u"Cara superior"]["is_reference"] == "top" and creados[u"Cara superior"]["origin_mm"]["z"] == 20.0
     assert creados[u"Delante"]["categoria"] == u"Planos de referencia"
     plano = familia.GetElement(DB.ElementId(creados[u"Izquierda"]["id"]))
-    assert plano.get_Parameter(DB.BuiltInParameter.ELEM_REFERENCE_NAME).AsInteger() == 3
+    assert plano.get_Parameter(DB.BuiltInParameter.ELEM_REFERENCE_NAME).AsInteger() == 0      # Left
+    plano = familia.GetElement(DB.ElementId(creados[u"Cara superior"]["id"]))
+    assert plano.get_Parameter(DB.BuiltInParameter.ELEM_REFERENCE_NAME).AsInteger() == 8      # Top
+    plano = familia.GetElement(DB.ElementId(creados[u"Delante"]["id"]))
+    assert plano.get_Parameter(DB.BuiltInParameter.ELEM_REFERENCE_NAME).AsInteger() == 13     # StrongReference
 
 
 def test_family_dimensions_con_etiqueta_e_iguales(api, doc):
@@ -409,7 +418,7 @@ def test_family_types_lote_con_unidades(api, doc):
     r = _post(api, ruta, doc, {"family_doc": fd, "types": [{"type_name": u"PL300", "values": {u"Diámetro agujero": 1}}]})
     assert r.status == 400 and "formula" in r.data["error"]
     r = _post(api, ruta, doc, {"family_doc": fd, "types": [{"type_name": u"PL300", "values": {u"Ancho": 300}, "create_if_missing": False}]})
-    assert r.status == 404 and r.data["available_types"] == [u"Familia1"]
+    assert r.status == 404 and r.data["available_types"] == [u"Placa base"]
     r = _post(api, ruta, doc, {"family_doc": fd, "types": [{"type_name": u"PL300", "values": {u"Ancho": "trescientos"}}]})
     assert r.status == 400 and "number" in r.data["error"]
     cuerpo = {"family_doc": fd, "types": [
@@ -425,7 +434,7 @@ def test_family_types_lote_con_unidades(api, doc):
     assert r.data["antes"][u"PL300x300x20"][u"Ancho"] is None
     tipo = [t for t in familia.FamilyManager.Types if t.Name == u"PL400x400x25"][0]
     assert tipo.valores[u"Ancho"] == pytest.approx(400 * mf.MM_TO_FEET)
-    assert [t["name"] for t in r.data["family_types"]] == [u"Familia1", u"PL300x300x20", u"PL400x400x25"]
+    assert [t["name"] for t in r.data["family_types"]] == [u"Placa base", u"PL300x300x20", u"PL400x400x25"]
     # cambiar un tipo existente: antes/despues
     r = _post(api, ruta, doc, {"family_doc": fd, "types": [{"type_name": u"PL300x300x20", "values": {u"Espesor": 22}}]})
     assert r.data["types"][0]["created"] is False and r.data["antes"][u"PL300x300x20"] == {u"Espesor": 20.0}
@@ -502,14 +511,17 @@ def test_family_save_load_close(api, doc, tmp_path):
     assert r.status == 409 and r.data["exists"] is True
     r = _post(api, "/family/save/", doc, {"family_doc": u"Familia1", "file_path": destino, "overwrite": True})
     assert r.status == 200 and r.data["overwritten"] is True and r.data["copia"]["ruta"].endswith(".rfa")
-    # cargar en el proyecto (transaccion en el proyecto), 409 la segunda vez salvo overwrite_parameters
+    # cargar en el proyecto: LoadFamily SIN transaccion del proyecto (Revit la rechaza), dentro de un
+    # TransactionGroup "IA: Cargar familia ..."; 409 la segunda vez salvo overwrite_parameters
     r = _post(api, "/family/load/", doc, {"family_doc": u"Placa base", "simular": True})
     assert r.status == 200 and r.data["haria"][0]["accion"] == "cargar_en_proyecto" and r.data["haria"][0]["already_loaded"] is False
     r = _post(api, "/family/load/", doc, {"family_doc": u"Placa base"})
     assert r.status == 200, r.data
-    assert r.data["ok"] is True and r.data["family"] == u"Placa base" and [t["type"] for t in r.data["types"]] == [u"Familia1", u"PL300x300x20", u"PL400x400x25"]
-    assert r.data["count"] == 3 and r.data["creados"][0]["categoria"] == u"Modelos genéricos"
-    assert _transacciones()[-1] == u"IA: Cargar familia Placa base" and doc.transacciones[-1].nombre == u"IA: Cargar familia Placa base"
+    assert r.data["ok"] is True and r.data["family"] == u"Placa base" and [t["type"] for t in r.data["types"]] == [u"Placa base", u"PL300x300x20", u"PL400x400x25"]
+    assert r.data["count"] == 3 and r.data["creados"][0]["categoria"] == u"Modelos genéricos" and r.data["avisos"] == []
+    carga = doc.transacciones[-1]
+    assert isinstance(carga, DB.TransactionGroup) and carga.nombre == u"IA: Cargar familia Placa base"
+    assert carga.estado == DB.TransactionStatus.Committed and doc.IsModifiable is False
     r = _post(api, "/family/load/", doc, {"family_doc": u"Placa base"})
     assert r.status == 409 and r.data["already_loaded"] is True and len(r.data["types"]) == 3
     r = _post(api, "/family/load/", doc, {"family_doc": u"Placa base", "overwrite_parameters": True})
@@ -543,3 +555,43 @@ def test_family_close_rechaza_el_documento_activo(api, doc):
     familia.IsModifiable = False
 
 
+
+
+# ---------------------------------------------------------------------------
+# 0.6.2: comportamiento medido en Revit 2027 (validacion 2c)
+# ---------------------------------------------------------------------------
+def test_formula_en_familia_sin_tipos_crea_uno(api, doc):
+    """Un .rfa guardado sin tipos: SetFormula fallaba con "There is no valid family type"."""
+    fd, familia = _abrir(api, doc)
+    familia.FamilyManager.Types[:] = []
+    familia.FamilyManager.CurrentType = None
+    r = _post(api, "/family/parameters/", doc, {"family_doc": fd, "parameters": [
+        {"name": u"Diámetro perno", "data_type": "length", "group": "Geometry"},
+        {"name": u"Diámetro agujero", "data_type": "length", "group": "Geometry", "formula": u"Diámetro perno + 2 mm"}]})
+    assert r.status == 200, r.data
+    assert r.data["creados"][1]["formula"] == u"Diámetro perno + 2 mm"
+    assert [t.Name for t in familia.FamilyManager.Types] == [familia.OwnerFamily.Name]
+    # sin formulas no se crea ningun tipo
+    familia.FamilyManager.Types[:] = []
+    familia.FamilyManager.CurrentType = None
+    r = _post(api, "/family/parameters/", doc, {"family_doc": fd, "parameters": [{"name": u"Ancho", "data_type": "length", "group": "Geometry"}]})
+    assert r.status == 200 and familia.FamilyManager.Types == []
+
+
+def test_load_reintenta_sin_grupo_si_revit_lo_rechaza(api, doc, monkeypatch):
+    fd, familia = _familia_completa(api, doc)
+    original = mf.DocFamilia.LoadFamily
+    llamadas = []
+
+    def load_family(self, proyecto, opciones=None):
+        llamadas.append(proyecto.transacciones[-1].estado)
+        if len(llamadas) == 1:
+            raise Exception("The document must not be modifiable before calling LoadFamily.")
+        return original(self, proyecto, opciones)
+
+    monkeypatch.setattr(mf.DocFamilia, "LoadFamily", load_family)
+    r = _post(api, "/family/load/", doc, {"family_doc": fd})
+    assert r.status == 200, r.data
+    assert r.data["ok"] is True and len(llamadas) == 2 and "cargada sin grupo" in r.data["avisos"][0]
+    grupo = [t for t in doc.transacciones if isinstance(t, DB.TransactionGroup)][-1]
+    assert grupo.estado == DB.TransactionStatus.RolledBack
