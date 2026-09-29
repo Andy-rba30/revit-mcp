@@ -595,3 +595,22 @@ def test_load_reintenta_sin_grupo_si_revit_lo_rechaza(api, doc, monkeypatch):
     assert r.data["ok"] is True and len(llamadas) == 2 and "cargada sin grupo" in r.data["avisos"][0]
     grupo = [t for t in doc.transacciones if isinstance(t, DB.TransactionGroup)][-1]
     assert grupo.estado == DB.TransactionStatus.RolledBack
+
+
+def test_types_rechaza_formula_aunque_revit_no_la_marque(api, doc):
+    """Revit 2027 (validacion 2c con 0.6.3, paso 13): IsDeterminedByFormula no delato la formula y
+    FamilyManager.Set dejo 22 mm sin lanzar; la ruta respondio 200 con coincide: true."""
+    fd, familia = _familia_completa(api, doc)
+    param = familia.FamilyManager.get_Parameter(u"Diámetro agujero")
+    param.IsDeterminedByFormula = False
+    r = _post(api, "/family/types/", doc, {"family_doc": fd, "types": [{"type_name": u"PL300x300x20", "values": {u"Diámetro agujero": 30}}]})
+    assert r.status == 400 and "formula" in r.data["error"] and r.data["formula"] == u"Diámetro perno + 2 mm"
+
+
+def test_types_detecta_set_ignorado(api, doc, monkeypatch):
+    fd, familia = _familia_completa(api, doc)
+    monkeypatch.setattr(familia.FamilyManager, "Set", lambda param, valor: True)   # Revit no cambia nada
+    r = _post(api, "/family/types/", doc, {"family_doc": fd, "types": [{"type_name": u"PL300x300x20", "values": {u"Ancho": 350}}]})
+    assert r.status == 200
+    assert r.data["ok"] is False and r.data["verificacion"]["coincide"] is False
+    assert r.data["fallidos"][0]["parameter"] == u"Ancho" and "350" in r.data["fallidos"][0]["motivo"]

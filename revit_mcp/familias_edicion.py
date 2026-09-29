@@ -911,13 +911,10 @@ def planificar_tipos(doc_familia, lista, etiqueta="types", parametros_extra=()):
                     continue
                 raise EscrituraRechazada(_indice(etiqueta, i, u"parameter '{}' not found in the family".format(nombre_param)), 404,
                                          {"index": i, "available_parameters": [_t(p.Definition.Name) for p in F._parametros_familia(doc_familia)]})
-            try:
-                if bool(param.IsDeterminedByFormula):
-                    raise EscrituraRechazada(_indice(etiqueta, i, u"parameter '{}' is determined by a formula".format(nombre_param)), 400, {"index": i})
-            except EscrituraRechazada:
-                raise
-            except Exception:
-                pass
+            formula = _formula_de(param)
+            if formula:
+                raise EscrituraRechazada(_indice(etiqueta, i, u"parameter '{}' is determined by a formula".format(nombre_param)), 400,
+                                         {"index": i, "formula": formula})
             try:
                 interno, visible = _valor_para_tipo(doc_familia, param, valor)
             except EscrituraRechazada as error:
@@ -930,6 +927,22 @@ def planificar_tipos(doc_familia, lista, etiqueta="types", parametros_extra=()):
 def haria_tipo(plan):
     return {"accion": "crear_tipo" if plan["create"] else "fijar_tipo", "index": plan["index"], "type_name": plan["type_name"],
             "values": dict((c["parameter"], c["display"]) for c in plan["changes"])}
+
+
+def _formula_de(param):
+    """Formula del parametro o None. Revit 2027 (validacion 2c, 0.6.3) no la delato por IsDeterminedByFormula
+    y FamilyManager.Set ignoro el valor sin lanzar: se mira tambien FamilyParameter.Formula."""
+    try:
+        if bool(param.IsDeterminedByFormula):
+            return _t(param.Formula) or u"?"
+    except Exception:
+        pass
+    try:
+        formula = param.Formula
+    except Exception:
+        return None
+    formula = _t(formula).strip() if formula is not None else u""
+    return formula or None
 
 
 def aplicar_tipos(doc_familia, planes):
@@ -1206,10 +1219,13 @@ def register_edicion_routes(api):
             for plan, tipo, a, d, fallo in resultados:
                 for cambio in plan["changes"]:
                     nombre = cambio["parameter"]
-                    if nombre in d and cambio["display"] is not None and not isinstance(cambio["display"], _cadena):
+                    # se compara con el valor pedido en unidades del contrato ("display" es texto, p. ej. "30 mm")
+                    pedido = cambio["value"]
+                    if nombre in d and pedido is not None and not isinstance(pedido, _cadena):
                         try:
-                            if abs(float(d[nombre]) - float(cambio["display"] if not isinstance(cambio["display"], bool) else int(cambio["display"]))) > 1e-3:
+                            if abs(float(d[nombre]) - float(int(pedido) if isinstance(pedido, bool) else pedido)) > 1e-3:
                                 coincide = False
+                                fallo.append({"parameter": nombre, "motivo": u"Revit kept {} after Set({})".format(d[nombre], pedido)})
                         except (TypeError, ValueError):
                             pass
                 tipos.append({"type_name": plan["type_name"], "created": plan["create"], "antes": a, "despues": d,
