@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Herramientas de escritura (0.4.0, 19). Todas aceptan `simular` (valida y
+"""Herramientas de escritura (0.6.0, 39). Todas aceptan `simular` (valida y
 devuelve `haria` sin tocar el modelo) y devuelven `ok`, `verificacion`, `copia`
 (copia del ultimo guardado), `ms` (Revit) y `ms_puente` (puente). Los lotes
 (set_parameters, create_elements) van a las rutas nuevas /set_parameters/ y
@@ -44,7 +44,7 @@ def _csv_habitaciones(habitaciones):
 
 
 def register_escritura_tools(mcp, revit_get, revit_post, revit_image=None):
-    """Registra las 19 herramientas de escritura."""
+    """Registra las 39 herramientas de escritura."""
 
     @mcp.tool()
     async def set_parameters(
@@ -934,3 +934,267 @@ def register_escritura_tools(mcp, revit_get, revit_post, revit_image=None):
         else:
             response = _texto_error("action '{}' not supported: use {}".format(action, ", ".join(_ACCIONES)))
         return format_response(response, ms_puente=crono.ms())
+
+    # -----------------------------------------------------------------------
+    # 0.6.0 (entrega 2c): editor de familias. Todas escriben en el documento de
+    # familia (family_doc) salvo family_load_into_project, que escribe en el
+    # proyecto. Lotes: una lista, todo validado antes, una transaccion "IA: ...".
+    # -----------------------------------------------------------------------
+    async def _familia(ruta, data, ctx, timeout=TIMEOUT_ESCRITURA):
+        crono = Cronometro()
+        response = await revit_post(ruta, data, ctx, timeout=timeout)
+        return format_response(response, ms_puente=crono.ms())
+
+    @mcp.tool()
+    async def family_open(
+        template: str = None,
+        name: str = None,
+        file_path: str = None,
+        family_name: str = None,
+        simular: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Open a family document: NEW from a .rft template (template + name; file name in
+        FamilyTemplatePath, see family_info(include_templates=true)), from a .rfa file, or
+        EditFamily of a family loaded in the project (never system or in-place families).
+        Returns the summary; use its `family_doc` in the next calls.
+        Example: family_open(template="Modelo genérico métrico.rft", name="Placa base").
+
+        Args:
+            template: .rft file name (or full path) for a new family
+            name: Name of the new family (alias for family_doc)
+            file_path: Existing .rfa to open
+            family_name: Loaded family to edit (doc.EditFamily; 409 with an open project transaction)
+            simular: Only validate; returns plan
+        """
+        if not template and not file_path and not family_name:
+            return format_response(_texto_error("template + name, file_path or family_name is required"))
+        data = {"simular": simular}
+        for clave, valor in (("template", template), ("name", name), ("file_path", file_path), ("family_name", family_name)):
+            if valor is not None:
+                data[clave] = valor
+        return await _familia("/family/open/", data, ctx)
+
+    @mcp.tool()
+    async def family_add_parameters(
+        family_doc: str,
+        parameters: list[dict],
+        simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Add family parameters in ONE transaction: data_type length / number / integer /
+        text / yes_no / material / angle / area / volume / "family_type:<BuiltInCategory>",
+        group as GroupTypeId (Geometry, Materials, Data...), optional formula (only defined
+        parameters) or shared_parameter_guid. Example: family_add_parameters(family_doc="Placa
+        base", parameters=[{"name": "Ancho", "data_type": "length", "group": "Geometry"}]).
+
+        Args:
+            family_doc: Open family document (title or name)
+            parameters: [{"name", "data_type", "group", "is_instance", "formula", "shared_parameter_guid"}]
+            simular: Only validate; returns haria
+            forzar: Required above 200 parameters
+        """
+        return await _familia("/family/parameters/", {"family_doc": family_doc, "parameters": parameters,
+                                                       "simular": simular, "forzar": forzar}, ctx)
+
+    @mcp.tool()
+    async def family_add_reference_planes(
+        family_doc: str,
+        planes: list[dict],
+        simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Add named reference planes in ONE transaction: direction "x" (normal Y, in the
+        plan), "y" (normal X) or "horizontal" (normal Z, in an elevation); is_reference =
+        left / right / front / back / top / bottom / strong / weak / center_*.
+        Example: family_add_reference_planes(family_doc="Placa base", planes=[{"name":
+        "Izquierda", "origin_mm": {"x": -150, "y": 0, "z": 0}, "direction": "y", "is_reference": "left"}]).
+
+        Args:
+            family_doc: Open family document
+            planes: [{"name", "origin_mm", "direction", "view" (id or {"view_type", "level"|"direction"}), "is_reference"}]
+            simular: Only validate; returns haria with normal and view
+            forzar: Required above 200 planes
+        """
+        return await _familia("/family/reference_planes/", {"family_doc": family_doc, "planes": planes,
+                                                             "simular": simular, "forzar": forzar}, ctx)
+
+    @mcp.tool()
+    async def family_add_dimensions(
+        family_doc: str,
+        dimensions: list[dict],
+        simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Dimensions between parallel reference planes labelled with a family parameter
+        (Dimension.FamilyLabel), or equal segments (equal=true, 3+ planes), in ONE transaction.
+        The view is chosen by the planes' normal (plan / elevation) unless given.
+        Example: family_add_dimensions(family_doc="Placa base", dimensions=[{"reference_planes":
+        ["Izquierda", "Derecha"], "parameter": "Ancho"}]).
+
+        Args:
+            family_doc: Open family document
+            dimensions: [{"reference_planes": [...], "parameter", "equal", "view", "offset_mm"}]
+            simular: Only validate; returns haria
+            forzar: Required above 200 dimensions
+        """
+        return await _familia("/family/dimensions/", {"family_doc": family_doc, "dimensions": dimensions,
+                                                       "simular": simular, "forzar": forzar}, ctx)
+
+    @mcp.tool()
+    async def family_create_solids(
+        family_doc: str,
+        solids: list[dict],
+        simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Solids or voids in ONE transaction: kind extrusion (profile, start_mm, end_mm),
+        sweep (path, profile), revolution (profile, axis, angles) or blend (base_profile,
+        top_profile, end_mm); profiles as mm points, rect or circle on sketch_plane;
+        lock_ends_to, lock_faces, material_parameter. Example: family_create_solids(family_doc=
+        "Placa base", solids=[{"kind": "extrusion", "profile": {"rect": {"min_mm": {"x": -150,
+        "y": -150, "z": 0}, "max_mm": {"x": 150, "y": 150, "z": 0}}}, "end_mm": 20}]).
+
+        Args:
+            family_doc: Open family document
+            solids: [{"name", "kind", "profile", "sketch_plane", "start_mm", "end_mm", "is_void", "lock_ends_to": {"start", "end"}, "lock_faces": [{"face", "reference_plane"}], "material_parameter", "path", "axis", "start_angle_deg", "end_angle_deg", "base_profile", "top_profile"}]
+            simular: Only validate; returns haria
+            forzar: Required above 200 solids
+        """
+        return await _familia("/family/solids/", {"family_doc": family_doc, "solids": solids,
+                                                   "simular": simular, "forzar": forzar}, ctx)
+
+    @mcp.tool()
+    async def family_lock_faces(
+        family_doc: str,
+        locks: list[dict],
+        simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Lock a face of a solid (top, bottom, left, right, front, back or {x,y,z} normal) to
+        a reference plane with NewAlignment, in ONE transaction; face references come from
+        get_Geometry with ComputeReferences in a view where both are visible.
+        Example: family_lock_faces(family_doc="Placa base", locks=[{"solid_id": 1234, "face":
+        "top", "reference_plane": "Cara superior"}]).
+
+        Args:
+            family_doc: Open family document
+            locks: [{"solid_id", "face", "reference_plane", "view"}]
+            simular: Only validate; returns haria
+            forzar: Required above 200 locks
+        """
+        return await _familia("/family/locks/", {"family_doc": family_doc, "locks": locks,
+                                                  "simular": simular, "forzar": forzar}, ctx)
+
+    @mcp.tool()
+    async def family_set_type_values(
+        family_doc: str,
+        types: list[dict],
+        simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Create family types (NewType if missing) and set their parameter values in ONE
+        transaction; lengths in mm, angles in degrees, yes_no as booleans, materials and
+        family types by name. Returns antes/despues per type and `fallidos`.
+        Example: family_set_type_values(family_doc="Placa base", types=[{"type_name":
+        "PL300x300x20", "values": {"Ancho": 300, "Largo": 300, "Espesor": 20}}]).
+
+        Args:
+            family_doc: Open family document
+            types: [{"type_name", "values": {parameter: value}, "create_if_missing" (true)}]
+            simular: Only validate; returns haria
+            forzar: Required above 200 type x parameter pairs
+        """
+        return await _familia("/family/types/", {"family_doc": family_doc, "types": types,
+                                                  "simular": simular, "forzar": forzar}, ctx)
+
+    @mcp.tool()
+    async def family_add_connectors(
+        family_doc: str,
+        connectors: list[dict],
+        simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """MEP connectors on a face of a solid in ONE transaction: domain hvac (duct), piping
+        or electrical (there is no structural connector), system_type by its API name
+        (SupplyAir, DomesticColdWater, PowerCircuit...), size_mm as a diameter or {width,
+        height}. Example: family_add_connectors(family_doc="Difusor", connectors=[{"domain":
+        "hvac", "solid_id": 1234, "face": "top", "system_type": "SupplyAir", "size_mm": 200}]).
+
+        Args:
+            family_doc: Open family document
+            connectors: [{"domain", "solid_id", "face", "system_type", "size_mm"}]
+            simular: Only validate; returns haria
+            forzar: Required above 200 connectors
+        """
+        return await _familia("/family/connectors/", {"family_doc": family_doc, "connectors": connectors,
+                                                       "simular": simular, "forzar": forzar}, ctx)
+
+    @mcp.tool()
+    async def family_save(
+        family_doc: str,
+        file_path: str,
+        overwrite: bool = False,
+        simular: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """SaveAs the family document to a .rfa (SaveAsOptions.OverwriteExistingFile). 409 if
+        the file exists and overwrite is false. The document title changes to the file name:
+        use the returned `family_doc` afterwards.
+        Example: family_save(family_doc="Placa base", file_path="C:\\Familias\\Placa base.rfa").
+
+        Args:
+            family_doc: Open family document
+            file_path: Destination .rfa on the Revit machine
+            overwrite: Replace an existing file
+            simular: Only validate; returns haria
+        """
+        return await _familia("/family/save/", {"family_doc": family_doc, "file_path": file_path, "overwrite": overwrite,
+                                                 "simular": simular}, ctx)
+
+    @mcp.tool()
+    async def family_load_into_project(
+        family_doc: str = None,
+        file_path: str = None,
+        overwrite_parameters: bool = False,
+        simular: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """Load a family (open document or .rfa) into the active project in one transaction
+        "IA: Cargar familia <name>" (LoadFamily with IFamilyLoadOptions). 409 if the family is
+        already loaded unless overwrite_parameters is explicitly true. Returns the loaded
+        types in `creados`. Example: family_load_into_project(family_doc="Placa base").
+
+        Args:
+            family_doc: Open family document to load
+            file_path: Alternative: a .rfa file
+            overwrite_parameters: Reload an already loaded family and overwrite its parameter values
+            simular: Only validate; returns haria
+        """
+        if not family_doc and not file_path:
+            return format_response(_texto_error("family_doc or file_path is required"))
+        data = {"overwrite_parameters": overwrite_parameters, "simular": simular}
+        for clave, valor in (("family_doc", family_doc), ("file_path", file_path)):
+            if valor is not None:
+                data[clave] = valor
+        return await _familia("/family/load/", data, ctx, timeout=TIMEOUT_LARGO)
+
+    @mcp.tool()
+    async def family_close(family_doc: str, save: bool = False, simular: bool = False, ctx: Context = None) -> str:
+        """Close a family document opened by this MCP (Document.Close(save)); never the active
+        document nor one opened by hand in Revit. With save=true the document must have been
+        saved before (family_save). Example: family_close(family_doc="Placa base", save=false).
+
+        Args:
+            family_doc: Open family document (opened by family_open or build_family_from_spec)
+            save: Save before closing (needs a file path)
+            simular: Only validate; returns haria
+        """
+        return await _familia("/family/close/", {"family_doc": family_doc, "save": save, "simular": simular}, ctx)

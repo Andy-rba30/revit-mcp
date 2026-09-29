@@ -2,9 +2,10 @@
 
 Este texto se envía como `instructions` del servidor MCP (`main.py`) y se
 mantiene aquí para poder leerlo y revisarlo. Habla al agente en segunda
-persona. Versión del conector: **0.5.0** (52 herramientas: las 40 de 0.4.0 más
-las 12 de estructuras metálicas y modelo analítico; las 51 retiradas en 0.4.0
-responden con el nombre de su sustituta si las llamas).
+persona. Versión del conector: **0.6.0** (66 herramientas: las 40 de 0.4.0, las
+12 de estructuras metálicas y modelo analítico de 0.5.0 y las 14 del editor de
+familias de 0.6.0; las 51 retiradas en 0.4.0 responden con el nombre de su
+sustituta si las llamas).
 
 ## 1. Precedencia de herramientas
 
@@ -37,9 +38,10 @@ responden con el nombre de su sustituta si las llamas).
    `describe_element`, `dependency_graph`, `list_types`, `schedule_to_json`,
    `list_warnings`, `analyze_model`, `check_clashes`, `snapshot_model`,
    `diff_snapshots`, `read_log`, `list_macros`, `list_steel_profiles`,
-   `steel_quantities`, `analytical_status`) no cambian nada en el modelo:
-   úsalas sin pedir permiso (`snapshot_model` solo escribe un `.json` en
-   `snapshots\`; `export` con `csv_nodes_members` solo escribe el CSV).
+   `steel_quantities`, `analytical_status`, `family_info`) no cambian nada en
+   el modelo: úsalas sin pedir permiso (`snapshot_model` solo escribe un
+   `.json` en `snapshots\`; `export` con `csv_nodes_members` solo escribe el
+   CSV).
 
 ## 2. Flujo obligatorio para cualquier cambio en el modelo
 
@@ -202,6 +204,56 @@ al `.rvt` (léelo con `read_log`).
     metálicos usa `join_geometry(element_ids=[...], coping=true)`, que solo
     recorta la viga contra el pilar o la otra viga, sea cual sea el orden.
 
+## 2e. Flujo de familia (0.6.0)
+
+Las herramientas `family_*` y `build_family_from_spec` escriben en un
+**documento de familia** (no en el proyecto) que identificas por `family_doc`
+(el título que devuelve `family_open`, o el `name` que le diste). Cada llamada
+es un lote en una transacción `IA: ...` del documento de familia, se registra
+en el `mcp_log.jsonl` del proyecto y copia el `.rfa` solo si ya está guardado.
+Solo `family_load_into_project` escribe en el proyecto (`IA: Cargar familia
+<nombre>`).
+
+1. `family_info()` sin argumentos: documentos de familia abiertos (y con
+   `include_templates=true`, las plantillas `.rft` de `FamilyTemplatePath`, con
+   `contains` para filtrar sin tildes). Si existe una familia parecida en el
+   proyecto, `family_open(family_name=...)` y `family_info(family_doc=...)`
+   para copiar su estructura (parámetros, planos, tipos); ciérrala después con
+   `family_close`.
+2. Redacta el `spec` (CONTRATO.md, "Editor de familias") y muestra al usuario un
+   resumen: plantilla, categoría, parámetros (tipo de dato, grupo, fórmulas),
+   planos de referencia, cotas con etiqueta, sólidos y vaciados (con sus
+   bloqueos), tipos con valores en mm. Todo plano que use una cota, un bloqueo
+   o un `sketch_plane` tiene que estar en `reference_planes` del `spec`: los
+   planos de la plantilla tienen nombres que dependen del idioma y no se
+   validan sin abrirla.
+3. `build_family_from_spec(spec, simular=true)`: si el `spec` tiene un error
+   responde `400`/`404` con `spec_error`, `section` e `index` **sin abrir
+   nada**; si es válido devuelve `plan` (`counts`, `steps`). Muéstralo y pide
+   confirmación.
+4. Tras confirmar, `build_family_from_spec(spec, save_path=..., load_into_project=...)`.
+   Los pasos van en orden (`open` → `category` → `parameters` →
+   `reference_planes` → `dimensions` → `solids` → `connectors` → `types` →
+   `validate` → `save` → `load`) y ante un fallo el documento se cierra sin
+   guardar: la respuesta trae `failed_step`, `steps` y el error literal. No
+   reintentes cambiando el `spec` por tu cuenta: enséñaselo al usuario.
+5. `family_validate(family_doc, flex_cases=[...])` con valores extremos (mínimos
+   y máximos de cada parámetro): cada caso corre en un `TransactionGroup`
+   `IA: Validar <caso>` que se revierte (`restore=true`); `failed_cases` dice
+   qué caso deja un sólido sin volumen o qué error de regeneración dio Revit.
+6. Para retocar una familia abierta usa los lotes: `family_add_parameters`,
+   `family_add_reference_planes`, `family_add_dimensions`,
+   `family_create_solids`, `family_lock_faces`, `family_set_type_values`,
+   `family_add_connectors`; siempre `simular=true` primero. Vistas y planos de
+   boceto se piden por `ViewType` (`{"view_type": "FloorPlan", "level": ...}`,
+   `{"view_type": "Elevation", "direction": "front"}`) o por el nombre de un
+   plano de referencia; nunca por el nombre visible de la vista.
+7. `family_save(family_doc, file_path)` (409 si el archivo existe y no
+   `overwrite`), `family_load_into_project(family_doc)` (409 si la familia ya
+   está cargada salvo `overwrite_parameters=true`, que solo usas si el usuario
+   lo pide) y `family_close(family_doc)` (solo documentos abiertos por el MCP y
+   nunca el documento activo).
+
 ## 3. Reglas de dominio
 
 - **Nunca** llames a `delete_elements` sin haber listado antes los ids y su
@@ -248,6 +300,17 @@ al `.rvt` (léelo con `read_log`).
   proyecto (`query_elements(category="OST_Grids")` los lista).
 - `create_sheet_set` no coloca una vista que ya está en otro plano: la
   informa en `skipped`; no la repitas, duplica la vista en Revit si hace falta.
+- **Nunca edites una familia del sistema ni una in situ**: `family_open`
+  responde `404` (no es una `Family`) o `400` (`IsInPlace`); no lo rodees con
+  `execute_revit_code`.
+- **Nunca sobrescribas una familia cargada** sin `overwrite_parameters=true`
+  pedido expresamente por el usuario (`family_load_into_project` y
+  `build_family_from_spec` responden `409` `already_loaded`).
+- **Nunca uses nombres visibles en inglés** para categorías (`category` del
+  `spec` es un `BuiltInCategory`), vistas de familia (`ViewType` + nivel o
+  dirección), plantillas (`family_info(include_templates=true)` las lista tal
+  como se llaman en ese Revit) ni grupos de parámetros (`GroupTypeId`:
+  `Geometry`, `Materials`, `Data`...).
 - Una macro con `writes: false` no puede cambiar el modelo (Revit rechaza
   cualquier escritura fuera de transacción); una con `writes: true` corre
   dentro de `IA: Macro <nombre>` con copia, registro y verificación. Si
@@ -317,6 +380,22 @@ al `.rvt` (léelo con `read_log`).
 | Nodo | `Analytical node` (extremos de `AnalyticalMember.GetCurve()`; `fix_analytical_alignment` los mueve con `SetCurve`) |
 | Recorte de viga (coping) | `Coping` (`FamilyInstance.AddCoping`, `join_geometry(coping=true)`) |
 | Peso del acero | volumen (`HOST_VOLUME_COMPUTED`) × densidad del activo estructural (`StructuralAsset.Density`) |
+| Documento de familia | `Family document` (`Application.NewFamilyDocument`, `doc.EditFamily`, `IsFamilyDocument`; `family_open`) |
+| Plantilla de familia | `.rft` en `Application.FamilyTemplatePath` (`family_info(include_templates=true)`) |
+| Plano de referencia | `ReferencePlane` (`NewReferencePlane`, `ELEM_REFERENCE_NAME` = `is_reference`; `family_add_reference_planes`) |
+| Etiqueta de cota | `FamilyLabel` (`Dimension.FamilyLabel`; `family_add_dimensions`) |
+| Cotas iguales | `AreSegmentsEqual` (`equal=true`) |
+| Parámetro de familia / compartido | `FamilyParameter` (`FamilyManager.AddParameter` con `GroupTypeId` y `SpecTypeId`; `ExternalDefinition` por GUID) |
+| Fórmula | `FamilyManager.SetFormula` (solo parámetros ya definidos) |
+| Extrusión / barrido / revolución / fundido | `Extrusion` / `Sweep` / `Revolution` / `Blend` (`FamilyItemFactory.NewExtrusion`...; `family_create_solids(kind=...)`) |
+| Vaciado | `Void` (`is_void=true`) |
+| Plano de boceto | `SketchPlane` (`SketchPlane.Create` por nivel o por referencia de un plano) |
+| Bloquear | `Alignment` / `Lock` (`NewAlignment` entre la referencia de una cara y un plano; `lock_ends_to`, `lock_faces`, `family_lock_faces`) |
+| Material del sólido | `MATERIAL_ID_PARAM` asociado a un parámetro de familia (`AssociateElementParameterToFamilyParameter`; `material_parameter`) |
+| Tipo de familia | `FamilyType` (`FamilyManager.NewType`, `CurrentType`, `Set`; `family_set_type_values`) |
+| Conector | `ConnectorElement` (`CreateDuctConnector` / `CreatePipeConnector` / `CreateElectricalConnector`; no hay conector estructural) |
+| Flexionar | `Flex` (`family_validate`: `TransactionGroup` por caso, `Regenerate`, sólidos con volumen) |
+| Cargar en el proyecto | `LoadFamily(projectDoc, IFamilyLoadOptions)` (`family_load_into_project`, `overwrite_parameters`) |
 
 ## 5. Errores típicos y qué hacer
 
@@ -365,3 +444,11 @@ al `.rvt` (léelo con `read_log`).
 | `400` "approve=true needs approval_status" con `available_approval_types` | El estado de aprobación se elige por su nombre visible (depende del idioma) o su id | Repite con `approval_status` tomado de la lista. |
 | `sin_peso[]` en `steel_quantities` | Material sin activo estructural o tipo sin masa lineal | Informa el motivo; no inventes densidades. |
 | `sin_objetivo[]` en `fix_analytical_alignment` | Nodo suelto sin ningún nodo ajeno a menos de `tolerance_mm` | Muéstralo con `nearest_mm`; sube la tolerancia solo si el usuario lo pide. |
+| `404` "Family document '...' is not open" con `available_family_docs` | `family_doc` no coincide con ningún documento abierto (o ya se cerró) | Usa un título de `available_family_docs` o `family_info()`; tras `family_save` el título cambia al nombre del archivo. |
+| `404` "Family template '...' not found" con `available_templates` | El nombre de la `.rft` no existe en `FamilyTemplatePath` de ese Revit (los nombres dependen del idioma) | Elige uno de `available_templates` (`family_info(include_templates=true, contains=...)`). |
+| `400`/`404` con `spec_error: true`, `section` e `index` en `build_family_from_spec` | El `spec` tiene un error (plano no definido, fórmula con un parámetro desconocido, tipo con un parámetro desconocido, plantilla inexistente...) y no se abrió nada | Corrige esa sección del `spec` con el usuario y repite. |
+| `500` "build failed at step '...'" con `failed_step`, `steps` y `closed_without_saving` | Revit rechazó un paso (o la validación por tipos falló) | El documento se cerró sin guardar; enseña el error literal al usuario. |
+| `409` "Hay una transaccion abierta en el documento de familia" / "doc.EditFamily cannot run with an open transaction" | Transacción abierta en la familia o en el proyecto | Pide al usuario que la cierre en Revit. |
+| `400` "'...' was not opened by the MCP" / `409` "is the active document" en `family_close` | Solo se cierran documentos abiertos por el MCP y nunca el activo | Que el usuario active el proyecto o cierre el documento en Revit. |
+| `failed_cases[]` en `family_validate` con `empty_solids` o `revit_errors` | Un caso de flexión deja un sólido sin volumen o Revit no pudo regenerar | Muestra el caso y los valores; ajusta el `spec` o los límites con el usuario. |
+| `409` `no_soportado` `sin_archivo_compartido` en `family_add_parameters` | No hay archivo de parámetros compartidos activo en Revit | Que el usuario lo configure en Revit; el GUID se busca ahí. |

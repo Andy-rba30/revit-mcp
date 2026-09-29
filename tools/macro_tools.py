@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Macros (0.4.0, 4): las dos macros de proyecto de 0.3.0 (create_grid_and_levels,
-import_from_civil; create_sheet_set esta en escritura_tools) y las macros
+"""Macros (0.6.0, 6): las dos macros de proyecto de 0.3.0 (create_grid_and_levels,
+import_from_civil; create_sheet_set esta en escritura_tools), las macros
 propias del usuario (list_macros, run_macro: carpeta %LOCALAPPDATA%\\RevitMcp\\macros
-o REVIT_MCP_MACROS, con macro.json y macro.py). Toda macro valida y responde
-con `plan` cuando simular=true y aplica el limite de 200 elementos (forzar)."""
+o REVIT_MCP_MACROS, con macro.json y macro.py) y, desde 0.6.0, las dos macros
+del editor de familias (family_validate, build_family_from_spec). Toda macro
+valida y responde con `plan` cuando simular=true y aplica el limite de 200
+elementos (forzar)."""
 
 from mcp.server.mcpserver import Context
 from .utils import format_response, Cronometro, TIMEOUT_LECTURA, TIMEOUT_ESCRITURA, TIMEOUT_LARGO
@@ -22,7 +24,7 @@ async def _timeout_del_manifiesto(revit_get, name, ctx):
 
 
 def register_macro_tools(mcp, revit_get, revit_post, revit_image=None):
-    """Registra las 4 macros."""
+    """Registra las 6 macros."""
 
     @mcp.tool()
     async def create_grid_and_levels(
@@ -138,4 +140,72 @@ def register_macro_tools(mcp, revit_get, revit_post, revit_image=None):
         data = {"name": name, "args": args or {}, "simular": simular, "forzar": forzar}
         espera = float(timeout_s) if timeout_s else await _timeout_del_manifiesto(revit_get, name, ctx)
         response = await revit_post("/macros/run/", data, ctx, timeout=espera)
+        return format_response(response, ms_puente=crono.ms())
+
+    @mcp.tool()
+    async def family_validate(
+        family_doc: str,
+        flex_cases: list[dict] = None,
+        restore: bool = True,
+        simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """MACRO (0.6.0): flex the family. Each case runs in a TransactionGroup "IA: Validar
+        <case>" (switch type, set values, Regenerate) and checks every solid keeps a volume;
+        Revit regeneration errors are reported per case. Without flex_cases, one case per
+        type. restore=true (default) rolls every case back.
+        Example: family_validate(family_doc="Placa base", flex_cases=[{"name": "extremo",
+        "type": "PL300x300x20", "values": {"Espesor": 2}}]).
+
+        Args:
+            family_doc: Open family document
+            flex_cases: [{"name", "type", "values": {parameter: value}}] (mm, degrees)
+            restore: Roll back each case (false keeps the last case's values)
+            simular: Only list the cases and the current solids
+            forzar: Required above 200 cases
+        """
+        crono = Cronometro()
+        data = {"family_doc": family_doc, "restore": restore, "simular": simular, "forzar": forzar}
+        if flex_cases is not None:
+            data["flex_cases"] = flex_cases
+        response = await revit_post("/family/validate/", data, ctx, timeout=TIMEOUT_LARGO)
+        return format_response(response, ms_puente=crono.ms())
+
+    @mcp.tool()
+    async def build_family_from_spec(
+        spec: dict,
+        save_path: str = None,
+        load_into_project: bool = False,
+        overwrite: bool = False,
+        overwrite_parameters: bool = False,
+        close: bool = False,
+        simular: bool = False,
+        forzar: bool = False,
+        ctx: Context = None,
+    ) -> str:
+        """MACRO (0.6.0): build a whole family from a spec (name, template, category,
+        parameters, reference_planes, dimensions, solids, connectors, types; see CONTRATO.md).
+        The spec is validated before opening anything, then every step runs in order and a
+        failure closes without saving (`failed_step`). Run simular=true first and show `plan`.
+        Example: build_family_from_spec(spec={...}, save_path="C:\\Familias\\Placa.rfa", simular=true).
+
+        Args:
+            spec: The family specification (object)
+            save_path: .rfa to save to (required with load_into_project)
+            load_into_project: Load into the active project after saving
+            overwrite: Replace an existing .rfa
+            overwrite_parameters: Reload a family already loaded in the project
+            close: Close the family document at the end
+            simular: Only validate the spec; returns plan (counts and steps)
+            forzar: Required above 200 elements in the spec
+        """
+        crono = Cronometro()
+        if not isinstance(spec, dict):
+            return format_response({"error": "spec must be an object", "status": "error"}, ms_puente=crono.ms())
+        data = {"spec": spec, "load_into_project": load_into_project, "overwrite": overwrite,
+                "overwrite_parameters": overwrite_parameters, "close": close, "simular": simular, "forzar": forzar}
+        if save_path:
+            data["save_path"] = save_path
+        response = await revit_post("/family/build/", data, ctx, timeout=TIMEOUT_LARGO)
         return format_response(response, ms_puente=crono.ms())

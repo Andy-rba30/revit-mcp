@@ -8,7 +8,7 @@ compartido para que se creen copias en backups\\) y el puente MCP en marcha
 (python main.py --combined, o --streamable-http, en 8000).
 
 Uso:
-    python pruebas\\probar_revit.py [--element-id ID] [--parameter Comments] [--fase 2a|cons]
+    python pruebas\\probar_revit.py [--element-id ID] [--parameter Comments] [--fase 2a|cons|2b|2c] [--template X.rft]
 
 Cada prueba imprime nombre, código de estado y cuerpo tal cual llega.
 Termina con código de salida 0 si todas dan el resultado esperado.
@@ -58,7 +58,14 @@ Con --fase 2b se añaden (0.5.0, estructuras metálicas), sin nombres visibles e
         sin_peso con motivo
   Si el modelo no tiene perfiles de acero de pilar y de viga cargados, 2b.2 a 2b.5 se marcan
   NO_APLICA con el motivo (no como fallo).
-La fase 2c se añadirá con su entrega.
+Con --fase 2c se añaden (0.6.0, editor de familias), sin nombres visibles en inglés (la plantilla se
+elige de /family/info/ con include_templates: la primera cuyo nombre sin tildes contiene "gener" y
+"metric" y no "cara" ni "face"; --template la fija a mano):
+  2c.1  build_family_from_spec con el ejemplo de la placa base (CONTRATO.md): simular devuelve plan.counts
+        y no abre nada; real crea el .rfa en %LOCALAPPDATA%\\RevitMcp\\pruebas y validation.passed = 2
+  2c.2  family_validate pasa en sus dos tipos; un caso extremo (Espesor 2 mm) responde 200 y se anota
+  2c.3  family_load_into_project carga la familia en el proyecto (tipos PL300x300x20 y PL400x400x25);
+        al final se cierra el documento, se borra la familia del proyecto y el .rfa
 """
 import argparse
 import json
@@ -148,7 +155,9 @@ def main():
     parser.add_argument("--parameter", default="Comments", help="parámetro de texto editable (por defecto Comments)")
     parser.add_argument("--fase", choices=["2a", "2b", "2c", "cons"], default=None,
                         help="añade las pruebas de esa entrega (2a: navegación y macros; cons: consolidación 0.4.0; "
-                             "2b: estructuras metálicas 0.5.0)")
+                             "2b: estructuras metálicas 0.5.0; 2c: editor de familias 0.6.0)")
+    parser.add_argument("--template", default=None,
+                        help="fase 2c: nombre de la plantilla .rft (por defecto se elige la genérica métrica)")
     args = parser.parse_args()
 
     resultados = []
@@ -337,6 +346,8 @@ def main():
         pruebas_cons(cliente, token, resultados)
     elif args.fase == "2b":
         pruebas_2b(cliente, token, resultados)
+    elif args.fase == "2c":
+        pruebas_2c(cliente, token, resultados, args.template)
     elif args.fase:
         print("=" * 70)
         print("Fase {}: sin pruebas todavía (entrega pendiente)".format(args.fase))
@@ -839,6 +850,188 @@ def pruebas_2b(cliente, token, resultados):
         if ids_rejillas:
             r = _post(cliente, "/delete_elements/", token, {"element_ids": ids_rejillas})
             print("   limpieza: rejillas auxiliares {} borradas -> {}".format(rejillas, r.status_code))
+
+
+# ---------------------------------------------------------------------------
+# Entrega 2c (0.6.0): editor de familias
+# ---------------------------------------------------------------------------
+def _sin_tildes(texto):
+    import unicodedata
+
+    texto = unicodedata.normalize("NFD", texto or "")
+    return "".join(c for c in texto if unicodedata.category(c) != "Mn").lower()
+
+
+def _elegir_plantilla(plantillas, pedida=None):
+    """La plantilla genérica métrica (no basada en cara ni adaptativa) sin depender del idioma."""
+    if pedida:
+        for p in plantillas:
+            if p["name"] == pedida or _sin_tildes(p["name"]) == _sin_tildes(pedida):
+                return p["name"]
+        return pedida
+    candidatas = []
+    for p in plantillas:
+        nombre = _sin_tildes(p["name"])
+        if "gener" in nombre and "metric" in nombre and not any(x in nombre for x in ("cara", "face", "adapt", "linea", "line", "patron", "pattern", "dos niveles", "two level")):
+            candidatas.append(p["name"])
+    candidatas.sort(key=len)
+    return candidatas[0] if candidatas else None
+
+
+def spec_placa_base(nombre, plantilla):
+    """El ejemplo 1 de CONTRATO.md (placa base con cuatro agujeros y dos tipos)."""
+    agujeros = []
+    for i, (x, y) in enumerate(((100, 100), (-100, 100), (100, -100), (-100, -100)), 1):
+        agujeros.append({"name": "agujero {}".format(i), "kind": "extrusion", "is_void": True,
+                         "sketch_plane": {"view_type": "FloorPlan"},
+                         "profile": {"circle": {"center_mm": {"x": x, "y": y, "z": 0}, "radius_mm": 11}},
+                         "start_mm": -5, "end_mm": 30})
+    return {
+        "name": nombre, "template": plantilla, "category": "OST_StructConnections",
+        "parameters": [
+            {"name": "Ancho", "data_type": "length", "group": "Geometry"},
+            {"name": "Largo", "data_type": "length", "group": "Geometry"},
+            {"name": "Espesor", "data_type": "length", "group": "Geometry"},
+            {"name": "Diámetro perno", "data_type": "length", "group": "Geometry"},
+            {"name": "Diámetro agujero", "data_type": "length", "group": "Geometry", "formula": "Diámetro perno + 2 mm"},
+            {"name": "Material placa", "data_type": "material", "group": "Materials"},
+        ],
+        "reference_planes": [
+            {"name": "Izquierda", "origin_mm": {"x": -150, "y": 0, "z": 0}, "direction": "y", "is_reference": "left"},
+            {"name": "Derecha", "origin_mm": {"x": 150, "y": 0, "z": 0}, "direction": "y", "is_reference": "right"},
+            {"name": "Delante", "origin_mm": {"x": 0, "y": -150, "z": 0}, "direction": "x", "is_reference": "front"},
+            {"name": "Detrás", "origin_mm": {"x": 0, "y": 150, "z": 0}, "direction": "x", "is_reference": "back"},
+            {"name": "Cara superior", "origin_mm": {"x": 0, "y": 0, "z": 20}, "direction": "horizontal", "is_reference": "top"},
+        ],
+        "dimensions": [
+            {"reference_planes": ["Izquierda", "Derecha"], "parameter": "Ancho"},
+            {"reference_planes": ["Delante", "Detrás"], "parameter": "Largo"},
+        ],
+        "solids": [{"name": "placa", "kind": "extrusion", "sketch_plane": {"view_type": "FloorPlan"},
+                    "profile": {"rect": {"min_mm": {"x": -150, "y": -150, "z": 0}, "max_mm": {"x": 150, "y": 150, "z": 0}}},
+                    "start_mm": 0, "end_mm": 20, "material_parameter": "Material placa",
+                    "lock_ends_to": {"end": "Cara superior"},
+                    "lock_faces": [{"face": "left", "reference_plane": "Izquierda"}, {"face": "right", "reference_plane": "Derecha"},
+                                   {"face": "front", "reference_plane": "Delante"}, {"face": "back", "reference_plane": "Detrás"}]}] + agujeros,
+        "types": [
+            {"name": "PL300x300x20", "values": {"Ancho": 300, "Largo": 300, "Espesor": 20, "Diámetro perno": 20}},
+            {"name": "PL400x400x25", "values": {"Ancho": 400, "Largo": 400, "Espesor": 25, "Diámetro perno": 24}},
+        ],
+    }
+
+
+def pruebas_2c(cliente, token, resultados, plantilla_pedida=None):
+    marca = int(time.time()) % 10000
+    pendientes = ["2c.1 build_family_from_spec", "2c.2 family_validate", "2c.3 family_load_into_project"]
+    r = _post(cliente, "/family/info/", token, {"include_templates": True})
+    datos = _json(r)
+    if r.status_code != 200:
+        print("=" * 70)
+        print("2c: /family/info/ respondió {}: {}".format(r.status_code, r.text[:400]))
+        _no_aplica(resultados, pendientes, "/family/info/ no responde")
+        return
+    plantilla = _elegir_plantilla(datos.get("templates") or [], plantilla_pedida)
+    print("=" * 70)
+    print("2c: carpeta de plantillas {} ({} .rft); plantilla elegida: {}".format(
+        datos.get("family_template_path"), len(datos.get("templates") or []), plantilla))
+    if not plantilla:
+        _no_aplica(resultados, pendientes, "no hay una plantilla genérica métrica en FamilyTemplatePath (usa --template)")
+        return
+    carpeta = os.path.expandvars(r"%LOCALAPPDATA%\RevitMcp\pruebas")
+    os.makedirs(carpeta, exist_ok=True)
+    nombre = "Placa base MCP{}".format(marca)
+    destino = os.path.join(carpeta, nombre + ".rfa")
+    spec = spec_placa_base(nombre, plantilla)
+    family_doc = None
+    family_id = None
+    try:
+        # 2c.1 build: simulado (plan, nada abierto) y real (rfa, validation)
+        r = _post(cliente, "/family/build/", token, {"spec": spec, "simular": True})
+        ok = mostrar("2c.1a POST /family/build/ simular=true (placa base)", 200, r, cuerpo_max=2500)
+        datos = _json(r)
+        if ok:
+            counts = (datos.get("plan") or {}).get("counts") or {}
+            ok = (datos.get("simulado") is True and "copia" not in datos and counts.get("parameters") == 6
+                  and counts.get("reference_planes") == 5 and counts.get("solids") == 1 and counts.get("voids") == 4
+                  and counts.get("types") == 2)
+            if not ok:
+                print("   (se esperaba simulado=true y plan.counts con 6 parámetros, 5 planos, 1 sólido, 4 vaciados y 2 tipos)")
+        if ok:
+            abiertos = _json(_post(cliente, "/family/info/", token, {})).get("open_family_docs") or []
+            ok = not any(d.get("name") == nombre for d in abiertos)
+            print("   documentos de familia abiertos tras simular: {} [{}]".format([d.get("family_doc") for d in abiertos], "OK" if ok else "FALLO"))
+        if ok:
+            r = _post(cliente, "/family/build/", token, {"spec": spec, "save_path": destino})
+            ok = mostrar("2c.1b POST /family/build/ real con save_path", 200, r, cuerpo_max=3000)
+            datos = _json(r)
+            family_doc = datos.get("family_doc")
+            if ok:
+                pasos = [p.get("step") for p in (datos.get("steps") or [])]
+                validacion = datos.get("validation") or {}
+                ok = datos.get("ok") is True and "save" in pasos and os.path.isfile(destino) and validacion.get("passed") == 2
+                print("   pasos: {}; rfa: {} ({}); validation: {}/{} [{}]".format(
+                    pasos, destino, "existe" if os.path.isfile(destino) else "NO existe", validacion.get("passed"),
+                    validacion.get("count"), "OK" if ok else "FALLO"))
+                if datos.get("avisos"):
+                    print("   avisos: {}".format(datos["avisos"]))
+            elif datos.get("failed_step"):
+                print("   fallo en el paso {}: {}".format(datos.get("failed_step"), datos.get("error")))
+        resultados.append(ok)
+        if not family_doc:
+            _no_aplica(resultados, pendientes[1:], "la familia no se construyó en 2c.1")
+            return
+
+        # 2c.2 validate: un caso por tipo, y un caso extremo
+        r = _post(cliente, "/family/validate/", token, {"family_doc": family_doc})
+        ok = mostrar("2c.2a POST /family/validate/ (un caso por tipo)", 200, r, cuerpo_max=2500)
+        datos = _json(r)
+        if ok:
+            ok = datos.get("ok") is True and datos.get("passed") == datos.get("count") and datos.get("failed_cases") == []
+            print("   casos: {}/{} correctos; fallidos: {} [{}]".format(
+                datos.get("passed"), datos.get("count"), datos.get("failed_cases"), "OK" if ok else "FALLO"))
+        if ok:
+            r = _post(cliente, "/family/validate/", token, {"family_doc": family_doc, "flex_cases": [
+                {"name": "espesor minimo", "type": "PL300x300x20", "values": {"Espesor": 2}},
+                {"name": "placa grande", "type": "PL400x400x25", "values": {"Ancho": 900, "Largo": 900}}]})
+            ok = mostrar("2c.2b POST /family/validate/ casos extremos", 200, r, cuerpo_max=2500)
+            datos = _json(r)
+            if ok:
+                print("   casos extremos: ok={} ({}); se anota, no es un fallo de la prueba".format(
+                    datos.get("ok"), [(c.get("name"), c.get("ok"), c.get("motivo")) for c in datos.get("cases") or []]))
+        resultados.append(ok)
+
+        # 2c.3 load: la familia queda cargada en el proyecto
+        r = _post(cliente, "/family/load/", token, {"family_doc": family_doc})
+        ok = mostrar("2c.3a POST /family/load/ (cargar en el proyecto)", 200, r, cuerpo_max=2500)
+        datos = _json(r)
+        family_id = datos.get("family_id")
+        if ok:
+            tipos = [t.get("type") for t in (datos.get("types") or [])]
+            ok = datos.get("ok") is True and family_id is not None and "PL300x300x20" in tipos and "PL400x400x25" in tipos
+            print("   familia {} (id {}), tipos {} [{}]".format(datos.get("family"), family_id, tipos, "OK" if ok else "FALLO"))
+        if ok:
+            encontrada = False
+            for categoria in ("OST_StructConnections", "OST_GenericModel"):
+                r = _post(cliente, "/element_types/", token, {"category": categoria, "family_name": nombre, "max": 20})
+                tipos = _json(r).get("types") or []
+                if any(t.get("familia") == nombre for t in tipos):
+                    encontrada = True
+                    print("   /element_types/ {}: {} tipos de {}".format(categoria, len(tipos), nombre))
+                    break
+            ok = encontrada
+            if not ok:
+                print("   la familia {} no aparece en /element_types/ de OST_StructConnections ni OST_GenericModel [FALLO]".format(nombre))
+        resultados.append(ok)
+    finally:
+        if family_doc:
+            r = _post(cliente, "/family/close/", token, {"family_doc": family_doc, "save": False})
+            print("   limpieza: documento de familia {} cerrado -> {}".format(family_doc, r.status_code))
+        if family_id:
+            r = _post(cliente, "/delete_elements/", token, {"element_ids": [family_id]})
+            print("   limpieza: familia {} borrada del proyecto -> {}".format(family_id, r.status_code))
+        if os.path.isfile(destino):
+            os.remove(destino)
+            print("   limpieza: {} borrado".format(destino))
 
 
 if __name__ == "__main__":
