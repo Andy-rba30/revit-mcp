@@ -413,11 +413,25 @@ class UbicacionProyecto(object):
         self.Id = DB.ElementId(-9)
         self.Name = u"Interno"
 
+    def _desplazamiento(self, punto):
+        try:
+            return float(punto.X), float(punto.Y), float(punto.Z)
+        except AttributeError:
+            return 0.0, 0.0, 0.0
+
     def GetProjectPosition(self, punto):
-        return self.doc.posicion
+        # Coordenadas compartidas del punto = las del origen interno + el punto (sin giro)
+        base = self.doc.posicion
+        x, y, z = self._desplazamiento(punto)
+        if x == 0.0 and y == 0.0 and z == 0.0:
+            return base
+        return PosicionProyecto(base.EastWest + x, base.NorthSouth + y, base.Elevation + z, base.Angle)
 
     def SetProjectPosition(self, punto, posicion):
-        self.doc.posicion = posicion
+        # "Especificar coordenadas en un punto": el origen interno queda en posicion - punto
+        x, y, z = self._desplazamiento(punto)
+        self.doc.posicion = PosicionProyecto(posicion.EastWest - x, posicion.NorthSouth - y,
+                                             posicion.Elevation - z, posicion.Angle)
 
     def GetSiteLocation(self):
         return self
@@ -545,10 +559,13 @@ class _Fabricas(object):
 
 
 class _FabricaAplicacion(object):
-    """app.Create: NewCurveLoopsProfile (barridos)."""
+    """app.Create: NewCurveLoopsProfile (barridos) y NewProjectPosition (0.6.5)."""
 
     def NewCurveLoopsProfile(self, lazos):
         return DB.SweepProfile(lazos)
+
+    def NewProjectPosition(self, este, norte, elevacion, angulo):
+        return PosicionProyecto(este, norte, elevacion, angulo)
 
 
 class Aplicacion(object):

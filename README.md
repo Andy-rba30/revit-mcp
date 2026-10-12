@@ -237,7 +237,7 @@ with the replacement tool and its arguments (see the full table with the
 | `change_element_type` | `ChangeTypeId` on several elements | — |
 | `join_geometry` | Join / unjoin two elements, or a chain (`element_ids`, consecutive pairs) with `coping` (0.5.0) | `join_steel_elements` (original block B) |
 | `set_workset` | Move elements to a workset | — |
-| `set_project_location` | Base/survey point, true north, acquire coordinates (`forzar` for pinned points) | — |
+| `set_project_location` | Base/survey point, true north, acquire coordinates (`forzar` for pinned points); 0.6.5: `shared_coordinates` gives a point its real-world coordinates ("Specify Coordinates at a Point") so a Civil 3D DWG can be linked by shared coordinates | — |
 | `create_view` | Plans, sections, elevations, 3D | — |
 | `set_active_view` | Switch the active view | — |
 | `create_sheet_set` | Sheets with views placed (one sheet = one element) | `create_sheet` |
@@ -245,7 +245,7 @@ with the replacement tool and its arguments (see the full table with the
 | `annotate` | `kind="dimension"` or `kind="tag"` (`category="OST_Walls"` tags every wall in view) | `create_dimensions`, `tag_walls`, `tag_elements` |
 | `color_elements` | Colour by parameter, `clear=true` resets | `color_splash`, `clear_colors` |
 | `export` | `format` = pdf / png / jpg / dwg / ifc / rooms_json / rooms_csv / ifc_structural / csv_nodes_members (0.5.0) | `export_document`, `export_ifc`, `export_room_data`, `export_structural_model` (original block B) |
-| `link_file` | Link or import DWG/DXF/DGN/RVT | — |
+| `link_file` | Link or import DWG/DXF/DGN/RVT; 0.6.5: `placement` (origin / shared / center / site) and `extents` (distance to the internal origin, warning beyond 16 km) | — |
 | `load_family` | Load an `.rfa` | — |
 | `create_mep_system` | Group ducts/pipes into a system | — |
 | `maintain_model` | `action` = purge / backup / save | `purge_unused`, `create_backup`, `save_document` |

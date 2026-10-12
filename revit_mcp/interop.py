@@ -10,6 +10,7 @@ export_ifc no modifica el modelo: solo usa la transaccion "IA: Exportar IFC".
 from utils import get_element_name, get_element_id_value, suppress_warnings
 from seguridad import requiere_token
 from escritura import ejecutar, transaccion, simulacion, EscrituraRechazada, resultado_creacion, nombre_transaccion
+from coordenadas import coordenadas_definidas, evaluar_extension
 from pyrevit import routes, revit, DB
 import clr
 import json
@@ -61,6 +62,20 @@ def vincular_cad(doc, file_path, mode, view, placement="origin"):
     except Exception:
         pass
     return None
+
+
+def texto_extension(extension):
+    """Resumen legible de coordenadas.evaluar_extension para el mensaje de la herramienta."""
+    if not extension:
+        return ""
+    texto = ". Farthest corner {} m from the internal origin".format(extension["max_distance_m"])
+    centro = extension.get("center_shared_m")
+    if centro:
+        texto += "; centre at shared E={} N={} elevation={} m".format(
+            centro["east"], centro["north"], centro["elevation"])
+    if extension.get("hint"):
+        texto += ". WARNING: " + extension["hint"]
+    return texto
 
 
 def opciones_ifc(ifc_version="IFC2x3", export_base_quantities=True, view_id=None):
@@ -208,6 +223,22 @@ def register_interop_routes(api):
                 raise EscrituraRechazada(
                     "Unsupported file type '{}'. Supported: DWG, DXF, DGN, SAT, SKP, 3DM, RVT".format(file_ext), 400
                 )
+            placement = str(data.get("placement") or "origin").strip().lower()
+            if placement not in PLACEMENTS:
+                raise EscrituraRechazada(
+                    "placement must be one of {}".format(", ".join(sorted(PLACEMENTS.keys()))), 400,
+                )
+            # "Por coordenadas compartidas" lee el WCS del CAD como coordenadas compartidas.
+            # Con la posicion del proyecto en 0,0,0 es lo mismo que "origen con origen":
+            # un DWG georreferenciado caeria a cientos de kilometros.
+            if placement == "shared" and file_ext != ".rvt" and not coordenadas_definidas(doc):
+                raise EscrituraRechazada(
+                    "placement 'shared' needs shared coordinates, but the project position is still 0,0,0 "
+                    "(the shared system coincides with the internal one). Call set_project_location("
+                    "shared_coordinates={\"east\", \"north\", \"elevation\"}) with the real-world coordinates "
+                    "of the internal origin (for a Civil 3D surface, 'origen_sugerido' from "
+                    "extension_superficie) and link again.", 409, {"shared_coordinates_set": False},
+                )
             # SAT/SKP/3DM are import-only (not linkable); force import.
             if file_ext == ".rvt":
                 mode = "link"
@@ -218,6 +249,7 @@ def register_interop_routes(api):
                 return simulacion([{
                     "accion": "vincular" if mode == "link" else "importar",
                     "file_name": file_name, "file_type": file_type, "file_path": file_path,
+                    "placement": placement,
                     "size_kb": int(os.path.getsize(file_path) / 1024),
                     "view": get_element_name(doc.ActiveView) if file_ext != ".rvt" else None,
                 }])
@@ -230,19 +262,28 @@ def register_interop_routes(api):
                     link_result = DB.RevitLinkType.Create(doc, model_path, link_options)
                     if link_result and link_result.ElementId:
                         result_id = get_element_id_value(link_result.ElementId)
-                        link_instance = DB.RevitLinkInstance.Create(doc, link_result.ElementId)
+                        # Sobrecarga con ImportPlacement desde Revit 2018; sin ella, origen con origen
+                        try:
+                            link_instance = DB.RevitLinkInstance.Create(
+                                doc, link_result.ElementId, getattr(DB.ImportPlacement, PLACEMENTS[placement]))
+                        except TypeError:
+                            link_instance = DB.RevitLinkInstance.Create(doc, link_result.ElementId)
                         if link_instance:
                             result_id = get_element_id_value(link_instance)
                 else:
-                    result_id = vincular_cad(doc, file_path, mode, doc.ActiveView)
+                    result_id = vincular_cad(doc, file_path, mode, doc.ActiveView, placement)
 
             resultado = resultado_creacion(doc, [result_id] if result_id is not None else [])
+            extension = evaluar_extension(doc, result_id)
             resultado.update({
                 "element_id": result_id,
                 "file_name": file_name,
                 "file_type": file_type,
                 "mode": mode,
-                "message": "{}ed file '{}'".format(mode.capitalize(), file_name),
+                "placement": placement,
+                "extents": extension,
+                "message": "{}ed file '{}' (placement: {}){}".format(
+                    mode.capitalize(), file_name, placement, texto_extension(extension)),
             })
             if result_id is None:
                 resultado["ok"] = False
