@@ -1,6 +1,6 @@
 # Revit MCP Server
 
-MCP server for Autodesk Revit 2024/2025/2026/2027 via pyRevit — 48 tools for building design, editing, analysis, clash detection, MEP, interop, documentation, and model persistence.
+MCP server for Autodesk Revit 2024/2025/2026/2027 via pyRevit — 50 tools for building design, editing, analysis, clash detection, MEP, interop, shared coordinates, documentation, and model persistence.
 
 Works with any MCP client: Claude Desktop, Claude Code, Cursor, Windsurf, Copilot, or any other MCP-compatible application.
 
@@ -163,7 +163,7 @@ mcp dev main.py
 
 Then open `http://127.0.0.1:6274` in your browser.
 
-## Supported Tools (48)
+## Supported Tools (50)
 
 ### Create (15)
 
@@ -185,7 +185,7 @@ Then open `http://127.0.0.1:6274` in your browser.
 | `create_detail_line` | Create view-specific detail lines |
 | `create_view` | Create floor plans, sections, elevations, 3D views |
 
-### Query (12)
+### Query (13)
 
 | Tool | Description |
 |------|-------------|
@@ -201,8 +201,9 @@ Then open `http://127.0.0.1:6274` in your browser.
 | `get_selected_elements` | Get currently selected elements |
 | `list_category_parameters` | List parameters for a category |
 | `get_element_properties` | Get all parameters and properties of an element |
+| `get_project_coordinates` | Shared coordinates: project position of the internal origin, survey point, project base point, site |
 
-### Modify (8)
+### Modify (9)
 
 | Tool | Description |
 |------|-------------|
@@ -215,6 +216,7 @@ Then open `http://127.0.0.1:6274` in your browser.
 | `tag_elements` | Tag specific elements with annotation symbols |
 | `transform_elements` | Move, copy, rotate, or mirror elements |
 | `set_active_view` | Switch the active view in Revit |
+| `set_project_coordinates` | Give a model point real-world coordinates ("Specify Coordinates at a Point") so georeferenced files can be linked by shared coordinates |
 
 ### Analyze (5)
 
@@ -238,7 +240,7 @@ Then open `http://127.0.0.1:6274` in your browser.
 | Tool | Description |
 |------|-------------|
 | `export_ifc` | Export model to IFC format (IFC2x3/IFC4) |
-| `link_file` | Link or import DWG, DXF, DGN, SAT, SKP, 3DM, or RVT files |
+| `link_file` | Link or import DWG, DXF, DGN, SAT, SKP, 3DM, or RVT files, with `placement` origin / shared / center / site; reports how far the file landed from the internal origin |
 | `load_family` | Load a Revit family (`.rfa`) from disk so its types can be placed |
 | `save_document` | Save / Save-As the model to disk (persistence across sessions) |
 
@@ -298,11 +300,32 @@ This server supports Revit 2024, 2025, 2026, and 2027 through centralized helper
 
 No configuration needed — version detection is automatic via try/except at runtime.
 
-> **Revit 2027 note:** Revit 2027 runs on **.NET 10** (vs .NET 8 in 2025/2026). This MCP server is pyRevit-based, so .NET compatibility is handled by pyRevit itself — ensure you run a **pyRevit build with Revit 2027 support**. None of the 48 tools use APIs removed in 2027 (AXM/FormIt import, `Mechanical.Zone` members, legacy rebar creation, or the dropped `EnergyDataSettings` properties).
+> **Revit 2027 note:** Revit 2027 runs on **.NET 10** (vs .NET 8 in 2025/2026). This MCP server is pyRevit-based, so .NET compatibility is handled by pyRevit itself — ensure you run a **pyRevit build with Revit 2027 support**. None of the 50 tools use APIs removed in 2027 (AXM/FormIt import, `Mechanical.Zone` members, legacy rebar creation, or the dropped `EnergyDataSettings` properties).
+
+## Georeferenced CAD files (Civil 3D, survey)
+
+Revit's internal origin cannot move and all geometry should stay within 16 km
+of it (Revit warns from 33 km and may silently fall back to center-to-center).
+A DWG in UTM or any survey system linked "origin to origin" therefore lands
+hundreds of kilometres away, however well georeferenced both files are. The
+supported workflow is the one Revit itself uses:
+
+1. `get_project_coordinates` — if `shared_coordinates_set` is false the model
+   has never been georeferenced.
+2. `set_project_coordinates(east, north, elevation)` — real-world coordinates of
+   the internal origin (for a Civil 3D surface, the `origen_sugerido` that the
+   Civil 3D MCP tool `extension_superficie` returns). Once per model.
+3. `link_file(file_path, placement="shared")` — the DWG's world coordinates are
+   read as shared coordinates and the surface lands next to the internal origin.
+   The response says how far the farthest corner is from the internal origin
+   and warns beyond 16 km.
 
 ## Unit Handling
 
 All tools accept **millimeters (mm)**. The server converts to Revit's internal feet.
+The two coordinate tools are the exception: `set_project_coordinates` and
+`get_project_coordinates` default to **meters** (`units="m"`, also `"mm"` or
+`"ft"`), because survey coordinates come from Civil 3D in drawing units.
 
 | From | To mm |
 |------|-------|

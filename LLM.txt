@@ -33,7 +33,9 @@ revit-mcp-python/
 │   ├── structure_tools.py                    # Structural (grids, framing)
 │   ├── annotation_tools.py                   # Annotation (dimensions, wall tags)
 │   ├── analysis_tools.py                     # Analysis (filter, rooms, materials, statistics)
-│   └── documentation_tools.py                # Documentation (sheets, schedules, export)
+│   ├── documentation_tools.py                # Documentation (sheets, schedules, export)
+│   ├── interop_tools.py                      # Interop (IFC export, link/import files with placement)
+│   └── coordinates_tools.py                  # Shared coordinates (get/set project coordinates)
 ├── revit-mcp-python.extension/               # pyRevit Extension
 │   ├── startup.py                            # Extension entry point - registers all routes
 │   └── revit_mcp/                            # Routes API modules (organized by functionality)
@@ -50,7 +52,10 @@ revit-mcp-python/
 │       ├── structure.py                      # Structural routes (grids, framing)
 │       ├── annotation.py                     # Annotation routes (dimensions, wall tags)
 │       ├── analysis.py                       # Analysis routes (filter, rooms, materials, statistics)
-│       └── documentation.py                  # Documentation routes (sheets, schedules, export)
+│       ├── documentation.py                  # Documentation routes (sheets, schedules, export)
+│       ├── interop.py                        # Interop routes (IFC, link/import with ImportPlacement)
+│       ├── coordinates.py                    # Shared coordinates routes (ProjectLocation, BasePoint)
+│       └── coordinates_core.py               # Pure helpers (units, placement names, distance to origin); tested in CPython
 ├── requirements.txt                          # Python dependencies
 ├── pyproject.toml                           # Project configuration
 └── README.md                                # Project documentation

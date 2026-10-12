@@ -63,6 +63,7 @@ activo) o `500` (excepción). Sin token: `401`.
 | GET | `/selected_elements/` | — | Elementos seleccionados en Revit |
 | GET | `/list_levels/` | — | Niveles con elevación |
 | GET | `/element_properties/<element_id>` | `element_id` en la ruta | Propiedades y parámetros del elemento |
+| GET | `/project_coordinates/` | `units` (query: `m` por defecto, `mm`, `ft`) | `active_location`, `locations`, `shared_coordinates_set`, `internal_origin` (east, north, elevation, angle_degrees del origen interno en coordenadas compartidas), `project_base_point` y `survey_point` (internal y shared), `site` (latitud, longitud, `geo_coordinate_system`) |
 
 ### Vistas
 
@@ -131,7 +132,8 @@ activo) o `500` (excepción). Sin token: `401`.
 | POST | `/material_quantities/` | `categories` | Cantidades de material |
 | POST | `/clash_check/` | `set_a_categories`, `set_b_categories`, `max_clashes` | Interferencias detectadas |
 | POST | `/export_ifc/` | `file_path`, `ifc_version`, `export_base_quantities`, `view_name` | Ruta del IFC |
-| POST | `/link_file/` | `file_path`, `mode`, `position` | Vínculo creado |
+| POST | `/link_file/` | `file_path`, `mode`, `placement` (`origin` por defecto, `shared`, `center`, `site`), `position` | Vínculo creado, `placement` y `extents` (`max_distance_m` al origen interno, `far_from_origin` a más de 16 km, `beyond_revit_limit` a más de 33 km, `center_shared_m`, `hint`). `400` si `placement=shared` con un CAD y el modelo aún no tiene coordenadas compartidas |
+| POST | `/set_project_coordinates/` | `east`*, `north`*, `elevation` (0), `angle_degrees` (0), `units` (`m` por defecto, `mm`, `ft`), `point` (mm; por defecto el origen interno) | `ProjectLocation.SetProjectPosition` sobre la ubicación activa (si es la de solo lectura "Internal", activa otra o la duplica como "MCP"); devuelve `location`, `location_switched`, `before` y `after` como `/project_coordinates/` |
 | POST | `/save_document/` | `file_path`, `overwrite` | Documento guardado |
 
 ### Ejecución de código

@@ -43,6 +43,7 @@ def register_interop_tools(mcp, revit_get, revit_post, revit_image=None):
     async def link_file(
         file_path: str,
         mode: str = "link",
+        placement: str = "origin",
         position: dict = None,
         ctx: Context = None,
     ) -> str:
@@ -51,13 +52,28 @@ def register_interop_tools(mcp, revit_get, revit_post, revit_image=None):
         Supports DWG, DXF, DGN (CAD files) and RVT (Revit links).
         Linked files maintain a live connection; imported files are embedded.
 
+        Georeferenced CAD files (a Civil 3D surface or site plan in UTM or any
+        survey system) must NOT be placed "origin": their coordinates are
+        hundreds of kilometres from Revit's internal origin and Revit warns
+        (33 km limit) and may silently fall back to center-to-center. Instead:
+        1. get_project_coordinates: if `shared_coordinates_set` is false,
+        2. set_project_coordinates(east, north, elevation) with the real-world
+           coordinates of the internal origin (e.g. the surface centre), then
+        3. link_file(..., placement="shared").
+        The response reports how far the file landed from the internal origin
+        and warns when it is beyond 16 km.
+
         Args:
-            file_path: Path to the file (DWG, DXF, DGN, or RVT)
+            file_path: Path to the file (DWG, DXF, DGN, SAT, SKP, 3DM or RVT)
             mode: "link" (default, maintains connection) or "import" (embeds copy)
+            placement: "origin" (default, Auto - Origin to Internal Origin),
+                "shared" (Auto - By Shared Coordinates; requires shared coordinates,
+                see set_project_coordinates), "center" (Auto - Center to Center) or
+                "site" (Auto - Origin to Project Base Point)
             position: Optional placement offset {"x", "y", "z"} in mm
             ctx: MCP context for logging
         """
-        data = {"file_path": file_path, "mode": mode}
+        data = {"file_path": file_path, "mode": mode, "placement": placement}
         if position is not None:
             data["position"] = position
         response = await revit_post("/link_file/", data, ctx)

@@ -4,8 +4,14 @@ Interop Module for Revit MCP
 Handles IFC export and external file linking/importing
 """
 
-from utils import get_element_name, get_element_id_value, suppress_warnings
+from utils import get_element_name, get_element_id_value, make_element_id, suppress_warnings
 from seguridad import requiere_token
+from coordinates_core import (
+    METERS_PER_FOOT,
+    evaluate_extents,
+    normalize_placement,
+    shared_coordinates_set,
+)
 from pyrevit import routes, revit, DB
 import clr
 import json
@@ -16,6 +22,62 @@ import logging
 logger = logging.getLogger(__name__)
 
 MM_TO_FEET = 1.0 / 304.8
+
+
+def _import_placement(name):
+    """Revit ImportPlacement for a canonical placement name (coordinates_core)."""
+    return {
+        "origin": DB.ImportPlacement.Origin,     # Auto - Origin to Internal Origin
+        "shared": DB.ImportPlacement.Shared,     # Auto - By Shared Coordinates
+        "center": DB.ImportPlacement.Centered,   # Auto - Center to Center
+        "site": DB.ImportPlacement.Site,         # Auto - Origin to Project Base Point
+    }[name]
+
+
+def _extents(doc, element_id):
+    """Where the new link/import instance landed: distance of its bounding box to
+    the internal origin (coordinates_core.evaluate_extents) and the shared
+    coordinates of its centre, in metres. Best-effort: None when unavailable."""
+    if element_id is None:
+        return None
+    try:
+        elem = doc.GetElement(make_element_id(element_id))
+        bb = elem.get_BoundingBox(None) if elem is not None else None
+        if bb is None:
+            return None
+        result = evaluate_extents(
+            (bb.Min.X, bb.Min.Y, bb.Min.Z), (bb.Max.X, bb.Max.Y, bb.Max.Z))
+        center = DB.XYZ((bb.Min.X + bb.Max.X) / 2.0, (bb.Min.Y + bb.Max.Y) / 2.0,
+                        (bb.Min.Z + bb.Max.Z) / 2.0)
+        result["center_internal_m"] = {
+            "x": round(center.X * METERS_PER_FOOT, 3),
+            "y": round(center.Y * METERS_PER_FOOT, 3),
+            "z": round(center.Z * METERS_PER_FOOT, 3),
+        }
+        pos = doc.ActiveProjectLocation.GetProjectPosition(center)
+        result["center_shared_m"] = {
+            "east": round(pos.EastWest * METERS_PER_FOOT, 3),
+            "north": round(pos.NorthSouth * METERS_PER_FOOT, 3),
+            "elevation": round(pos.Elevation * METERS_PER_FOOT, 3),
+        }
+        return result
+    except Exception as error:
+        logger.debug("Could not evaluate link extents: {}".format(str(error)))
+        return None
+
+
+def _extents_text(extents):
+    """Human-readable summary of _extents() for the tool message."""
+    if not extents:
+        return ""
+    text = ". Farthest corner {} m from the internal origin".format(extents["max_distance_m"])
+    center = extents.get("center_shared_m")
+    if center:
+        text += "; centre at shared E={} N={} elevation={} m".format(
+            center["east"], center["north"], center["elevation"])
+    if extents.get("hint"):
+        text += ". WARNING: " + extents["hint"]
+    return text
 
 
 def register_interop_routes(api):
@@ -154,10 +216,32 @@ def register_interop_routes(api):
 
             mode = data.get("mode", "link")
             position = data.get("position")
+            try:
+                placement = normalize_placement(data.get("placement"))
+            except ValueError as placement_error:
+                return routes.make_response(data={"error": str(placement_error)}, status=400)
+            placement_enum = _import_placement(placement)
 
             file_ext = os.path.splitext(file_path)[1].lower()
             file_name = os.path.basename(file_path)
             file_type = file_ext.lstrip(".").upper()
+
+            # "By Shared Coordinates" reads the CAD file's world coordinates as
+            # Revit shared coordinates. With the project position still at
+            # 0,0,0 that is the same as "Origin to Origin", so a georeferenced
+            # file would land hundreds of kilometres away: refuse and explain.
+            if placement == "shared" and file_ext != ".rvt":
+                pos = doc.ActiveProjectLocation.GetProjectPosition(DB.XYZ.Zero)
+                if not shared_coordinates_set(pos.EastWest, pos.NorthSouth, pos.Elevation, pos.Angle):
+                    return routes.make_response(
+                        data={"error": (
+                            "placement 'shared' needs shared coordinates, but the model's project "
+                            "position is still 0,0,0 (the shared system coincides with the internal "
+                            "one). Call set_project_coordinates with the real-world coordinates of "
+                            "the internal origin (for example the centre of the Civil 3D surface, "
+                            "'origen_sugerido' from extension_superficie) and link again.")},
+                        status=400,
+                    )
 
             t = DB.Transaction(doc, "Link/Import File via MCP")
             t.Start()
@@ -173,8 +257,13 @@ def register_interop_routes(api):
                     link_result = DB.RevitLinkType.Create(doc, model_path, link_options)
                     if link_result and link_result.ElementId:
                         result_id = get_element_id_value(link_result.ElementId)
-                        # Place instance
-                        link_instance = DB.RevitLinkInstance.Create(doc, link_result.ElementId)
+                        # Place instance with the requested placement (3-argument
+                        # overload since Revit 2018; older API gets origin to origin)
+                        try:
+                            link_instance = DB.RevitLinkInstance.Create(
+                                doc, link_result.ElementId, placement_enum)
+                        except TypeError:
+                            link_instance = DB.RevitLinkInstance.Create(doc, link_result.ElementId)
                         if link_instance:
                             result_id = get_element_id_value(link_instance)
 
@@ -192,7 +281,8 @@ def register_interop_routes(api):
                         options = DB.SATImportOptions()
                     else:
                         options = DB.DWGImportOptions()
-                        options.Placement = DB.ImportPlacement.Origin
+                    # Placement lives on BaseImportOptions, so every format takes it
+                    options.Placement = placement_enum
 
                     idref = clr.Reference[DB.ElementId]()
                     # SAT/SKP/3DM are import-only (not linkable); force import.
@@ -219,6 +309,7 @@ def register_interop_routes(api):
 
                 t.Commit()
 
+                extents = _extents(doc, result_id)
                 return routes.make_response(
                     data={
                         "status": "success",
@@ -226,8 +317,10 @@ def register_interop_routes(api):
                         "file_name": file_name,
                         "file_type": file_type,
                         "mode": mode,
-                        "message": "{}ed file '{}'".format(
-                            mode.capitalize(), file_name
+                        "placement": placement,
+                        "extents": extents,
+                        "message": "{}ed file '{}' (placement: {}){}".format(
+                            mode.capitalize(), file_name, placement, _extents_text(extents)
                         ),
                     }
                 )
