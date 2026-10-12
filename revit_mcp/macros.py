@@ -37,8 +37,8 @@ from topografia import (
     leer_csv_puntos, tipo_toposolido, crear_toposolido, comprobar_toposolido_disponible,
     MAX_PUNTOS, FACTOR_A_MM,
 )
-from interop import vincular_cad, PLACEMENTS
-from coordenadas import ubicacion_proyecto, puntos_base, comprobar_puntos_base_libres
+from interop import vincular_cad, PLACEMENTS, texto_extension
+from coordenadas import ubicacion_proyecto, puntos_base, comprobar_puntos_base_libres, coordenadas_definidas, evaluar_extension
 from pyrevit import routes, revit, DB
 import os
 import re
@@ -506,15 +506,6 @@ def _vista_planta_de(doc, nivel):
     return None
 
 
-def _coordenadas_ya_definidas(doc):
-    """True si el proyecto ya tiene coordenadas compartidas distintas de las internas."""
-    try:
-        posicion = doc.ActiveProjectLocation.GetProjectPosition(DB.XYZ.Zero)
-        return any(abs(float(v)) > 1e-6 for v in (posicion.EastWest, posicion.NorthSouth, posicion.Elevation, posicion.Angle))
-    except Exception:
-        return False
-
-
 def _extension(puntos_mm):
     xs = [p["x"] for p in puntos_mm]
     ys = [p["y"] for p in puntos_mm]
@@ -751,7 +742,7 @@ def register_macros_routes(api):
                 # Mismas protecciones que set_project_location: adquirir coordenadas
                 # mueve los puntos base; 409 si alguno esta fijado o recortado.
                 comprobar_puntos_base_libres(puntos_base(doc))
-            if use_shared and _coordenadas_ya_definidas(doc) and not es_forzado(data):
+            if use_shared and coordenadas_definidas(doc) and not es_forzado(data):
                 raise EscrituraRechazada(
                     "The project already has shared coordinates (project position is not zero); acquiring them "
                     "from the DWG would overwrite them. Pass forzar=true to do it anyway.", 409,
@@ -785,10 +776,12 @@ def register_macros_routes(api):
             resultado = resultado_creacion(doc, [link_id])
             resultado["link_id"] = link_id
             resultado["source"] = resumen
+            resultado["extents"] = evaluar_extension(doc, link_id)
             if use_shared:
                 resultado["coordinates"] = {"antes": antes, "despues": ubicacion_proyecto(doc)}
-            resultado["message"] = "Linked {} in view '{}'{}".format(
-                nombre_archivo, get_element_name(vista), " and acquired its coordinates" if use_shared else "")
+            resultado["message"] = "Linked {} in view '{}'{}{}".format(
+                nombre_archivo, get_element_name(vista), " and acquired its coordinates" if use_shared else "",
+                texto_extension(resultado["extents"]))
             return resultado
 
         return ejecutar(doc, "/import_civil/", request, cuerpo)

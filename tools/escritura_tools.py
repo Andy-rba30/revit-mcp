@@ -268,27 +268,37 @@ def register_escritura_tools(mcp, revit_get, revit_post, revit_image=None):
         survey_point_mm: dict = None,
         true_north_deg: float = None,
         acquire_from_link_id: int = None,
+        shared_coordinates: dict = None,
+        units: str = None,
+        at_point_mm: dict = None,
         simular: bool = False,
         forzar: bool = False,
         ctx: Context = None,
     ) -> str:
-        """Move the project base point or survey point, rotate true north, or acquire
-        shared coordinates from a link. Read get_revit_model_info(include=["location"])
-        first; 409 if a point is pinned or clipped unless forzar.
-        Example: set_project_location(true_north_deg=12.5, simular=true).
+        """Move the project base point or survey point, rotate true north, acquire
+        shared coordinates from a link, or georeference the model: shared_coordinates
+        gives a point its real-world coordinates ("Specify Coordinates at a Point"),
+        required before linking a Civil 3D DWG with placement="shared". 409 if a point
+        is pinned/clipped or coordinates already exist, unless forzar.
+        Example: set_project_location(shared_coordinates={"east": 500000, "north": 8500500}).
 
         Args:
             base_point_mm: New internal position {"x","y","z"} of the project base point
             survey_point_mm: New internal position of the survey point
             true_north_deg: New true north angle (counter-clockwise from project north)
             acquire_from_link_id: Link instance id to acquire coordinates from (alone)
+            shared_coordinates: {"east","north","elevation"} real-world coordinates of at_point_mm (alone, or with true_north_deg)
+            units: Units of shared_coordinates: "m" (default), "mm" or "ft"
+            at_point_mm: Internal point {"x","y","z"} in mm that receives them (default: the internal origin)
             simular: Only validate
-            forzar: Move a pinned or clipped point anyway
+            forzar: Move a pinned or clipped point, or overwrite existing shared coordinates
         """
         crono = Cronometro()
         data = {"simular": simular, "forzar": forzar}
         for clave, valor in (("base_point_mm", base_point_mm), ("survey_point_mm", survey_point_mm),
-                             ("true_north_deg", true_north_deg), ("acquire_from_link_id", acquire_from_link_id)):
+                             ("true_north_deg", true_north_deg), ("acquire_from_link_id", acquire_from_link_id),
+                             ("shared_coordinates", shared_coordinates), ("units", units),
+                             ("at_point_mm", at_point_mm)):
             if valor is not None:
                 data[clave] = valor
         response = await revit_post("/set_project_location/", data, ctx, timeout=TIMEOUT_ESCRITURA)
@@ -554,21 +564,27 @@ def register_escritura_tools(mcp, revit_get, revit_post, revit_image=None):
     async def link_file(
         file_path: str,
         mode: str = "link",
+        placement: str = None,
         position: dict = None,
         simular: bool = False,
         ctx: Context = None,
     ) -> str:
-        """Link or import an external file (DWG, DXF, DGN, RVT...) into the model.
-        Example: link_file(file_path="C:\\\\Proyectos\\\\topografia.dwg", mode="link").
+        """Link or import an external file (DWG, DXF, DGN, RVT...) into the model. A
+        georeferenced CAD (Civil 3D, UTM) needs placement="shared" after
+        set_project_location(shared_coordinates=...); the answer says how far it
+        landed from the internal origin. Example: link_file(file_path="C:\\\\Proyectos\\\\topografia.dwg", placement="shared").
 
         Args:
             file_path: Full path on the Revit machine
             mode: "link" (keeps the connection) or "import" (embeds a copy)
+            placement: "origin" (default), "shared" (by shared coordinates), "center" or "site"
             position: Placement offset {"x","y","z"} in mm
             simular: Only validate
         """
         crono = Cronometro()
         data = {"file_path": file_path, "mode": mode, "simular": simular}
+        if placement is not None:
+            data["placement"] = placement
         if position is not None:
             data["position"] = position
         response = await revit_post("/link_file/", data, ctx, timeout=TIMEOUT_LARGO)

@@ -254,6 +254,41 @@ Solo `family_load_into_project` escribe en el proyecto (`IA: Cargar familia
    lo pide) y `family_close(family_doc)` (solo documentos abiertos por el MCP y
    nunca el documento activo).
 
+## 2f. Flujo de topografía de Civil 3D (0.6.5)
+
+Revit tiene un origen interno que no se mueve y toda su geometría debe quedar
+a menos de 16 km de él (a partir de 33 km avisa "muy lejos del origen" y, al
+vincular un CAD, cambia la posición a "centro con centro" por su cuenta). Una
+superficie en UTM está a cientos de kilómetros del 0,0: **nunca la vincules
+"origen con origen"**, por muy georreferenciados que estén los dos archivos.
+
+1. En el MCP de Civil 3D: `extension_superficie(superficie)` → anota
+   `origen_sugerido` (este, norte, cota en metros), `sistema_coordenadas.codigo`
+   y `avisos`. Un aviso de más de 33 km no lo arregla ninguna posición: hay que
+   recortar la superficie o el DWG.
+2. `get_revit_model_info(include=["location"])`: si `shared_coordinates_set` es
+   `false`, el modelo nunca se georreferenció. Si es `true`, no lo cambies sin
+   confirmación expresa del usuario (`forzar=true`).
+3. `set_project_location(shared_coordinates={"east": E, "north": N, "elevation": Z},
+   units="m", simular=true)` con `origen_sugerido`; muestra `haria` y ejecuta
+   sin `simular` tras la confirmación. Es el "Especificar coordenadas en un
+   punto" de Revit; una sola vez por modelo. `true_north_deg` solo si el
+   edificio está girado respecto al norte de cuadrícula.
+4. `link_file(file_path=<dwg>, placement="shared")`. Comprueba en la respuesta
+   `extents.far_from_origin=false` y que `extents.center_shared_m` coincide con
+   el centro de la superficie. `beyond_revit_limit=true` significa que Revit
+   forzará "centro con centro": recorta y repite.
+5. Toposólido: `create_elements(kind="toposolid")` o `import_from_civil` con
+   LandXML/CSV si el usuario quiere el terreno nativo; el DWG vinculado basta
+   para "Crear a partir de importación" en Revit.
+
+Alternativa cuando no hay coordenadas que fijar: `import_from_civil(file_path=<dwg>,
+level=..., use_shared_coordinates=true)` centra el DWG y **adquiere** sus
+coordenadas (`AcquireCoordinates`); es equivalente, pero las coordenadas
+compartidas quedan definidas por el DWG y no por un valor que el usuario pueda
+revisar. Si el DWG ya estaba vinculado "origen con origen", vuelve a vincularlo
+con `placement="shared"` después del paso 3: el vínculo viejo no se recoloca.
+
 ## 3. Reglas de dominio
 
 - **Nunca** llames a `delete_elements` sin haber listado antes los ids y su

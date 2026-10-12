@@ -246,3 +246,18 @@ dependían de ellos (cotas, sólidos, tipos, flexión, carga) quedan `por verifi
 | clase | `IFamilyLoadOptions` implementada en IronPython (`OnFamilyFound(familyInUse, overwriteParameterValues)`: el argumento `out` llega como `StrongBox` y se fija `.Value`) y `Document.LoadFamily(Document proyecto, IFamilyLoadOptions)` desde el documento de familia; `Document.LoadFamily(string, IFamilyLoadOptions, out Family)` desde un `.rfa`, dentro de `IA: Cargar familia` | 2011 | `/family/load/`, `/family/build/` (`load_into_project`) | falló en 0.6.1 (Revit 2027 es, 29/09/2026, paso 17): "The document must not be modifiable before calling LoadFamily. Any open transaction must be closed prior the call." 0.6.2: `LoadFamily(proyecto)` sin transacción, dentro de un `TransactionGroup` `IA: Cargar familia` (reintento sin grupo si Revit lo rechaza). Pendiente: la carga, `IFamilyLoadOptions` en IronPython y `overwrite_parameters` |
 | método | `Document.Close(bool)` sobre un documento de familia que no es el activo | 2011 | `/family/close/`, `/family/build/` (fallo o `close`) | verificado (0.6.1, Revit 2027 es, 29/09/2026, pasos 19 y 22: `closed: true`, y `closed_without_saving` tras el fallo del `build`) |
 | propiedad | `Document.IsModifiable` / `IsReadOnly` / `IsModified` / `PathName` en un documento de familia | 2011 | `escritura.preparar_familia`, `/family/info/` | por verificar |
+
+## 0.6.5 (coordenadas compartidas por valor, Civil 3D): escrita sin Revit
+
+`shared_coordinates` en `/set_project_location/`, `placement` y `extents` en `/link_file/` (`extents` también en
+`/import_civil/` con DWG). Probado solo con el Revit simulado (`tests/test_coordenadas_compartidas.py`); flujo completo
+con Civil 3D en `civil3d-mcp/herramientas-dev/VALIDACION_14.md` (pasos 6 a 10).
+
+| Tipo | Miembro | Versión mínima | Ruta que lo usa | Estado |
+|---|---|---|---|---|
+| método | `ProjectLocation.SetProjectPosition(XYZ, ProjectPosition)` ("Especificar coordenadas en un punto") y `Creation.Application.NewProjectPosition(double, double, double, double)` (reserva: constructor `ProjectPosition`) | 2011 | `/set_project_location/` (`shared_coordinates`) | por verificar |
+| comportamiento | `SetProjectPosition` sobre la ubicación "Internal" (2018+, solo lectura): el código activa otra `ProjectLocation` de `Document.ProjectLocations` o `ProjectLocation.Duplicate("MCP")` y fija ahí | 2018 | `/set_project_location/` (`project_location.switched`) | por verificar |
+| propiedad | `SiteLocation.GeoCoordinateSystemId` (mismos códigos que Civil 3D, p. ej. `UTM84-18S`), `.Latitude`, `.Longitude` | 2018 | `/project_location/` (`site`) | por verificar |
+| método | `RevitLinkInstance.Create(Document, ElementId, ImportPlacement)` (reserva: sobrecarga de dos argumentos) | 2018 | `/link_file/` con `.rvt` y `placement` | por verificar |
+| enumeración | `ImportPlacement.Shared` en `DWGImportOptions` / `DGNImportOptions` (`BaseImportOptions.Placement`) con `Document.Link` | 2011 | `/link_file/`, `/import_civil/` (`placement=shared`) | por verificar (en `/import_civil/` ya estaba disponible y sin validar) |
+| método | `Element.get_BoundingBox(null)` de un `ImportInstance` recién vinculado y `ProjectLocation.GetProjectPosition(XYZ)` de su centro | 2011 | `coordenadas.evaluar_extension` (`extents`) | por verificar |
