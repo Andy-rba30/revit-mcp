@@ -250,14 +250,16 @@ dependían de ellos (cotas, sólidos, tipos, flexión, carga) quedan `por verifi
 ## 0.6.5 (coordenadas compartidas por valor, Civil 3D): escrita sin Revit
 
 `shared_coordinates` en `/set_project_location/`, `placement` y `extents` en `/link_file/` (`extents` también en
-`/import_civil/` con DWG). Probado solo con el Revit simulado (`tests/test_coordenadas_compartidas.py`); flujo completo
-con Civil 3D en `civil3d-mcp/herramientas-dev/VALIDACION_14.md` (pasos 6 a 10).
+`/import_civil/` con DWG). Validado en Revit 2027 el 12/10/2026 con `civil3d-mcp/herramientas-dev/VALIDACION_14.md` (informe
+`civil3d-mcp/herramientas-dev/informes/informe_validacion_14_20261012.md`): pasos 4 a 7 y 9 en OK; quedan por
+verificar la reserva de la ubicación "Internal", `SiteLocation.GeoCoordinateSystemId`, `RevitLinkInstance.Create` con
+`ImportPlacement` y `/import_civil/` con `placement=shared`.
 
 | Tipo | Miembro | Versión mínima | Ruta que lo usa | Estado |
 |---|---|---|---|---|
-| método | `ProjectLocation.SetProjectPosition(XYZ, ProjectPosition)` ("Especificar coordenadas en un punto") y `Creation.Application.NewProjectPosition(double, double, double, double)` (reserva: constructor `ProjectPosition`) | 2011 | `/set_project_location/` (`shared_coordinates`) | por verificar |
-| comportamiento | `SetProjectPosition` sobre la ubicación "Internal" (2018+, solo lectura): el código activa otra `ProjectLocation` de `Document.ProjectLocations` o `ProjectLocation.Duplicate("MCP")` y fija ahí | 2018 | `/set_project_location/` (`project_location.switched`) | por verificar |
+| método | `ProjectLocation.SetProjectPosition(XYZ, ProjectPosition)` ("Especificar coordenadas en un punto") y `Creation.Application.NewProjectPosition(double, double, double, double)` (reserva: constructor `ProjectPosition`) | 2011 | `/set_project_location/` (`shared_coordinates`) | verificado (0.6.5, Revit 2027, 12/10/2026, `VALIDACION_14` paso 6: E 250 100, N 8 743 000, Z 270 m sobre `Default Site`, `coincide: true`, una entrada `IA: Coordenadas del proyecto`) |
+| comportamiento | `SetProjectPosition` sobre la ubicación "Internal" (2018+, solo lectura): el código activa otra `ProjectLocation` de `Document.ProjectLocations` o `ProjectLocation.Duplicate("MCP")` y fija ahí | 2018 | `/set_project_location/` (`project_location.switched`) | por verificar (en la validación del 12/10/2026 la ubicación activa era `Default Site`, escribible: la reserva no se ejercitó) |
 | propiedad | `SiteLocation.GeoCoordinateSystemId` (mismos códigos que Civil 3D, p. ej. `UTM84-18S`), `.Latitude`, `.Longitude` | 2018 | `/project_location/` (`site`) | por verificar |
 | método | `RevitLinkInstance.Create(Document, ElementId, ImportPlacement)` (reserva: sobrecarga de dos argumentos) | 2018 | `/link_file/` con `.rvt` y `placement` | por verificar |
-| enumeración | `ImportPlacement.Shared` en `DWGImportOptions` / `DGNImportOptions` (`BaseImportOptions.Placement`) con `Document.Link` | 2011 | `/link_file/`, `/import_civil/` (`placement=shared`) | por verificar (en `/import_civil/` ya estaba disponible y sin validar) |
-| método | `Element.get_BoundingBox(null)` de un `ImportInstance` recién vinculado y `ProjectLocation.GetProjectPosition(XYZ)` de su centro | 2011 | `coordenadas.evaluar_extension` (`extents`) | por verificar |
+| enumeración | `ImportPlacement.Shared` en `DWGImportOptions` / `DGNImportOptions` (`BaseImportOptions.Placement`) con `Document.Link` | 2011 | `/link_file/`, `/import_civil/` (`placement=shared`) | verificado en `/link_file/` (0.6.5, Revit 2027, 12/10/2026, paso 7: DWG UTM84-18S vinculado "Compartido" sin aviso de Revit, 42,7 s; `/import_civil/` sigue sin validar) |
+| método | `Element.get_BoundingBox(null)` de un `ImportInstance` recién vinculado y `ProjectLocation.GetProjectPosition(XYZ)` de su centro | 2011 | `coordenadas.evaluar_extension` (`extents`) | verificado (0.6.5, Revit 2027, 12/10/2026, paso 7: `max_distance_m` 1317,9, `far_from_origin: false`; paso 9: cota del vínculo 263,80 m igual a `cota_superficie` de Civil 3D) |
